@@ -1,0 +1,117 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "proto/bridge.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "BridgeService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {},
+  "definitions": {
+    "bridgeEventMessage": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "title": "ID unique pour tracking"
+        },
+        "type": {
+          "$ref": "#/definitions/bridgeEventType",
+          "title": "Type de message"
+        },
+        "eventJson": {
+          "type": "string",
+          "title": "Données de l'événement en JSON"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "int64",
+          "title": "Timestamp Unix"
+        },
+        "source": {
+          "type": "string",
+          "title": "\"rust\" ou \"go\""
+        }
+      },
+      "title": "Message unifié pour les événements bidirectionnels"
+    },
+    "bridgeEventType": {
+      "type": "string",
+      "enum": [
+        "EVENT_TYPE_UNSPECIFIED",
+        "HORIZON_EVENT",
+        "GO_EVENT",
+        "PING",
+        "PONG",
+        "ERROR"
+      ],
+      "default": "EVENT_TYPE_UNSPECIFIED",
+      "title": "- HORIZON_EVENT: Événement depuis Horizon vers Go\n - GO_EVENT: Événement depuis Go vers Horizon\n - PING: Keep-alive/heartbeat\n - PONG: Réponse au ping\n - ERROR: Message d'erreur"
+    },
+    "bridgeHealthResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "\"healthy\", \"unhealthy\", etc."
+        }
+      }
+    },
+    "bridgeInitResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "serverVersion": {
+          "type": "string"
+        }
+      }
+    },
+    "bridgeShutdownResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+services:
+    game_service:
+      build: 
+        context: ./.docker
+      restart: always
+      user: "1000:1000"
+      volumes:
+        - .:/app/
+        - ~/.ssh/id_rsa:/home/golang/.ssh/id_rsa
+      ports:
+        - 50051:50051
+        - 50052:50052
+        - 50053:50053
+        - 50054:50054

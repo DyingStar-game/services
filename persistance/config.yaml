@@ -1,0 +1,6 @@
+server:
+  port: 50051
+
+database:
+  host: "172.18.0.1"
+  port: 9080
