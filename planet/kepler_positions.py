@@ -34,6 +34,7 @@ import math
 import json
 import time
 from typing import List, Dict
+import duckdb
 
 
 class Vector3:
@@ -210,6 +211,13 @@ def generate_positions(output_filename: str,
     arg_peri_deg = params.get('arg_peri_deg', 0.0)
     mean_anomaly_deg = params.get('mean_anomaly_deg', 0.0)
 
+    # connection to the database
+    con = duckdb.connect(database='database/my-db.duckdb', read_only=False)
+
+    # create tables if they don't exist
+    con.execute("CREATE TABLE IF NOT EXISTS planet_positions (time_s FLOAT NOT NULL,x DOUBLE NOT NULL,y DOUBLE NOT NULL,z DOUBLE NOT NULL)")
+
+
     # initial position (1 AU on x axis) unless specified
     initial_position_m = params.get('initial_position_m', Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0))
 
@@ -227,16 +235,29 @@ def generate_positions(output_filename: str,
     t = 0.0
     steps = max(1, int(math.ceil(duration_seconds / sample_dt)))
 
+    values = []
+    nbValues = 0
     for i in range(steps):
         pos = orbit.advance(sample_dt if i > 0 else 0.0)  # first sample at t=0
         samples.append({
-            'time_s': round(t, 8),
+            'time_s': round(t, 3),
             'x': pos.x,
             'y': pos.y,
             'z': pos.z
         })
+        nbValues += 1
+        values.append((round(t, 3), pos.x, pos.y, pos.z))
+        if nbValues >= 10000:
+            con.executemany("INSERT INTO planet_positions (time_s, x, y, z) VALUES (?, ?, ?, ?)", values)
+            values = []
+            nbValues = 0
+            # print length of samples
+            print(f"Inserted {len(samples)} samples so far...")
         t += sample_dt
 
+    if nbValues > 0:
+        con.executemany("INSERT INTO planet_positions (time_s, x, y, z) VALUES (?, ?, ?, ?)", values)
+    con.close()
     # Write minimal JSON array to file
     with open(output_filename, 'w') as f:
         json.dump(samples, f, indent=2)
@@ -246,8 +267,8 @@ def generate_positions(output_filename: str,
 
 if __name__ == '__main__':
     # Example run: generate 1 second of data at 16.66667 ms steps
-    out = 'planet_positions_60hz.json'
-    duration = 60.0  # seconds (short smoke test)
+    out = 'database/planet_positions_60hz.json'
+    duration = 60.0  # 24.0 * 60.0 * 60.0  # seconds (short smoke test)
     dt = 0.01666667
 
     params = {
