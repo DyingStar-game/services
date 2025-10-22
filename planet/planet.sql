@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS planets (
     inc_deg FLOAT NOT NULL,
     node_deg FLOAT NOT NULL,
     arg_peri_deg FLOAT NOT NULL,
-    mean_anomaly_deg FLOAT NOT NULL
+    mean_anomaly_deg FLOAT NOT NULL,
+    radius_km FLOAT NOT NULL,
+    radius_gravity_influence_km FLOAT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS planet_moons (
@@ -46,5 +48,7 @@ CREATE TABLE IF NOT EXISTS planet_moons (
     inc_deg FLOAT NOT NULL,
     node_deg FLOAT NOT NULL,
     arg_peri_deg FLOAT NOT NULL,
-    mean_anomaly_deg FLOAT NOT NULL
+    mean_anomaly_deg FLOAT NOT NULL,
+    radius_km FLOAT NOT NULL,
+    radius_gravity_influence_km FLOAT NOT NULL
 );
