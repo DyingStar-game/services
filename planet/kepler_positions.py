@@ -35,6 +35,12 @@ import json
 import time
 from typing import List, Dict
 import duckdb
+import argparse
+import re
+import os
+import getpass
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 
 class Vector3:
@@ -215,7 +221,7 @@ def generate_positions(output_filename: str,
     con = duckdb.connect(database='database/my-db.duckdb', read_only=False)
 
     # create tables if they don't exist
-    con.execute("CREATE TABLE IF NOT EXISTS planet_positions (time_s FLOAT NOT NULL,x DOUBLE NOT NULL,y DOUBLE NOT NULL,z DOUBLE NOT NULL)")
+    con.execute("CREATE TABLE IF NOT EXISTS planet_positions (type TEXT NOT NULL, type_id INTEGER NOT NULL, time_s FLOAT NOT NULL,x DOUBLE NOT NULL,y DOUBLE NOT NULL,z DOUBLE NOT NULL)")
 
 
     # initial position (1 AU on x axis) unless specified
@@ -240,15 +246,17 @@ def generate_positions(output_filename: str,
     for i in range(steps):
         pos = orbit.advance(sample_dt if i > 0 else 0.0)  # first sample at t=0
         samples.append({
+            'type': params.get('object_type', 'planet'),
+            'type_id': int(params.get('object_id', 0)),
             'time_s': round(t, 3),
             'x': pos.x,
             'y': pos.y,
             'z': pos.z
         })
         nbValues += 1
-        values.append((round(t, 3), pos.x, pos.y, pos.z))
+        values.append((params.get('object_type', 'planet'), int(params.get('object_id', 0)), round(t, 3), pos.x, pos.y, pos.z))
         if nbValues >= 10000:
-            con.executemany("INSERT INTO planet_positions (time_s, x, y, z) VALUES (?, ?, ?, ?)", values)
+            con.executemany("INSERT INTO planet_positions (type, type_id, time_s, x, y, z) VALUES (?, ?, ?, ?, ?, ?)", values)
             values = []
             nbValues = 0
             # print length of samples
@@ -256,7 +264,7 @@ def generate_positions(output_filename: str,
         t += sample_dt
 
     if nbValues > 0:
-        con.executemany("INSERT INTO planet_positions (time_s, x, y, z) VALUES (?, ?, ?, ?)", values)
+        con.executemany("INSERT INTO planet_positions (type, type_id, time_s, x, y, z) VALUES (?, ?, ?, ?, ?, ?)", values)
     con.close()
     # Write minimal JSON array to file
     with open(output_filename, 'w') as f:
@@ -266,24 +274,83 @@ def generate_positions(output_filename: str,
 
 
 if __name__ == '__main__':
-    # Example run: generate 1 second of data at 16.66667 ms steps
-    out = 'database/planet_positions_60hz.json'
-    duration = 60.0  # 24.0 * 60.0 * 60.0  # seconds (short smoke test)
-    dt = 0.01666667
 
-    params = {
-        'star_mass_kg': 1.98847e30 * 0.758581416228569,
-        'planet_mass_kg': 5.972e24 * 0.0547453576852204,
-        'periapsis_AU': 0.769595856230391,
-        'apoapsis_AU': 0.809703378964002,
-        'inc_deg': 0.691390066011356,
-        'node_deg': 142.257975171927,
-        'arg_peri_deg': 149.260586550769,
-        'mean_anomaly_deg': 0.691390066011356,
-        'initial_position_m': Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0)
-    }
+    parser = argparse.ArgumentParser(description="Generate Kepler orbit samples (60 Hz default).")
+    parser.add_argument('--type', '-t', choices=['planet', 'moon'], default='planet',
+                        help="Object type: 'planet' or 'moon'")
+    parser.add_argument('--id', '-i', required=True, help="Database identifier")
+    parser.add_argument('--out', help="Output JSON filename (overrides default naming)")
+    parser.add_argument('--duration', '-d', type=float, default=60.0, help="Duration in seconds")
+    parser.add_argument('--dt', type=float, default=0.01666667, help="Sample timestep in seconds")
+    args = parser.parse_args()
 
-    print(f"Generating {duration}s of samples at dt={dt}s to '{out}'...")
+    # sanitize id for filesystem use
+    safe_id = re.sub(r'[^A-Za-z0-9._-]', '_', args.id)
+
+    out = args.out or f'database/planet_positions_{args.type}_{safe_id}_60hz.json'
+    duration = args.duration
+    dt = args.dt
+
+    # PostgreSQL connection parameters (can be set via environment variables)
+    PGHOST = os.getenv('PGHOST', 'localhost')
+    PGPORT = int(os.getenv('PGPORT', '5432'))
+    PGUSER = os.getenv('PGUSER', 'postgres')
+    PGPASSWORD = os.getenv('PGPASSWORD', 'localpass')
+    DBNAME = 'ds_planets'
+
+    table = 'planets' if args.type == 'planet' else 'planet_moons'
+
+    row = None
+    try:
+        conn = psycopg2.connect(host=PGHOST, port=PGPORT, user=PGUSER, password=PGPASSWORD, dbname=DBNAME)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(f"SELECT * FROM {table} WHERE id = %s LIMIT 1", (args.id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Warning: could not query PostgreSQL ({e}), will fall back to defaults.")
+
+    if not row:
+        print(f"No database row found for id={args.id} in table {table}.")
+        # Leave defaults to be applied later (or you may set defaults here)
+    else:
+        def _gv(keys, default=None):
+            for k in keys:
+                if k in row and row[k] is not None:
+                    return row[k]
+            return default
+
+        params = {
+            'star_mass_kg': 1.98847e30 * float(_gv(['star_mass_kg'], 0.758581416228569)),
+            'planet_mass_kg': float(_gv(['mass_kg'], 5.972e24)),
+            'periapsis_AU': float(_gv(['periapsis_AU'], 0.0)),
+            'apoapsis_AU': float(_gv(['apoapsis_AU'], 0.0)),
+            'inc_deg': float(_gv(['inc_deg'], 0.0)),
+            'node_deg': float(_gv(['node_deg',], 0.0)),
+            'arg_peri_deg': float(_gv(['arg_peri_deg'], 0.0)),
+            'mean_anomaly_deg': float(_gv(['mean_anomaly_deg'], 0.0)),
+            'initial_position_m': Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0),
+            'object_type': args.type,
+            'object_id': args.id,
+        }
+
+    # params = {
+    #     'star_mass_kg': 1.98847e30 * 0.758581416228569,
+    #     'planet_mass_kg': 5.972e24 * 0.0547453576852204,
+    #     'periapsis_AU': 0.769595856230391,
+    #     'apoapsis_AU': 0.809703378964002,
+    #     'inc_deg': 0.691390066011356,
+    #     'node_deg': 142.257975171927,
+    #     'arg_peri_deg': 149.260586550769,
+    #     'mean_anomaly_deg': 0.691390066011356,
+    #     'initial_position_m': Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0),
+    #     # metadata passed through params (not used by generate_positions currently)
+    #     'object_type': args.type,
+    #     'object_id': args.id,
+    # }
+
+    print(f"Generating {duration}s of samples at dt={dt}s to '{out}' for {args.type} id={args.id}...")
     samples = generate_positions(out, duration, sample_dt=dt, params=params)
     print(f"Wrote {len(samples)} samples. First sample:")
     print(json.dumps(samples[0], indent=2))

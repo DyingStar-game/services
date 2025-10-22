@@ -34,10 +34,10 @@ python import_system_from_json.py systems/system.json SystemName
 
 The script `kepler_positions.py` permit to calculate the positions of the planets in a system and store them into a DuckDB database.
 
-Usage:
+Usage for a planet, have id 9 in database:
 
 ```bash
-python kepler_positions.py SystemName
+python kepler_positions.py -t planet -i 9 --out database/planet_9.json -d 120
 ```
 
 **This script not use yet the PostgreSQL database to get data**
