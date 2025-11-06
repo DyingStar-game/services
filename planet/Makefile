@@ -70,12 +70,12 @@ generate-kepler-positions: ## Insert object in database
 # 	@echo "$(CYAN)📦 Running: kepler_positions.py $(filter-out $@,$(MAKECMDGOALS))$(RESET)"
 	@echo "$(CYAN)🔄 Insert kepler position in database...$(RESET)"
 # 	@$(COMPOSE) exec $(DEV_SERVICE) sh -c "python kepler_positions.py $(filter-out $@,$(MAKECMDGOALS))"
-# 	@$(PYTHON) kepler_positions.py --type planet --id 3 --duration 86400 --no-json
-# 	@$(PYTHON) kepler_positions.py --type planet --id 4 --duration 86400 --no-json
-# 	@$(PYTHON) kepler_positions.py --type planet --id 5 --duration 86400 --no-json
-# 	@$(PYTHON) kepler_positions.py --type planet --id 6 --duration 86400 --no-json
-# 	@$(PYTHON) kepler_positions.py --type planet --id 7 --duration 86400 --no-json
-# 	@$(PYTHON) kepler_positions.py --type planet --id 8 --duration 86400 --no-json
+	@$(PYTHON) kepler_positions.py --type planet --id 3 --duration 86400 --no-json
+	@$(PYTHON) kepler_positions.py --type planet --id 4 --duration 86400 --no-json
+	@$(PYTHON) kepler_positions.py --type planet --id 5 --duration 86400 --no-json
+	@$(PYTHON) kepler_positions.py --type planet --id 6 --duration 86400 --no-json
+	@$(PYTHON) kepler_positions.py --type planet --id 7 --duration 86400 --no-json
+	@$(PYTHON) kepler_positions.py --type planet --id 8 --duration 86400 --no-json
 
 
 # 	@$(PYTHON) kepler_positions.py -h
