@@ -45,8 +45,8 @@ def get_conn():
 
 def insert_system(cur, name):
     cur.execute(
-        "INSERT INTO systems (name) VALUES (%s) RETURNING id",
-        (name,)
+        "INSERT INTO systems (name, internal_name) VALUES (%s, %s) RETURNING id",
+        (name,name)
     )
     # Using RealDictCursor returns a mapping (dict-like). Access the returned
     # id by key instead of positional index. Also ensure the params argument
@@ -60,8 +60,8 @@ def insert_star(cur, system_id, star_obj, name):
     attrs = star_obj.get("attributes") or star_obj.get("attrs") or {"mass_kg": 0.0}
     star_name = star_obj.get("name") or name
     cur.execute(
-        "INSERT INTO stars (system_id, name, mass_kg) VALUES (%s, %s, %s) RETURNING id",
-        (system_id, star_name, attrs.get("mass_kg", 0.0)),
+        "INSERT INTO stars (system_id, name, internal_name, mass_kg) VALUES (%s, %s, %s, %s) RETURNING id",
+        (system_id, star_name, star_name, attrs.get("mass_kg", 0.0)),
     )
     row = cur.fetchone()
     return (row["id"], mass_sun) if row else None

@@ -33,14 +33,33 @@ from __future__ import annotations
 import math
 import json
 import time
-from typing import List, Dict
-import duckdb
+from typing import List, Dict, Optional
 import argparse
 import re
 import os
-import getpass
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+    print("Warning: NumPy not available, performance will be reduced")
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    print("Warning: Pandas not available, will use slower insertion method")
+
+try:
+    import duckdb
+    DUCKDB_AVAILABLE = True
+except ImportError:
+    DUCKDB_AVAILABLE = False
+    print("Warning: DuckDB not available, will only generate JSON")
 
 
 class Vector3:
@@ -201,32 +220,44 @@ class OrbitKepler:
 
 
 def generate_positions(output_filename: str,
-                       duration_seconds: float,
-                       sample_dt: float = 0.01666667,
-                       params: Dict = None) -> List[Dict]:
-    """Generate positions and write to JSON file. Returns list of samples."""
+                                  duration_seconds: float,
+                                  sample_dt: float = 0.01666667,
+                                  params: Dict = None,
+                                  use_db: bool = True,
+                                  use_json: bool = True,
+                                  verbose: bool = True) -> Optional[List[Dict]]:
+    """
+    Generate positions.
+    
+    Args:
+        output_filename: JSON output file path
+        duration_seconds: Simulation duration
+        sample_dt: Time step between samples
+        params: Orbital parameters dictionary
+        use_db: Whether to write to DuckDB
+        use_json: Whether to write JSON file
+        verbose: Whether to print progress
+    
+    Returns:
+        List of sample dictionaries if use_json is True, otherwise None
+    """
+    start_time = time.time()
     params = params or {}
 
-    # Default parameters
+    # Pre-calculate constants (avoid repeated params.get() calls)
+    object_type = params.get('object_type', 'planet')
+    object_id = int(params.get('object_id', 0))
     star_mass_kg = params.get('star_mass_kg', 1.98847e30)
     planet_mass_kg = params.get('planet_mass_kg', 5.972e24)
-    periapsis_AU = params.get('periapsis_AU', 0.98)
-    apoapsis_AU = params.get('apoapsis_AU', 1.02)
-    inc_deg = params.get('inc_deg', 0.0)
-    node_deg = params.get('node_deg', 0.0)
-    arg_peri_deg = params.get('arg_peri_deg', 0.0)
-    mean_anomaly_deg = params.get('mean_anomaly_deg', 0.0)
-
-    # connection to the database
-    con = duckdb.connect(database='database/my-db.duckdb', read_only=False)
-
-    # create tables if they don't exist
-    con.execute("CREATE TABLE IF NOT EXISTS planet_positions (type TEXT NOT NULL, type_id INTEGER NOT NULL, time_s FLOAT NOT NULL,x DOUBLE NOT NULL,y DOUBLE NOT NULL,z DOUBLE NOT NULL)")
-
-
-    # initial position (1 AU on x axis) unless specified
+    periapsis_AU = float(params.get('periapsis_AU', 0.98))
+    apoapsis_AU = float(params.get('apoapsis_AU', 1.02))
+    inc_deg = float(params.get('inc_deg', 0.0))
+    node_deg = float(params.get('node_deg', 0.0))
+    arg_peri_deg = float(params.get('arg_peri_deg', 0.0))
+    mean_anomaly_deg = float(params.get('mean_anomaly_deg', 0.0))
     initial_position_m = params.get('initial_position_m', Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0))
 
+    # Initialize orbit
     orbit = OrbitKepler(star_mass_kg=star_mass_kg,
                         planet_mass_kg=planet_mass_kg,
                         periapsis_AU=periapsis_AU,
@@ -237,38 +268,155 @@ def generate_positions(output_filename: str,
                         mean_anomaly_deg=mean_anomaly_deg,
                         initial_position_m=initial_position_m)
 
-    samples = []
-    t = 0.0
     steps = max(1, int(math.ceil(duration_seconds / sample_dt)))
+    
+    if verbose:
+        print(f"Calculating {steps:,} positions over {duration_seconds}s...")
 
-    values = []
-    nbValues = 0
-    for i in range(steps):
-        pos = orbit.advance(sample_dt if i > 0 else 0.0)  # first sample at t=0
-        samples.append({
-            'type': params.get('object_type', 'planet'),
-            'type_id': int(params.get('object_id', 0)),
-            'time_s': round(t, 3),
-            'x': pos.x,
-            'y': pos.y,
-            'z': pos.z
-        })
-        nbValues += 1
-        values.append((params.get('object_type', 'planet'), int(params.get('object_id', 0)), round(t, 3), pos.x, pos.y, pos.z))
-        if nbValues >= 10000:
-            con.executemany("INSERT INTO planet_positions (type, type_id, time_s, x, y, z) VALUES (?, ?, ?, ?, ?, ?)", values)
-            values = []
-            nbValues = 0
-            # print length of samples
-            print(f"Inserted {len(samples)} samples so far...")
-        t += sample_dt
+    # Use NumPy arrays for efficiency if available
+    if NUMPY_AVAILABLE:
+        times = np.arange(steps, dtype=np.float64) * sample_dt
+        times = np.round(times, 3)
+        positions = np.zeros((steps, 3), dtype=np.float64)
+        
+        # Calculate all positions
+        calc_start = time.time()
+        for i in range(steps):
+            pos = orbit.advance(sample_dt if i > 0 else 0.0)
+            positions[i] = [pos.x, pos.y, pos.z]
+            
+            if verbose and (i + 1) % 10000 == 0:
+                print(f"  Calculated {i + 1:,}/{steps:,} positions...")
+        
+        calc_time = time.time() - calc_start
+        if verbose:
+            print(f"Position calculation completed in {calc_time:.2f}s ({steps/calc_time:.0f} positions/s)")
+    else:
+        # Fallback to Python lists
+        times = [round(i * sample_dt, 3) for i in range(steps)]
+        positions = []
+        
+        calc_start = time.time()
+        for i in range(steps):
+            pos = orbit.advance(sample_dt if i > 0 else 0.0)
+            positions.append([pos.x, pos.y, pos.z])
+            
+            if verbose and (i + 1) % 10000 == 0:
+                print(f"  Calculated {i + 1:,}/{steps:,} positions...")
+        
+        calc_time = time.time() - calc_start
+        if verbose:
+            print(f"Position calculation completed in {calc_time:.2f}s")
 
-    if nbValues > 0:
-        con.executemany("INSERT INTO planet_positions (type, type_id, time_s, x, y, z) VALUES (?, ?, ?, ?, ?, ?)", values)
-    con.close()
-    # Write minimal JSON array to file
-    with open(output_filename, 'w') as f:
-        json.dump(samples, f, indent=2)
+    # Write to DuckDB using pandas (much faster than executemany)
+    if use_db and DUCKDB_AVAILABLE:
+        db_start = time.time()
+        
+        if PANDAS_AVAILABLE and NUMPY_AVAILABLE:
+            # Fast path: use pandas DataFrame
+            df = pd.DataFrame({
+                'type': object_type,
+                'type_id': object_id,
+                'time_s': times,
+                'x': positions[:, 0],
+                'y': positions[:, 1],
+                'z': positions[:, 2]
+            })
+            
+            con = duckdb.connect(database='database/my-db.duckdb', read_only=False)
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS planet_positions (
+                    type TEXT NOT NULL,
+                    type_id INTEGER NOT NULL,
+                    time_s FLOAT NOT NULL,
+                    x DOUBLE NOT NULL,
+                    y DOUBLE NOT NULL,
+                    z DOUBLE NOT NULL
+                )
+            """)
+            
+            # Bulk insert (extremely fast)
+            con.execute("INSERT INTO planet_positions SELECT * FROM df")
+            con.close()
+            
+            db_time = time.time() - db_start
+            if verbose:
+                print(f"Database insertion completed in {db_time:.2f}s ({steps/db_time:.0f} rows/s)")
+        else:
+            # Fallback: batch insert
+            con = duckdb.connect(database='database/my-db.duckdb', read_only=False)
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS planet_positions (
+                    type TEXT NOT NULL,
+                    type_id INTEGER NOT NULL,
+                    time_s FLOAT NOT NULL,
+                    x DOUBLE NOT NULL,
+                    y DOUBLE NOT NULL,
+                    z DOUBLE NOT NULL
+                )
+            """)
+            
+            batch_size = 10000
+            for i in range(0, steps, batch_size):
+                end_idx = min(i + batch_size, steps)
+                batch = [
+                    (object_type, object_id, times[j], positions[j][0], positions[j][1], positions[j][2])
+                    for j in range(i, end_idx)
+                ]
+                con.executemany(
+                    "INSERT INTO planet_positions (type, type_id, time_s, x, y, z) VALUES (?, ?, ?, ?, ?, ?)",
+                    batch
+                )
+                if verbose and end_idx % 50000 == 0:
+                    print(f"  Inserted {end_idx:,}/{steps:,} rows...")
+            
+            con.close()
+            db_time = time.time() - db_start
+            if verbose:
+                print(f"Database insertion completed in {db_time:.2f}s")
+
+    # Write JSON file
+    samples = None
+    if use_json:
+        json_start = time.time()
+        
+        if NUMPY_AVAILABLE:
+            # Convert NumPy arrays to list of dicts
+            samples = [
+                {
+                    'type': object_type,
+                    'type_id': object_id,
+                    'time_s': float(times[i]),
+                    'x': float(positions[i, 0]),
+                    'y': float(positions[i, 1]),
+                    'z': float(positions[i, 2])
+                }
+                for i in range(steps)
+            ]
+        else:
+            samples = [
+                {
+                    'type': object_type,
+                    'type_id': object_id,
+                    'time_s': times[i],
+                    'x': positions[i][0],
+                    'y': positions[i][1],
+                    'z': positions[i][2]
+                }
+                for i in range(steps)
+            ]
+        
+        with open(output_filename, 'w') as f:
+            json.dump(samples, f, indent=2)
+        
+        json_time = time.time() - json_start
+        if verbose:
+            print(f"JSON file written in {json_time:.2f}s")
+
+    total_time = time.time() - start_time
+    if verbose:
+        print(f"Total time: {total_time:.2f}s for {steps:,} samples")
+        print(f"Average: {steps/total_time:.0f} samples/second")
 
     return samples
 
@@ -282,24 +430,26 @@ if __name__ == '__main__':
     parser.add_argument('--out', help="Output JSON filename (overrides default naming)")
     parser.add_argument('--duration', '-d', type=float, default=60.0, help="Duration in seconds")
     parser.add_argument('--dt', type=float, default=0.01666667, help="Sample timestep in seconds")
+    parser.add_argument('--no-db', action='store_true', help="Skip database insertion")
+    parser.add_argument('--no-json', action='store_true', help="Skip JSON file generation")
+    parser.add_argument('--quiet', '-q', action='store_true', help="Suppress progress output")
     args = parser.parse_args()
 
-    # sanitize id for filesystem use
+    # Sanitize id for filesystem use
     safe_id = re.sub(r'[^A-Za-z0-9._-]', '_', args.id)
-
     out = args.out or f'database/planet_positions_{args.type}_{safe_id}_60hz.json'
-    duration = args.duration
-    dt = args.dt
 
-    # PostgreSQL connection parameters (can be set via environment variables)
+    # PostgreSQL connection parameters
     PGHOST = os.getenv('PGHOST', 'localhost')
     PGPORT = int(os.getenv('PGPORT', '5432'))
     PGUSER = os.getenv('PGUSER', 'postgres')
     PGPASSWORD = os.getenv('PGPASSWORD', 'localpass')
-    DBNAME = 'ds_planets'
+    DBNAME = 'resources_dynamic'
 
     table = 'planets' if args.type == 'planet' else 'planet_moons'
 
+    # Fetch parameters from PostgreSQL
+    params = None
     row = None
     try:
         conn = psycopg2.connect(host=PGHOST, port=PGPORT, user=PGUSER, password=PGPASSWORD, dbname=DBNAME)
@@ -309,12 +459,9 @@ if __name__ == '__main__':
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Warning: could not query PostgreSQL ({e}), will fall back to defaults.")
+        print(f"Warning: could not query PostgreSQL ({e}), will use defaults.")
 
-    if not row:
-        print(f"No database row found for id={args.id} in table {table}.")
-        # Leave defaults to be applied later (or you may set defaults here)
-    else:
+    if row:
         def _gv(keys, default=None):
             for k in keys:
                 if k in row and row[k] is not None:
@@ -327,30 +474,49 @@ if __name__ == '__main__':
             'periapsis_AU': float(_gv(['periapsis_AU'], 0.0)),
             'apoapsis_AU': float(_gv(['apoapsis_AU'], 0.0)),
             'inc_deg': float(_gv(['inc_deg'], 0.0)),
-            'node_deg': float(_gv(['node_deg',], 0.0)),
+            'node_deg': float(_gv(['node_deg'], 0.0)),
             'arg_peri_deg': float(_gv(['arg_peri_deg'], 0.0)),
             'mean_anomaly_deg': float(_gv(['mean_anomaly_deg'], 0.0)),
             'initial_position_m': Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0),
             'object_type': args.type,
             'object_id': args.id,
         }
+    else:
+        print(f"No database row found for id={args.id}, using defaults")
+        params = {
+            'star_mass_kg': 1.98847e30 * 0.758581416228569,
+            'planet_mass_kg': 5.972e24,
+            'periapsis_AU': 0.98,
+            'apoapsis_AU': 1.02,
+            'inc_deg': 0.0,
+            'node_deg': 0.0,
+            'arg_peri_deg': 0.0,
+            'mean_anomaly_deg': 0.0,
+            'initial_position_m': Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0),
+            'object_type': args.type,
+            'object_id': args.id,
+        }
 
-    # params = {
-    #     'star_mass_kg': 1.98847e30 * 0.758581416228569,
-    #     'planet_mass_kg': 5.972e24 * 0.0547453576852204,
-    #     'periapsis_AU': 0.769595856230391,
-    #     'apoapsis_AU': 0.809703378964002,
-    #     'inc_deg': 0.691390066011356,
-    #     'node_deg': 142.257975171927,
-    #     'arg_peri_deg': 149.260586550769,
-    #     'mean_anomaly_deg': 0.691390066011356,
-    #     'initial_position_m': Vector3(1.0 * OrbitKepler.AU_M, 0.0, 0.0),
-    #     # metadata passed through params (not used by generate_positions currently)
-    #     'object_type': args.type,
-    #     'object_id': args.id,
-    # }
+    print(f"\n{'='*60}")
+    print(f"Kepler Position Generator")
+    print(f"{'='*60}")
+    print(f"Object: {args.type} id={args.id}")
+    print(f"Duration: {args.duration}s at dt={args.dt}s")
+    print(f"Output: {out}")
+    print(f"{'='*60}\n")
 
-    print(f"Generating {duration}s of samples at dt={dt}s to '{out}' for {args.type} id={args.id}...")
-    samples = generate_positions(out, duration, sample_dt=dt, params=params)
-    print(f"Wrote {len(samples)} samples. First sample:")
-    print(json.dumps(samples[0], indent=2))
+    samples = generate_positions(
+        out,
+        args.duration,
+        sample_dt=args.dt,
+        params=params,
+        use_db=not args.no_db,
+        use_json=not args.no_json,
+        verbose=not args.quiet
+    )
+
+    if samples and not args.quiet:
+        print(f"\nFirst sample:")
+        print(json.dumps(samples[0], indent=2))
+        print(f"\nLast sample:")
+        print(json.dumps(samples[-1], indent=2))

@@ -1,0 +1,15 @@
+x-python-image: &python-image "python:3.11-slim"
+
+services:
+  dev:
+    image: *python-image
+    command: sh -c "pip install -r ./docker/requirements.txt && tail -f /dev/null"
+    volumes:
+      - ..:/app
+    working_dir: /app
+    tty: true
+    stdin_open: true
+    env_file:
+      - ../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
