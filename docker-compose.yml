@@ -1,7 +1,7 @@
 services:
-    game_service:
+    persistance_service:
       build: 
-        context: ./.docker
+        context: ./persistance/.docker
       restart: always
       user: "1000:1000"
       volumes:
@@ -9,6 +9,3 @@ services:
         - ~/.ssh/id_rsa:/home/golang/.ssh/id_rsa
       ports:
         - 50051:50051
-        - 50052:50052
-        - 50053:50053
-        - 50054:50054

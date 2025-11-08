@@ -2,8 +2,10 @@ package datarepository
 
 import (
 	"context"
+	"dyingstar/services/persistance/infra/cache"
 	"dyingstar/services/persistance/infra/database"
-	datamodels "dyingstar/services/persistance/infra/database/models"
+	"dyingstar/services/persistance/infra/database/uidresolver"
+	"dyingstar/services/persistance/infra/database/wrapper"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,46 +14,66 @@ import (
 	"github.com/dgraph-io/dgo/v240/protos/api"
 )
 
-type Repository[T datamodels.DgraphI] struct {
-	Client *dgo.Dgraph
+type Repository[T wrapper.IDgraph] struct {
+	client *dgo.Dgraph
 }
 
-func NewCommonRepository[T datamodels.DgraphI]() *Repository[T] {
+func NewCommonRepository[T wrapper.IDgraph]() *Repository[T] {
 	return &Repository[T]{
-		Client: database.GetClient(),
+		client: database.GetClient(),
 	}
 }
 
 func (r Repository[T]) Save(obj T) {
 	fmt.Print("save on data\n")
-
-	if obj.GetUid() == "" {
-		obj.SetUid("_:temp0")
-		dstruct := datamodels.MapToDgraphStruct(obj)
+	dstruct := wrapper.MapToWrapper(obj)
+	dstruct.Wrap(obj)
+	if dstruct.GetUid() == "" {
+		dstruct.SetUid("_:temp0")
 		dg, err := json.Marshal(dstruct)
 		if err != nil {
 			log.Fatal(err)
 		}
-		txn := r.Client.NewTxn()
+		txn := r.client.NewTxn()
 		ctx := context.Background()
 		defer txn.Discard(ctx)
 		resp, err := txn.Mutate(ctx, &api.Mutation{SetJson: dg, CommitNow: true})
 		if err != nil {
 			log.Fatal(err)
 		}
-		obj.SetUid(resp.GetUids()["temp0"])
+		dstruct.SetUid(resp.GetUids()["temp0"])
+		res, _ := json.MarshalIndent(dstruct, "", "  ")
+		fmt.Println(string(res))
 	} else {
 		r.bashSave(obj)
 	}
-
 }
 
 func (r Repository[T]) LoadByUId(uid string) T {
 	print("load by Id on data\n")
 
-	txn := r.Client.NewReadOnlyTxn()
+	// 1. Charger les données brutes
+	rawData := r.fetchEntityData(uid)
+
+	// 2. Déterminer le type et créer le wrapper
+	wrapperInstance := r.createWrapperFromData(rawData)
+
+	// 3. Unmarshaler dans le wrapper
+	r.unmarshalIntoWrapper(rawData, wrapperInstance)
+
+	// 4. Mettre en cache
+	entity := wrapperInstance.UnWrap()
+	cache.GetInstance().Set(entity.GetUuid(), uid)
+
+	// 5. Retourner l'entité unwrapped
+	return entity.(T)
+}
+
+func (r Repository[T]) fetchEntityData(uid string) []byte {
+	txn := r.client.NewReadOnlyTxn()
 	ctx := context.Background()
 	defer txn.Discard(ctx)
+
 	variables := map[string]string{"$id1": uid}
 	q := `
 	query Entity($id1: string) {
@@ -59,51 +81,76 @@ func (r Repository[T]) LoadByUId(uid string) T {
 			uid
 			uuid
 			name
-			children: ~parent {
-				uid
-				uuid
-				dgraph.type
-				parent {
-					uid
-				}
-				username
-			}
+			type_go
+			x
+			y
+			z
 			dgraph.type
 		}
 	}
 	`
+
 	resp, err := txn.QueryWithVars(ctx, q, variables)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	return resp.Json
+}
+
+func (r Repository[T]) createWrapperFromData(jsonData []byte) wrapper.IWrapper {
+	var temp struct {
+		Entity []struct {
+			TypeGo string `json:"type_go"`
+		} `json:"entity"`
+	}
+
+	err := json.Unmarshal(jsonData, &temp)
+	if err != nil || len(temp.Entity) == 0 {
+		log.Fatal("unable to determine entity type")
+	}
+
+	typeName := temp.Entity[0].TypeGo
+	factory, ok := wrapper.GetWrapperFactory(typeName)
+	if !ok {
+		log.Fatal("wrapper not registered for type: " + typeName)
+	}
+
+	return factory()
+}
+
+func (r Repository[T]) unmarshalIntoWrapper(jsonData []byte, w wrapper.IWrapper) {
 	var result struct {
-		Entity []T `json:"Entity"`
+		Entity []json.RawMessage `json:"entity"`
 	}
 
-	err = json.Unmarshal(resp.Json, &result)
+	err := json.Unmarshal(jsonData, &result)
+	if err != nil || len(result.Entity) == 0 {
+		log.Fatal("unable to unmarshal entity data")
+	}
+
+	err = json.Unmarshal(result.Entity[0], w)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("unable to unmarshal into wrapper: ", err)
 	}
-
-	return result.Entity[0]
 }
 
 func (r Repository[T]) DeleteByUId(uid string) {
 }
 
-/*
-func (r Repository[T]) LoadByUUID(uuid string) T {
-	print("load uuid on data")
+func (r Repository[T]) LoadByUUID(uuid string) (T, error) {
+	var zero T
 
+	// Chercher l'UID
+	uid, err := uidresolver.Resolve(uuid)
+	if err != nil {
+		return zero, err
+	}
 
+	// Charger par UID
+	return r.LoadByUId(uid), nil
 }
-
-
-
-*/
 
 func (r Repository[T]) bashSave(obj T) {
 	fmt.Print("bash save on data")
-	fmt.Println(obj.GetUid())
 }

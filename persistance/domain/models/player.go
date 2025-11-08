@@ -1,28 +1,21 @@
 package models
 
-import "github.com/google/uuid"
-
+//easyjson:json
 type Player struct {
 	Entity
-	Username string `json:"username,omitempty"`
+	Username         string `json:"username"`
+	StreamingContext Entity
 }
 
-func (p *Player) GetType() string { return "Player" }
-
-func NewPlayer() Player {
+func NewPlayer(uuid string, username string, position Position) Player {
 	player := Player{
 		Entity: Entity{
-			Position: Position{
-				X:  0.0,
-				Y:  0.0,
-				Z:  0.0,
-				Rx: 0.0,
-				Ry: 0.0,
-				Rz: 0.0,
-			},
-			Uuid: uuid.New(),
+			Position: position,
+			Uuid:     uuid,
 		},
-		Username: "testUsername",
+		Username: username,
 	}
 	return player
 }
+
+func (p Player) TypeName() string { return "Player" }

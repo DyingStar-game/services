@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	br "dyingstar/services/common/lib/horizonBridge"
+	br "dyingstar/services/common/go/lib/horizonBridge"
 	"dyingstar/services/persistance/app/config"
 	"fmt"
 	"log"

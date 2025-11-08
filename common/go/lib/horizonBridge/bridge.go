@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 
-	pb "dyingstar/services/common/lib/horizonBridge/gen/go/proto"
+	pb "dyingstar/services/common/go/lib/horizonBridge/gen/go/proto"
 )
 
 // EventHandler définit les callbacks pour les événements
@@ -35,9 +35,9 @@ type Event struct {
 
 // GRPCBridge encapsule le serveur gRPC avec interface événementielle
 type GRPCBridge struct {
-	bridgeImpl  *BridgeServer
+	bridgeImpl   *BridgeServer
 	eventHandler *EventHandler
-	
+
 	// Gestion des streams pour diffusion
 	streams   map[string]pb.BridgeService_EventStreamServer
 	streamsMu sync.RWMutex
@@ -53,12 +53,12 @@ type BridgeServer struct {
 func NewGRPCBridge(grpcServer *grpc.Server) (*GRPCBridge, error) {
 	// Création de l'instance bridge
 	bridge := &GRPCBridge{
-		streams:  make(map[string]pb.BridgeService_EventStreamServer),
+		streams: make(map[string]pb.BridgeService_EventStreamServer),
 	}
 
 	// Création du serveur gRPC
 	bridgeImpl := &BridgeServer{bridge: bridge}
-	
+
 	// Enregistrement du service
 	pb.RegisterBridgeServiceServer(grpcServer, bridgeImpl)
 
@@ -76,16 +76,16 @@ func (gb *GRPCBridge) SetEventHandler(handler *EventHandler) {
 func (gb *GRPCBridge) SendEvent(event Event) error {
 	// Construction de la structure complète
 	responseData := map[string]interface{}{
-		"status":     "triggered",
-		"timestamp":  time.Now().Unix(),
+		"status":         "triggered",
+		"timestamp":      time.Now().Unix(),
 		"trigger_events": []Event{event},
 	}
-	
+
 	responseJSON, err := json.Marshal(responseData)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %v", err)
 	}
-	
+
 	eventMsg := &pb.EventMessage{
 		MessageId: uuid.New().String(),
 		Type:      pb.EventType_GO_EVENT,
@@ -93,11 +93,11 @@ func (gb *GRPCBridge) SendEvent(event Event) error {
 		Timestamp: time.Now().Unix(),
 		Source:    "go",
 	}
-	
+
 	// Diffusion à tous les streams connectés
 	gb.streamsMu.RLock()
 	defer gb.streamsMu.RUnlock()
-	
+
 	success := 0
 	for streamID, stream := range gb.streams {
 		if err := stream.Send(eventMsg); err != nil {
@@ -106,7 +106,7 @@ func (gb *GRPCBridge) SendEvent(event Event) error {
 			success++
 		}
 	}
-	
+
 	fmt.Printf("📤 Event sent to %d/%d streams\n", success, len(gb.streams))
 	return nil
 }
@@ -153,7 +153,7 @@ func (gb *GRPCBridge) GetConnectedClients() int {
 // Initialize - démarrage du bridge
 func (s *BridgeServer) Initialize(ctx context.Context, req *pb.InitRequest) (*pb.InitResponse, error) {
 	fmt.Printf("🚀 Bridge initialized for plugin: %s v%s\n", req.GetPluginName(), req.GetPluginVersion())
-	
+
 	return &pb.InitResponse{
 		Message:       "Bridge ready",
 		ServerVersion: "1.0.0-event-interface",
@@ -164,31 +164,31 @@ func (s *BridgeServer) Initialize(ctx context.Context, req *pb.InitRequest) (*pb
 func (s *BridgeServer) EventStream(stream pb.BridgeService_EventStreamServer) error {
 	streamID := uuid.New().String()
 	fmt.Printf("🌊 New stream connected: %s\n", streamID)
-	
+
 	// Enregistrement du stream
 	s.bridge.streamsMu.Lock()
 	s.bridge.streams[streamID] = stream
 	s.bridge.streamsMu.Unlock()
-	
+
 	// Callback de connexion
 	if s.bridge.eventHandler != nil && s.bridge.eventHandler.OnConnect != nil {
 		s.bridge.eventHandler.OnConnect()
 	}
-	
+
 	// Nettoyage à la déconnexion
 	defer func() {
 		s.bridge.streamsMu.Lock()
 		delete(s.bridge.streams, streamID)
 		s.bridge.streamsMu.Unlock()
-		
+
 		fmt.Printf("🔌 Stream disconnected: %s\n", streamID)
-		
+
 		// Callback de déconnexion
 		if s.bridge.eventHandler != nil && s.bridge.eventHandler.OnDisconnect != nil {
 			s.bridge.eventHandler.OnDisconnect()
 		}
 	}()
-	
+
 	// Boucle principale pour recevoir les événements
 	for {
 		event, err := stream.Recv()
@@ -211,30 +211,30 @@ func (s *BridgeServer) EventStream(stream pb.BridgeService_EventStreamServer) er
 // handleEvent - traite les événements entrants
 func (s *BridgeServer) handleEvent(event *pb.EventMessage, stream pb.BridgeService_EventStreamServer) {
 	eventType := pb.EventType(event.GetType())
-	
+
 	switch eventType {
 	case pb.EventType_HORIZON_EVENT:
 		s.processHorizonEvent(event, stream)
-		
+
 	case pb.EventType_PING:
 		fmt.Println("🏓 Ping received")
 		s.sendPong(stream)
 		if s.bridge.eventHandler != nil && s.bridge.eventHandler.OnPing != nil {
 			s.bridge.eventHandler.OnPing()
 		}
-		
+
 	case pb.EventType_PONG:
 		fmt.Println("🏓 Pong received")
 		if s.bridge.eventHandler != nil && s.bridge.eventHandler.OnPong != nil {
 			s.bridge.eventHandler.OnPong()
 		}
-		
+
 	case pb.EventType_ERROR:
 		fmt.Printf("❌ Error received: %s\n", event.GetEventJson())
 		if s.bridge.eventHandler != nil && s.bridge.eventHandler.OnError != nil {
 			s.bridge.eventHandler.OnError(event.GetEventJson())
 		}
-		
+
 	default:
 		fmt.Printf("❓ Unknown event type: %d\n", int32(eventType))
 	}
@@ -252,7 +252,7 @@ func (s *BridgeServer) processHorizonEvent(event *pb.EventMessage, stream pb.Bri
 	// Extraction des infos de base
 	category := getString(eventData, "category")
 	eventType := getString(eventData, "event")
-	
+
 	fmt.Printf("📥 Processing: %s -> %s\n", category, eventType)
 
 	// Appel du callback utilisateur
@@ -267,12 +267,12 @@ func (s *BridgeServer) processHorizonEvent(event *pb.EventMessage, stream pb.Bri
 		if data == nil {
 			data = make(map[string]interface{})
 		}
-		
+
 		// Ajout des métadonnées
 		data["namespace"] = getString(eventData, "namespace")
 		data["plugin"] = getString(eventData, "plugin")
 		data["raw_event"] = eventData
-		
+
 		s.bridge.eventHandler.OnHorizonEvent(category, eventType, data)
 	}
 }
@@ -285,7 +285,7 @@ func (s *BridgeServer) sendPong(stream pb.BridgeService_EventStreamServer) {
 		Timestamp: time.Now().Unix(),
 		Source:    "go",
 	}
-	
+
 	stream.Send(pong)
 }
 
@@ -293,7 +293,7 @@ func (s *BridgeServer) sendPong(stream pb.BridgeService_EventStreamServer) {
 func (s *BridgeServer) HealthCheck(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {
 	clientCount := s.bridge.GetConnectedClients()
 	fmt.Printf("💚 Health check - %d clients connected\n", clientCount)
-	
+
 	return &pb.HealthResponse{
 		Status: fmt.Sprintf("healthy - %d clients", clientCount),
 	}, nil
@@ -302,7 +302,7 @@ func (s *BridgeServer) HealthCheck(ctx context.Context, req *pb.HealthRequest) (
 // Shutdown - fermeture propre
 func (s *BridgeServer) Shutdown(ctx context.Context, req *pb.ShutdownRequest) (*pb.ShutdownResponse, error) {
 	fmt.Println("🔌 Shutdown requested")
-	
+
 	return &pb.ShutdownResponse{
 		Message: "Shutting down",
 	}, nil

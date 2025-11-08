@@ -23,16 +23,27 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("devTest called")
-		//planet := models.NewPlanet()
+		/*sysuid, _ := uuid.NewUUID()
+		sytem := models.NewSystem(sysuid.String(), "testSystem")
+		ptuid, _ := uuid.NewUUID()
+		planet := models.NewPlanet(
+			&sytem, ptuid.String(),
+			"testPlantet",
+			models.Position{
+				X: 2,
+				Y: 2,
+				Z: 2,
+			},
+		)*/
 		repository := datarepository.NewCommonRepository[*models.Planet]()
-		planet := repository.LoadByUId("0x271a")
+		planet := repository.LoadByUId("0x9")
 		//repository.Save(&planet)
 		fmt.Println(planet)
-		player := models.NewPlayer()
+		/*player := models.NewPlayer()
 		player.Parent = &planet.Entity
 		prepo := datarepository.NewPlayerRepository()
 		prepo.Save(&player)
-		fmt.Println(player)
+		fmt.Println(player)*/
 	},
 }
 

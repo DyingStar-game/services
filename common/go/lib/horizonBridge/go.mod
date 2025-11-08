@@ -1,4 +1,4 @@
-module dyingstar/services/common/lib/horizonBridge
+module dyingstar/services/common/go/lib/horizonBridge
 
 go 1.25.1
 

@@ -3,19 +3,27 @@ module dyingstar/services/persistance
 go 1.25.1
 
 require (
-	dyingstar/services/common/lib/horizonBridge v0.0.0-00010101000000-000000000000
+	dyingstar/services/common/go/lib/horizonBridge v0.0.0-00010101000000-000000000000
+	github.com/dgraph-io/dgo/v240 v240.2.0
+	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/viper v1.21.0
+	github.com/tinylib/msgp v1.4.0
 	google.golang.org/grpc v1.76.0
 )
 
 require (
-	github.com/dgraph-io/dgo/v240 v240.2.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dgraph-io/ristretto/v2 v2.3.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/josharian/intern v1.0.0 // indirect
+	github.com/mailru/easyjson v0.9.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
@@ -31,4 +39,4 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 )
 
-replace dyingstar/services/common/lib/horizonBridge => ../common/lib/horizonBridge
+replace dyingstar/services/common/go/lib/horizonBridge => ../common/go/lib/horizonBridge
