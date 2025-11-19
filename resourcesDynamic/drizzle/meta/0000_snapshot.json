@@ -1,0 +1,513 @@
+{
+  "id": "59bc00c2-9070-4210-a358-af9a9478d360",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.systems": {
+      "name": "systems",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "systems_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "2147483647",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "uuid": {
+          "name": "uuid",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "internal_name": {
+          "name": "internal_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "systems_uuid_unique": {
+          "name": "systems_uuid_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "uuid"
+          ]
+        },
+        "systems_name_unique": {
+          "name": "systems_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "name"
+          ]
+        },
+        "systems_internal_name_unique": {
+          "name": "systems_internal_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "internal_name"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.stars": {
+      "name": "stars",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "stars_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "2147483647",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "uuid": {
+          "name": "uuid",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "gen_random_uuid()"
+        },
+        "system_id": {
+          "name": "system_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "internal_name": {
+          "name": "internal_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mass_kg": {
+          "name": "mass_kg",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "stars_system_id_systems_id_fk": {
+          "name": "stars_system_id_systems_id_fk",
+          "tableFrom": "stars",
+          "tableTo": "systems",
+          "columnsFrom": [
+            "system_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "stars_uuid_unique": {
+          "name": "stars_uuid_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "uuid"
+          ]
+        },
+        "stars_name_unique": {
+          "name": "stars_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "name"
+          ]
+        },
+        "stars_internal_name_unique": {
+          "name": "stars_internal_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "internal_name"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.planets": {
+      "name": "planets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "planets_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "2147483647",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "uuid": {
+          "name": "uuid",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "gen_random_uuid()"
+        },
+        "system_id": {
+          "name": "system_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "internal_name": {
+          "name": "internal_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mass_kg": {
+          "name": "mass_kg",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "periapsis_au": {
+          "name": "periapsis_au",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "apoapsis_au": {
+          "name": "apoapsis_au",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "inc_rad": {
+          "name": "inc_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_rad": {
+          "name": "node_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "arg_peri_rad": {
+          "name": "arg_peri_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mean_anomaly_rad": {
+          "name": "mean_anomaly_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "radius_m": {
+          "name": "radius_m",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "radius_gravity_influence_m": {
+          "name": "radius_gravity_influence_m",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tidal_locked": {
+          "name": "tidal_locked",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tilt_rad": {
+          "name": "tilt_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rotation_h": {
+          "name": "rotation_h",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "planets_system_id_systems_id_fk": {
+          "name": "planets_system_id_systems_id_fk",
+          "tableFrom": "planets",
+          "tableTo": "systems",
+          "columnsFrom": [
+            "system_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "planets_uuid_unique": {
+          "name": "planets_uuid_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "uuid"
+          ]
+        },
+        "planets_name_unique": {
+          "name": "planets_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "name"
+          ]
+        },
+        "planets_internal_name_unique": {
+          "name": "planets_internal_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "internal_name"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.planet_moons": {
+      "name": "planet_moons",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "planet_moons_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "2147483647",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "planet_id": {
+          "name": "planet_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "uuid": {
+          "name": "uuid",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "internal_name": {
+          "name": "internal_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mass_kg": {
+          "name": "mass_kg",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "periapsis_au": {
+          "name": "periapsis_au",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "apoapsis_au": {
+          "name": "apoapsis_au",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "inc_rad": {
+          "name": "inc_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_rad": {
+          "name": "node_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "arg_peri_rad": {
+          "name": "arg_peri_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mean_anomaly_rad": {
+          "name": "mean_anomaly_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "radius_m": {
+          "name": "radius_m",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "radius_gravity_influence_m": {
+          "name": "radius_gravity_influence_m",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tidal_locked": {
+          "name": "tidal_locked",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tilt_rad": {
+          "name": "tilt_rad",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rotation_h": {
+          "name": "rotation_h",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "planet_moons_planet_id_planets_id_fk": {
+          "name": "planet_moons_planet_id_planets_id_fk",
+          "tableFrom": "planet_moons",
+          "tableTo": "planets",
+          "columnsFrom": [
+            "planet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "planet_moons_uuid_unique": {
+          "name": "planet_moons_uuid_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "uuid"
+          ]
+        },
+        "planet_moons_name_unique": {
+          "name": "planet_moons_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "name"
+          ]
+        },
+        "planet_moons_internal_name_unique": {
+          "name": "planet_moons_internal_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "internal_name"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

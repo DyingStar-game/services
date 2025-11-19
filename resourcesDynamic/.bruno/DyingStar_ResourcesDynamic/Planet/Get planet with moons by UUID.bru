@@ -1,0 +1,16 @@
+meta {
+  name: Get planet with moons by UUID
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/planets/55ad9203-68c6-4d52-a4dd-601fe1c97852
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

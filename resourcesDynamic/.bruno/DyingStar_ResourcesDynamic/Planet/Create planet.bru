@@ -1,0 +1,48 @@
+meta {
+  name: Create planet
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/planets
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+      "name": "Tarsis 1",
+      "internalName": "Tarsis 1",
+      "massKg": 0.318718,
+      "periapsisAu": 0.0518740964529183,
+      "apoapsisAu": 0.0561969378239948,
+      "incDeg": 0.43879826599353,
+      "nodeDeg": 3.73398360904092,
+      "argPeriDeg": 89.2849996583068,
+      "meanAnomalyDeg": 81.9,
+      "radiusKm":  4678.72368420455,
+      "radiusGravityInfluenceKm": 1,
+      "systemId": 1
+  }
+  
+  // {
+  //     "name": "Tarsis 2",
+  //     "internalName": "Tarsis 2",
+  //     "massKg": 0.0712940836580695,
+  //     "periapsisAu": 0.142718318697037,
+  //     "apoapsisAu": 0.15461151192179,
+  //     "incDeg": 0.140645831363347,
+  //     "nodeDeg": 130.393581342233,
+  //     "argPeriDeg": 189.489978492792,
+  //     "meanAnomalyDeg": 282.9,
+  //     "radiusKm":  3123,
+  //     "radiusGravityInfluenceKm": 1234,
+  //     "systemId": 1
+  // }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

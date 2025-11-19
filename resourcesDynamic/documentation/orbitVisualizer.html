@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orbit Visualizer</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+        font-family: monospace;
+        color: white;
+      }
+      canvas {
+        display: block;
+      }
+      #info {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 15px;
+        border-radius: 5px;
+        font-size: 12px;
+        max-width: 300px;
+        max-height: 90vh;
+        overflow-y: auto;
+        z-index: 100;
+      }
+      #controls {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 15px;
+        border-radius: 5px;
+        z-index: 100;
+      }
+      button {
+        background: #0077ff;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        margin: 5px;
+        border-radius: 3px;
+        cursor: pointer;
+        display: block;
+        width: 100%;
+      }
+      button:hover {
+        background: #0055cc;
+      }
+      button:disabled {
+        background: #555;
+        cursor: not-allowed;
+      }
+      .status {
+        padding: 5px;
+        border-radius: 3px;
+        margin: 5px 0;
+      }
+      .status.connected {
+        background: #00ff00;
+        color: #000;
+      }
+      .status.disconnected {
+        background: #ff0000;
+        color: #fff;
+      }
+      .status.connecting {
+        background: #ffaa00;
+        color: #000;
+      }
+      input {
+        width: 100%;
+        padding: 5px;
+        margin: 5px 0;
+        background: #222;
+        color: white;
+        border: 1px solid #555;
+        border-radius: 3px;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <h3>🌍 Orbit Visualizer</h3>
+      <div id="ws-status" class="status disconnected">⚫ Disconnected</div>
+      <div id="stats">No data</div>
+      <hr />
+      <div id="objects-list"></div>
+    </div>
+
+    <div id="controls">
+      <label>WebSocket URL:</label>
+      <input type="text" id="ws-url" value="ws://localhost:9200" />
+
+      <button id="connect-btn" onclick="connectWebSocket()">🔌 Connect</button>
+      <button id="disconnect-btn" onclick="disconnectWebSocket()" disabled>
+        🔌 Disconnect
+      </button>
+      <hr />
+      <button onclick="toggleAnimation()">⏯️ Play/Pause</button>
+      <button onclick="resetView()">🔄 Reset View</button>
+      <button onclick="speedUp()">⏩ Speed Up</button>
+      <button onclick="slowDown()">⏪ Slow Down</button>
+      <button onclick="toggleTrails()">✨ Toggle Trails</button>
+      <button onclick="toggleLabels()">🔤 Toggle Labels</button>
+      <button onclick="toggleAxes()">🧭 Toggle Axes</button>
+      <button onclick="stopFollowing()">🔓 Stop Following</button>
+      <button onclick="clearScene()">🗑️ Clear Scene</button>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "@msgpack/msgpack": "https://cdn.jsdelivr.net/npm/@msgpack/msgpack@3.0.0/+esm",
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import { decode, encode } from "@msgpack/msgpack";
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      // ÉCHELLES
+      const AU = 149597870700; // 1 AU en mètres
+      const SCALE_POSITION = (1 / AU) * 40;
+      const SCALE_RADIUS = 1 / 10000;
+      const PLANET_RENDER_SCALE = 1.0; // facteur taille mesh planète (affichage)
+      const MOON_RENDER_SCALE = 1; // facteur taille mesh lune (affichage)
+      const DURATION = 43000;
+      const FREQUENCY = 0.004;
+
+      let ws = null;
+      let isConnected = false;
+      let allPlanetUuids = [];
+
+      // ===== DATA SETUP =====
+
+      async function fetchPlanetsWithMoons(systemId) {
+        const response = await fetch(
+          `http://localhost:3001/api/planets/system/${systemId}`,
+        );
+        if (!response.ok) throw new Error("Erreur API");
+        const data = await response.json();
+
+        const planetRadiusMap = {};
+        const moonRadiusMap = {};
+        const moonParentMap = {};
+
+        for (const planet of data.data) {
+          planetRadiusMap[planet.uuid] = planet.radiusM / 1000;
+          if (planet.moons && planet.moons.length > 0) {
+            for (const moon of planet.moons) {
+              moonRadiusMap[moon.uuid] = moon.radiusM / 1000;
+              moonParentMap[moon.uuid] = planet.uuid;
+            }
+          }
+        }
+
+        return {
+          PLANET_RADII: planetRadiusMap,
+          MOON_RADII: moonRadiusMap,
+          MOON_PARENT: moonParentMap,
+        };
+      }
+
+      const data = await fetchPlanetsWithMoons(1);
+
+      // ===== SCENE SETUP =====
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000011);
+
+      // Zoom out pour voir tout le système
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        2000,
+      );
+      camera.position.set(-20, 20, 30);
+      camera.lookAt(0, 0, 0);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+
+      // ===== LUMIÈRE =====
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+      scene.add(ambientLight);
+
+      const pointLight = new THREE.PointLight(0xffffff, 2, 0, 0.1);
+      pointLight.position.set(0, 0, 0);
+      scene.add(pointLight);
+
+      // ===== SOLEIL =====
+      const sunGeometry = new THREE.SphereGeometry(
+        (190644 * SCALE_RADIUS) / 100,
+        64,
+        64,
+      );
+      const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+      scene.add(sun);
+
+      // Glow
+      const glowGeometry = new THREE.SphereGeometry(17 * SCALE_RADIUS, 64, 64);
+      const glowMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffaa00,
+        transparent: true,
+        opacity: 0.2,
+      });
+      const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+      scene.add(glow);
+
+      // ===== AXES & GRILLE =====
+      const axesHelper = new THREE.AxesHelper(80);
+      scene.add(axesHelper);
+
+      const gridHelper = new THREE.GridHelper(40, 20, 0x444444, 0x222222);
+      scene.add(gridHelper);
+
+      // ===== GESTION DES OBJETS ORBITAUX =====
+      const orbitalObjects = new Map();
+      let animationSpeed = 1; // Positions par frame
+      let isPlaying = true;
+      let showTrails = true;
+      let showLabels = true;
+      let showAxes = true;
+
+      const colors = [
+        0x0077ff, 0xff0077, 0x00ff77, 0xff7700, 0x7700ff, 0x00ffff, 0xff00ff,
+        0xffff00,
+      ];
+      let colorIndex = 0;
+
+      function createPlanet(uuid, name = "Unknown") {
+        const color = colors[colorIndex % colors.length];
+        colorIndex++;
+
+        let radiusM = data.PLANET_RADII[uuid] || data.MOON_RADII[uuid] || 6000;
+        let sphereRadius = radiusM * SCALE_RADIUS;
+
+        if (data.PLANET_RADII[uuid]) sphereRadius *= PLANET_RENDER_SCALE;
+        if (data.MOON_RADII[uuid]) sphereRadius *= MOON_RENDER_SCALE;
+
+        const geometry = new THREE.SphereGeometry(sphereRadius, 32, 32);
+        const material = new THREE.MeshStandardMaterial({ color });
+        const mesh = new THREE.Mesh(geometry, material);
+        const axesHelper = new THREE.AxesHelper(sphereRadius * 2);
+        mesh.add(axesHelper);
+        scene.add(mesh);
+
+        // Create text planet
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        const fontSize = 64;
+        context.font = `${fontSize}px Arial`;
+        const textWidth = context.measureText(name).width;
+        canvas.width = textWidth;
+        canvas.height = fontSize * 1.2;
+
+        context.font = `${fontSize}px Arial`;
+        context.fillStyle = "white";
+        context.fillText(name, 0, fontSize);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.minFilter = THREE.LinearFilter;
+
+        const spriteMaterial = new THREE.SpriteMaterial({
+          map: texture,
+          transparent: true,
+        });
+        const sprite = new THREE.Sprite(spriteMaterial);
+
+        // Place text
+        sprite.scale.set(sphereRadius * 3, sphereRadius * 0.75, 1);
+        sprite.position.set(0, sphereRadius + sphereRadius * 0.6, 0);
+
+        scene.add(sprite);
+
+        const trailMaterial = new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.6,
+        });
+        const trailGeometry = new THREE.BufferGeometry();
+        const trail = new THREE.Line(trailGeometry, trailMaterial);
+        scene.add(trail);
+
+        orbitalObjects.set(uuid, {
+          uuid,
+          mesh,
+          axesHelper,
+          trail,
+          transforms: [],
+          currentIndex: 0,
+          color,
+          name,
+          label: sprite,
+          lastUpdateTime: Date.now(),
+        });
+
+        console.log(
+          `✅ Created planet: ${name} (${uuid.substring(
+            0,
+            8,
+          )}) — Rayon réel: ${radiusM} m => scène: ${sphereRadius}`,
+        );
+      }
+
+      function updateObjectsList() {
+        const list = document.getElementById("objects-list");
+        list.innerHTML = "<strong>Objects:</strong><br>";
+
+        orbitalObjects.forEach((obj, uuid) => {
+          const shortUuid = uuid.substring(0, 8);
+          const color = `#${obj.color.toString(16).padStart(6, "0")}`;
+          list.innerHTML += `
+                      <div class="object-item" data-uuid="${uuid}" style="margin: 5px 0; cursor: pointer;">
+                        <span style="color: ${color}">⬤</span> ${obj.name || shortUuid}
+                        <span style="color: #888; font-size: 10px;">(${
+                          obj.transforms.length
+                        } pts)</span>
+                      </div>
+                    `;
+        });
+        document.querySelectorAll(".object-item").forEach((el) => {
+          el.onclick = function () {
+            const uuid = el.getAttribute("data-uuid");
+            centerCameraOnObject(uuid); // fait le zoom +
+            followUuid = uuid; // active le suivi !
+          };
+        });
+      }
+
+      function updateTrail(obj) {
+        const idx = Math.floor(obj.currentIndex);
+
+        // Si c'est une lune : on masque la trail et on sort (rien à afficher)
+        if (data.MOON_RADII[obj.uuid] && data.MOON_PARENT[obj.uuid]) {
+          obj.trail.visible = false;
+          return;
+        }
+
+        // Sinon, on affiche et met à jour la traînée normalement
+        obj.trail.visible = showTrails;
+        const start = Math.max(0, idx - TRAIL_LENGTH + 1);
+        const transforms = obj.transforms
+          .slice(start, idx + 1)
+          .map(
+            (transform) =>
+              new THREE.Vector3(
+                transform.position.x,
+                transform.position.y,
+                transform.position.z,
+              ),
+          );
+        obj.trail.geometry.setFromPoints(transforms);
+        obj.trail.geometry.attributes.position.needsUpdate = true;
+      }
+
+      // ===== WEBSOCKET =====
+      window.connectWebSocket = function () {
+        const url = document.getElementById("ws-url").value;
+
+        updateStatus("connecting", "🟡 Connecting...");
+
+        ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => {
+          isConnected = true;
+          updateStatus("connected", "🟢 Connected");
+          document.getElementById("connect-btn").disabled = true;
+          document.getElementById("disconnect-btn").disabled = false;
+          console.log("✅ WebSocket connected");
+
+          ws.send(
+            encode({
+              event_type: "init",
+              data: {
+                duration_s: DURATION,
+                frequency: FREQUENCY,
+                from_timestamp: 0,
+                system_internal_name: "tarsis",
+              },
+            }),
+          );
+          console.log("📤 Requesting init...");
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const buffer = event.data;
+            const decoded = decode(new Uint8Array(buffer));
+
+            console.log(
+              "📦 Received:",
+              decoded.event,
+              "with",
+              decoded.data?.object_data?.positions?.length || 0,
+              "transforms",
+            );
+
+            if (decoded.event === "create_object") {
+              handleCreateObject(decoded.data);
+            } else if (decoded.event === "update_object") {
+              handleUpdateObject(decoded.data);
+            }
+          } catch (error) {
+            console.error("❌ Error decoding message:", error);
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error("❌ WebSocket error:", error);
+          updateStatus("disconnected", "🔴 Error");
+        };
+
+        ws.onclose = () => {
+          isConnected = false;
+          updateStatus("disconnected", "⚫ Disconnected");
+          document.getElementById("connect-btn").disabled = false;
+          document.getElementById("disconnect-btn").disabled = true;
+          console.log("🔌 WebSocket closed");
+        };
+      };
+
+      window.disconnectWebSocket = function () {
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+      };
+
+      function updateStatus(status, text) {
+        const statusEl = document.getElementById("ws-status");
+        statusEl.className = `status ${status}`;
+        statusEl.textContent = text;
+      }
+
+      // ===== GESTION INIT =====
+      function handleCreateObject(data) {
+        console.log("🎯 Init received:", data);
+
+        if (!Array.isArray(data) || data.length === 0) {
+          console.error("❌ Init data is empty or not an array");
+          return;
+        }
+
+        const celestialBodies = data.filter((data) =>
+          ["moon", "planet"].includes(data.object_type),
+        );
+
+        allPlanetUuids = celestialBodies.map((object) => object.object_uuid);
+
+        celestialBodies.forEach((object) => {
+          const objectUuid = object.object_uuid;
+          const objectData = object.object_data;
+          if (!orbitalObjects.has(objectUuid)) {
+            createPlanet(objectUuid, objectData.name);
+          }
+          // Position initiale (absolue, ne pas toucher à l'échelle pour lune)
+          const x = objectData.positions[0].x * SCALE_POSITION;
+          const y = objectData.positions[0].y * SCALE_POSITION;
+          const z = objectData.positions[0].z * SCALE_POSITION;
+          orbitalObjects.get(objectUuid).mesh.position.set(x, y, z);
+
+          const xr = objectData.rotations[0].x;
+          const yr = objectData.rotations[0].y;
+          const zr = objectData.rotations[0].z;
+          const wr = objectData.rotations[0].w;
+
+          orbitalObjects.get(objectUuid).mesh.quaternion.set(xr, yr, zr, wr);
+          // orbitalObjects.get(objectUuid).mesh.rotation.set(xr, yr, zr, "XYZ");
+        });
+
+        console.log(`✅ Created ${allPlanetUuids.length} celestial bodies`);
+        updateObjectsList();
+
+        requestMoreData();
+      }
+
+      // ===== REQUÊTER DES DONNÉES =====
+      function requestMoreData() {
+        if (!allPlanetUuids.length || !ws || ws.readyState !== WebSocket.OPEN) {
+          console.warn("⚠️ Cannot request data");
+          return;
+        }
+
+        allPlanetUuids.forEach((uuid) => {
+          const obj = orbitalObjects.get(uuid);
+          const lastTime =
+            obj && obj.transforms.length > 0
+              ? obj.transforms[obj.transforms.length - 1].time
+              : 0;
+
+          const request = {
+            event_type: "transform",
+            data: {
+              duration_s: DURATION,
+              frequency: FREQUENCY,
+              from_timestamp: lastTime,
+              uuid: uuid,
+            },
+          };
+
+          console.log(`📤 Request for ${uuid.substring(0, 8)}:`, request);
+          ws.send(encode(request));
+        });
+      }
+
+      // ===== RÉCEPTION DES POSITIONS =====
+      function handleUpdateObject(updateObject) {
+        const objectUuid = updateObject.object_uuid;
+        const objectData = updateObject.object_data;
+        const positions = objectData.positions;
+        const rotations = objectData.rotations;
+        const transformCount = positions.length;
+
+        if (!Array.isArray(positions) || transformCount === 0) {
+          console.warn("⚠️ Empty tick data");
+          return;
+        }
+
+        console.log(
+          `📥 Received ${transformCount} transforms for ${objectUuid.substring(
+            0,
+            8,
+          )}`,
+        );
+
+        let obj = orbitalObjects.get(objectUuid);
+
+        if (!obj) {
+          createPlanet(objectUuid);
+          obj = orbitalObjects.get(objectUuid);
+        }
+
+        for (let index = 0; index < transformCount; index++) {
+          const position = positions[index];
+          const rotation = rotations[index];
+
+          const newTime = objectData.from_timestamp + index * (1 / FREQUENCY);
+          const newTransform = {
+            position: {
+              x: position.x * SCALE_POSITION,
+              y: position.y * SCALE_POSITION,
+              z: position.z * SCALE_POSITION,
+            },
+            rotation,
+            time: newTime,
+          };
+
+          // Ajoute uniquement si le time est INÉDIT (évite les replace intempestifs)
+          const existingIdx = obj.transforms.findIndex(
+            (p) => p.time === newTime,
+          );
+          if (existingIdx < 0) {
+            obj.transforms.push(newTransform);
+          } else {
+            obj.transforms[existingIdx] = newTransform; // Si données meilleures
+          }
+        }
+
+        obj.isFetching = false;
+
+        updateObjectsList();
+      }
+
+      // ===== ANIMATION =====
+      const FETCH_THRESHOLD = 0.6;
+      const TRAIL_LENGTH = 1000; // longueur de la traînée visible
+      const EXTRA_BUFFER = 200; // marge de sécurité en plus, pour stabilité
+
+      function updatePlanets() {
+        if (!isPlaying) return;
+
+        orbitalObjects.forEach((obj, uuid) => {
+          if (obj.transforms.length === 0) return;
+          const idx = Math.floor(obj.currentIndex);
+
+          if (idx >= obj.transforms.length - 1) {
+            obj.currentIndex = Math.min(
+              obj.currentIndex,
+              obj.transforms.length - 1,
+            );
+            // Tu peux aussi afficher un message "Fin du buffer"
+            return;
+          }
+
+          if (obj.transforms.length > TRAIL_LENGTH + EXTRA_BUFFER) {
+            const oldestToKeep = Math.max(0, idx - TRAIL_LENGTH - EXTRA_BUFFER);
+            if (oldestToKeep > 0) {
+              obj.transforms.splice(0, oldestToKeep);
+              obj.currentIndex -= oldestToKeep;
+              if (obj.currentIndex < 0) obj.currentIndex = 0;
+            }
+          }
+
+          if (
+            ws &&
+            ws.readyState === WebSocket.OPEN &&
+            (!obj.isFetching ||
+              (obj.currentIndex >= obj.transforms.length - 1 && obj.isFetching))
+          ) {
+            // On peut merge avec le shouldFetch
+            const shouldFetch =
+              obj.currentIndex / obj.transforms.length > FETCH_THRESHOLD ||
+              obj.currentIndex >= obj.transforms.length - 1;
+
+            if (shouldFetch) {
+              obj.isFetching = true;
+              const lastTime =
+                obj.transforms.length > 0
+                  ? obj.transforms[obj.transforms.length - 1].time
+                  : 0;
+              const request = {
+                event_type: "transform",
+                data: {
+                  duration_s: DURATION,
+                  frequency: FREQUENCY,
+                  from_timestamp: lastTime,
+                  uuid: uuid,
+                },
+              };
+              ws.send(encode(request));
+            }
+          }
+
+          const position = obj.transforms[idx].position;
+          const rotation = obj.transforms[idx].rotation;
+
+          // ------ Correction : décalage lune ------
+          if (data.MOON_RADII[uuid] && data.MOON_PARENT[uuid]) {
+            const planetUuid = data.MOON_PARENT[uuid];
+            const planetObj = orbitalObjects.get(planetUuid);
+            // Position Global
+            // if (planetObj && planetObj.mesh) {
+            //   const planetPos = planetObj.mesh.position;
+            //   const moonPos = new THREE.Vector3(
+            //     position.x,
+            //     position.y,
+            //     position.z,
+            //   );
+            //   const direction = moonPos.clone().sub(planetPos).normalize();
+
+            //   // Rayon graphique planète
+            //   const planetRadiusPhys = data.PLANET_RADII[planetUuid] * SCALE_RADIUS;
+            //   const planetRadiusGraph = planetRadiusPhys * PLANET_RENDER_SCALE;
+
+            //   // Rayon graphique lune
+            //   const moonRadiusPhys = data.MOON_RADII[uuid] * SCALE_RADIUS;
+            //   const moonRadiusGraph = moonRadiusPhys * MOON_RENDER_SCALE;
+            //   // Espace supplémentaire (ajuste la valeur selon ton rendu souhaité)
+            //   // const space = moonRadiusGraph * 2; // ou une valeur personnalisée
+            //   const space = moonRadiusGraph * 1.2 + planetRadiusGraph * 0.1;
+
+            //   // Décalage total
+            //   const offset = planetRadiusGraph + space;
+            //   const correctedPos = planetPos
+            //     .clone()
+            //     .add(direction.multiplyScalar(offset));
+            //   obj.mesh.position.set(
+            //     correctedPos.x,
+            //     correctedPos.y,
+            //     correctedPos.z,
+            //   );
+            // } else {
+            //   obj.mesh.position.set(position.x, position.y, position.z);
+            // }
+            if (planetObj && planetObj.mesh) {
+              const planetPos = planetObj.mesh.position; // GLOBAL
+              const moonLocal = new THREE.Vector3(
+                position.x,
+                position.y,
+                position.z,
+              ); // RELATIF À PLANÈTE
+              const direction = moonLocal.clone().normalize();
+              // Rayon graphique planète/lune
+              const planetRadiusPhys =
+                data.PLANET_RADII[planetUuid] * SCALE_RADIUS;
+              const planetRadiusGraph = planetRadiusPhys * PLANET_RENDER_SCALE;
+              const moonRadiusPhys = data.MOON_RADII[uuid] * SCALE_RADIUS;
+              const moonRadiusGraph = moonRadiusPhys * MOON_RENDER_SCALE;
+              const space = moonRadiusGraph * 1.2 + planetRadiusGraph * 0.1;
+              const offset = planetRadiusGraph + space;
+              // Correction
+              const correctedPos = planetPos
+                .clone()
+                .add(direction.multiplyScalar(offset));
+              obj.mesh.position.set(
+                correctedPos.x,
+                correctedPos.y,
+                correctedPos.z,
+              );
+            } else {
+              obj.mesh.position.set(position.x, position.y, position.z);
+            }
+          } else {
+            obj.mesh.position.set(position.x, position.y, position.z);
+          }
+          // ----------------------------------------
+
+          obj.mesh.quaternion.set(
+            rotation.x,
+            rotation.y,
+            rotation.z,
+            rotation.w,
+          );
+
+          // obj.mesh.rotation.set(rotation.x, rotation.y, rotation.z, "XYZ");
+
+          if (showTrails) updateTrail(obj);
+
+          if (obj.label) {
+            // up de la scène = Y positif
+            const upScene = new THREE.Vector3(0, 1, 0);
+            const sphereRadius = obj.mesh.geometry.parameters.radius;
+            const offsetDistance = sphereRadius + sphereRadius * 0.6;
+
+            // Position monde du mesh
+            const meshWorldPos = new THREE.Vector3();
+            obj.mesh.getWorldPosition(meshWorldPos);
+
+            // Position du label “au-dessus selon scène”
+            obj.label.position.copy(
+              meshWorldPos.clone().add(upScene.multiplyScalar(offsetDistance)),
+            );
+
+            obj.label.visible = showLabels;
+          }
+
+          obj.currentIndex += animationSpeed;
+        });
+
+        // Stats
+        const firstUuid = Array.from(orbitalObjects.keys())[0];
+        if (firstUuid) {
+          const obj = orbitalObjects.get(firstUuid);
+          if (obj && obj.transforms.length > 0) {
+            const idx = Math.floor(obj.currentIndex);
+            if (idx < obj.transforms.length) {
+              const transform = obj.transforms[idx];
+              const position = transform.position;
+              const distance = Math.sqrt(
+                position.x ** 2 + position.y ** 2 + position.z ** 2,
+              );
+              const distanceAU = distance / 10;
+
+              // console.log(pos);
+
+              document.getElementById("stats").innerHTML = `
+                          <strong>Time:</strong> ${(transform.time / 86400).toFixed(2)} days<br>
+                          <strong>Buffer:</strong> ${obj.transforms.length} positions<br>
+                          <strong>Index:</strong> ${idx}/${obj.transforms.length}<br>
+                          <strong>Position (EXACT):</strong><br>
+                          X: ${position.x.toFixed(2)}<br>
+                          Y: ${position.y.toFixed(2)}<br>
+                          Z: ${position.z.toFixed(2)}<br>
+                          <strong>Distance:</strong> ${distanceAU.toFixed(3)} AU<br>
+                          <strong>Speed:</strong> ${animationSpeed}x<br>
+                          <strong>Objects:</strong> ${orbitalObjects.size}
+                        `;
+            }
+          }
+        }
+      }
+
+      let cameraMoveTarget = null; // { pos: Vector3, target: Vector3 }
+      let cameraMoveProgress = 0;
+      let cameraMoveDuration = 30; // frames (~0.5s)
+      let followUuid = null; // Uuid de l'objet à suivre
+
+      function centerCameraOnObject(uuid) {
+        followUuid = uuid; // Active le suivi
+        const obj = orbitalObjects.get(uuid);
+        if (!obj || !obj.mesh) return;
+
+        // Calcule la position monde du mesh
+        const pos = new THREE.Vector3();
+        obj.mesh.getWorldPosition(pos);
+
+        controls.target.copy(pos); // Centre le contrôle sur l’astre
+
+        // --- Zoom automatique : calcule position caméra ---
+        // Direction actuelle du regard
+        const camDir = camera.position.clone().sub(pos).normalize();
+        // Rayon graphique (adapte le facteur selon ce que tu veux)
+        const radius = obj.mesh.geometry.parameters?.radius || 1;
+        // Nouvelle position caméra : "devant" l’astre, sur l’axe radial
+        const newPos = pos.clone().add(camDir.multiplyScalar(radius * 10));
+
+        // Déplacement immédiat
+        camera.position.copy(newPos);
+        controls.update();
+      }
+
+      function animate() {
+        if (cameraMoveTarget && cameraMoveProgress < cameraMoveDuration) {
+          cameraMoveProgress++;
+          // Fraction d'avancement (0 → 1)
+          const t = cameraMoveProgress / cameraMoveDuration;
+          // Interpolation (ease-in/ease-out possible, ici simple linear)
+          camera.position.lerpVectors(
+            cameraMoveTarget.fromPos,
+            cameraMoveTarget.toPos,
+            t,
+          );
+          controls.target.lerpVectors(
+            cameraMoveTarget.fromTarget,
+            cameraMoveTarget.toTarget,
+            t,
+          );
+          // Dès que fini, arrête l'animation
+          if (cameraMoveProgress >= cameraMoveDuration) {
+            cameraMoveTarget = null;
+          }
+        }
+
+        if (followUuid !== null) {
+          const obj = orbitalObjects.get(followUuid);
+          if (obj && obj.mesh) {
+            const pos = new THREE.Vector3();
+            obj.mesh.getWorldPosition(pos);
+
+            controls.target.copy(pos); // centre la vue sur l'astre SUIVI
+            // caméra libre ensuite !
+          }
+        }
+
+        requestAnimationFrame(animate);
+        updatePlanets();
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      // ===== CONTRÔLES =====
+      window.toggleAnimation = function () {
+        isPlaying = !isPlaying;
+        console.log(isPlaying ? "▶️ Playing" : "⏸️ Paused");
+      };
+
+      window.resetView = function () {
+        camera.position.set(-20, 20, 30);
+        controls.target.set(0, 0, 0);
+        orbitalObjects.forEach((obj) => {
+          obj.currentIndex = 0;
+        });
+        console.log("🔄 Reset");
+      };
+
+      window.speedUp = function () {
+        animationSpeed = Math.min(animationSpeed * 2, 64);
+        console.log(`⏩ Speed: ${animationSpeed}x`);
+      };
+
+      window.slowDown = function () {
+        animationSpeed = Math.max(animationSpeed / 2, 0.125);
+        console.log(`⏪ Speed: ${animationSpeed}x`);
+      };
+
+      window.toggleTrails = function () {
+        showTrails = !showTrails;
+        orbitalObjects.forEach((obj) => {
+          obj.trail.visible = showTrails;
+        });
+        console.log(`✨ Trails: ${showTrails ? "ON" : "OFF"}`);
+      };
+
+      window.toggleLabels = function toggleLabels() {
+        showLabels = !showLabels;
+        for (const planet of orbitalObjects.values()) {
+          if (planet.label) {
+            planet.label.visible = showLabels;
+          }
+        }
+      };
+
+      window.toggleAxes = function () {
+        showAxes = !showAxes;
+        orbitalObjects.forEach((obj) => {
+          if (obj.axesHelper) {
+            obj.axesHelper.visible = !obj.axesHelper.visible;
+          }
+        });
+        console.log(`🧭 Axes: ${showAxes ? "ON" : "OFF"}`);
+      };
+
+      window.stopFollowing = function () {
+        followUuid = null;
+      };
+
+      window.clearScene = function () {
+        orbitalObjects.forEach((obj) => {
+          scene.remove(obj.mesh);
+          scene.remove(obj.trail);
+          obj.mesh.geometry.dispose();
+          obj.mesh.material.dispose();
+          obj.trail.geometry.dispose();
+          obj.trail.material.dispose();
+        });
+        orbitalObjects.clear();
+        allPlanetUuids = [];
+        updateObjectsList();
+        console.log("🗑️ Cleared");
+      };
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      animate();
+      console.log("✅ Orbit visualizer ready!");
+    </script>
+  </body>
+</html>

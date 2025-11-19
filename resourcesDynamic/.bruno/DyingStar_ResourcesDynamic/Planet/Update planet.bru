@@ -1,0 +1,35 @@
+meta {
+  name: Update planet
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/planets/3ed66943-71e6-4a17-9631-884eaaba8852
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+      "name": "Sandbox",
+      "internalName": "Tarsis 4"
+  //     "massKg": 0.0712940836580695,
+  //     "periapsisAu": 0.142718318697037,
+  //     "apoapsisAu": 0.15461151192179,
+  //     "incDeg": 0.140645831363347,
+  //     "nodeDeg": 130.393581342233,
+  //     "argPeriDeg": 189.489978492792,
+  //     "meanAnomalyDeg": 282.9,
+  //     "radiusKm":  3123,
+  //     "radiusGravityInfluenceKm": 1234,
+  //     "id": 12,
+  //     "uuid": "f6a0fb19-bc4e-45d8-9750-63c8ec58fe22",
+  //     "systemId": 1
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

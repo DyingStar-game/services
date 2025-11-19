@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "DyingStar_ResourcesDynamic",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}
