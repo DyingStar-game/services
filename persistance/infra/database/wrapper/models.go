@@ -1,7 +1,9 @@
 package wrapper
 
 func init() {
-	RegisterWrapperType("Player", NewPlayerWrapper)
-	RegisterWrapperType("Planet", NewPlanetWrapper)
-	RegisterWrapperType("System", NewSystemWrapper)
+	registerWrapperType("Player", newPlayerWrapper)
+	registerWrapperType("Planet", newPlanetWrapper)
+	registerWrapperType("System", newSystemWrapper)
+	registerWrapperType("Box", newBoxWrapper)
+	registerWrapperType("MiningRock", newMiningRockWrapper)
 }

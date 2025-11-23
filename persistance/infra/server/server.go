@@ -4,6 +4,8 @@ import (
 	"context"
 	br "dyingstar/services/common/go/lib/horizonBridge"
 	"dyingstar/services/persistance/app/config"
+	"dyingstar/services/persistance/app/endpoint/eventRouter"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -46,12 +48,6 @@ func Start() {
 	bridge.SetEventHandler(&br.EventHandler{
 		OnConnect: func() {
 			fmt.Printf("🔗 Client connected! Total: %d\n", bridge.GetConnectedClients())
-
-			// Envoie un message de bienvenue
-			bridge.SendEventToNamespace("welcome", "notifications", map[string]interface{}{
-				"message": "Bienvenue! Vous êtes connecté au server Go!",
-				"time":    time.Now().Format("15:04:05"),
-			})
 		},
 
 		OnDisconnect: func() {
@@ -59,8 +55,18 @@ func Start() {
 		},
 
 		OnHorizonEvent: func(category, eventType string, data map[string]interface{}) {
-			fmt.Printf("🎯 Event reçu: %s/%s\n", category, eventType)
+			//fmt.Printf("🎯 Event reçu: %s/%s\n", category, eventType)
+			println(data["object_uuid"])
+			jsonData, err := json.MarshalIndent(data["object_data"], "", "  ")
+			if err != nil {
+				fmt.Println("Erreur lors de la conversion en JSON :", err)
+				return
+			}
 
+			// Afficher le JSON
+			fmt.Println(string(jsonData))
+
+			eventRouter.EventRouting(category, eventType, data)
 			// Exemple: répondre aux messages de chat
 			if category == "client" && eventType == "message_sent" {
 				if message, ok := data["message"].(string); ok {

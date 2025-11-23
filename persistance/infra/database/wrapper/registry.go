@@ -4,7 +4,7 @@ type WrapperFactory func() IWrapper
 
 var wrapperFactoryRegistry = make(map[string]WrapperFactory)
 
-func RegisterWrapperType(typeName string, factory WrapperFactory) {
+func registerWrapperType(typeName string, factory WrapperFactory) {
 	wrapperFactoryRegistry[typeName] = factory
 }
 

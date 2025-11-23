@@ -14,7 +14,8 @@ func (p System) TypeName() string { return "System" }
 
 type Planet struct {
 	Entity
-	Name string `json:"name"`
+	System System `json:"system,omitempty"`
+	Name   string `json:"name"`
 }
 
 func (p Planet) TypeName() string { return "Planet" }
@@ -37,8 +38,29 @@ func NewPlanet(system *System, uuid string, name string, position Position) Plan
 			Uuid:     uuid,
 			Parent:   system,
 		},
-		Name: name,
+		Name:   name,
+		System: *system,
 	}
 	system.AddPlanets(planet)
 	return planet
 }
+
+type Moon struct {
+	Entity
+	Planet Planet `json:"planet,omitempty"`
+	Name   string `json:"name"`
+}
+
+func NewMoon(planet *Planet, uuid string, name string, position Position) Moon {
+	moon := Moon{
+		Entity: Entity{
+			Position: position,
+			Uuid:     uuid,
+			Parent:   planet,
+		},
+		Name: name,
+	}
+	return moon
+}
+
+func (p Moon) TypeName() string { return "Moon" }

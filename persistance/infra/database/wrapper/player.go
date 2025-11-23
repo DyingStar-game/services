@@ -31,6 +31,6 @@ func (pw *PlayerWraper) UnWrap() IDgraph {
 	return player
 }
 
-func NewPlayerWrapper() IWrapper {
+func newPlayerWrapper() IWrapper {
 	return &PlayerWraper{}
 }

@@ -47,7 +47,7 @@ func (pw *PlanetWraper) UnWrap() IDgraph {
 	return planet
 }
 
-func NewPlanetWrapper() IWrapper {
+func newPlanetWrapper() IWrapper {
 	return &PlanetWraper{}
 }
 
@@ -78,6 +78,6 @@ func (pw *SystemWraper) UnWrap() IDgraph {
 	return system
 }
 
-func NewSystemWrapper() IWrapper {
+func newSystemWrapper() IWrapper {
 	return &SystemWraper{}
 }

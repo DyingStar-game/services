@@ -1,12 +1,13 @@
 # ==== Champs communs ====
 uuid: string @index(hash) .    # Identifiant unique
+type_obj: string .
+type_go: string .  
+parent: uid @reverse . # Relation hiérarchique enfant -> parent
+#=== Champs Domain ====
 name: string @index(exact, term) .      # Nom de l'entité
 username: string @index(exact, term) .
-parent: uid @reverse .                  # Relation hiérarchique enfant -> parent
 system: uid @reverse .
-position: uid .                         # Lien vers un nœud Position
-type_obj: string .
-type_go: string .
+planet: uid @reverse .
 # ==== Champs Position ====
 x: float .                               
 y: float .                                
@@ -38,9 +39,19 @@ type System {
 type Planet {
   name
   system
+  <~planet> 
+  <~parent>                           
+}
+
+type Moon {
+  name
+  planet
   <~parent>                           
 }
 
 type Player {
   username
 }
+
+type Box {}
+type MiningRock {}

@@ -42,8 +42,6 @@ func (r Repository[T]) Save(obj T) {
 			log.Fatal(err)
 		}
 		dstruct.SetUid(resp.GetUids()["temp0"])
-		res, _ := json.MarshalIndent(dstruct, "", "  ")
-		fmt.Println(string(res))
 	} else {
 		r.bashSave(obj)
 	}
