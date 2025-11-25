@@ -111,7 +111,7 @@ const handleInit = async (ws: WebSocket, msg: RequestInitWsType) => {
           name: object.target.name,
           scenename:
             object.objectType !== "system"
-              ? `scenes/${object.objectType}/${object.target.internalName}.tscn`
+              ? `scenes/systems/${msg.data.system_internal_name.toLowerCase()}/${object.target.internalName}.tscn`
               : "",
           ...(object.soi && { soi: object.soi }),
           ...(object.transforms && {

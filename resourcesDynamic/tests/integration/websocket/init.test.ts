@@ -50,7 +50,7 @@ describe("WebSocket Init", () => {
         duration_s: 3,
         frequency: 60,
         from_timestamp: 0,
-        system_internal_name: mockSystem.name,
+        system_internal_name: mockSystem.internalName,
       },
     };
 
@@ -98,7 +98,7 @@ describe("WebSocket Init", () => {
       expect(star.object_uuid).toBe(mockStar.uuid);
       expect(star.object_data.name).toBe(mockStar.name);
       expect(star.object_data.scenename).toBe(
-        `scenes/star/${mockStar.internalName}.tscn`,
+        `scenes/systems/${mockSystem.internalName}/${mockStar.internalName}.tscn`,
       );
       expect(star.object_data.from_timestamp).toBe(0);
       expect(star.object_data.parent_id).toBe(mockSystem.uuid);
@@ -113,7 +113,7 @@ describe("WebSocket Init", () => {
       expect(planet.object_uuid).toBe(mockPlanet.uuid);
       expect(planet.object_data.name).toBe(mockPlanet.name);
       expect(planet.object_data.scenename).toBe(
-        `scenes/planet/${mockPlanet.internalName}.tscn`,
+        `scenes/systems/${mockSystem.internalName}/${mockPlanet.internalName}.tscn`,
       );
       expect(planet.object_data.from_timestamp).toBe(0);
       expect(planet.object_data.soi).toBe(mockPlanet.radiusGravityInfluenceM);
@@ -129,7 +129,7 @@ describe("WebSocket Init", () => {
       expect(moon.object_uuid).toBe(mockMoon.uuid);
       expect(moon.object_data.name).toBe(mockMoon.name);
       expect(moon.object_data.scenename).toBe(
-        `scenes/moon/${mockMoon.internalName}.tscn`,
+        `scenes/systems/${mockSystem.internalName}/${mockMoon.internalName}.tscn`,
       );
       expect(moon.object_data.from_timestamp).toBe(0);
       expect(moon.object_data.soi).toBe(mockMoon.radiusGravityInfluenceM);
