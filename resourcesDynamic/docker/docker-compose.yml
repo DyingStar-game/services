@@ -1,0 +1,94 @@
+# Node.js version (should match .nvmrc)
+x-node-image: &node-image "node:22.20.0"
+
+services:
+  # App service for production/testing (CP/PO/Others profile)
+  app:
+    image: *node-image
+    command: >
+      sh -c "
+        corepack enable &&
+        corepack install &&
+        pnpm install &&
+        pnpm db:migrate &&
+        pnpm dev
+      "
+    ports:
+      - "${WS_PORT:-9200}:9200"
+      - "${API_PORT:-3001}:3001"
+    volumes:
+      - ..:/app
+      - app_cache:/app/.cache
+    working_dir: /app
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - NODE_ENV=${NODE_ENV:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # Dev service for development work (lighter, no app by default)
+  dev:
+    image: *node-image
+    command: tail -f /dev/null # Keep container running for exec commands
+    ports:
+      - "${WS_PORT:-9200}:9200"
+      - "${API_PORT:-3001}:3001"
+    volumes:
+      - ..:/app
+      - app_cache:/app/.cache
+    working_dir: /app
+    tty: true
+    stdin_open: true
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - NODE_ENV=${NODE_ENV:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+
+  postgres:
+    image: postgres:17
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-resources_dynamic}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro # Optionnel
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-resources_dynamic}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  app_cache:
+    driver: local
+
+networks:
+  backend:
+    driver: bridge

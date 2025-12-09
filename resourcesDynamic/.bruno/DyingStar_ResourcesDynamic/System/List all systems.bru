@@ -1,0 +1,15 @@
+meta {
+  name: List all systems
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/systems
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

@@ -1,0 +1,22 @@
+meta {
+  name: Update system
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/systems/1
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+      "name": "Tarsis"
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

@@ -1,0 +1,16 @@
+meta {
+  name: List all planets
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/planets
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
