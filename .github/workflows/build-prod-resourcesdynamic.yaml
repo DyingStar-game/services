@@ -1,0 +1,37 @@
+name: "Build Production Image: resourcesDynamic"
+
+on:
+  push:
+    tags:
+      - "resourcesdynamic-v*"
+
+jobs:
+  extract-version:
+    name: Extract version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Extract version
+        id: tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#resourcesdynamic-}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build resourcesDynamic (prod)
+    needs: extract-version
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: resourcesdynamic
+      context_path: resourcesDynamic
+      dockerfile_path: resourcesDynamic/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/resourcesdynamic
+      image_tag: ${{ needs.extract-version.outputs.version }}
+      additional_tags: latest
+      chart_name: service-resourcesdynamic
+      trigger_preprod_deploy: false
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}

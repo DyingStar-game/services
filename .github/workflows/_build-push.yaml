@@ -1,0 +1,99 @@
+name: Build & Push Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Short service name (e.g. resourcesdynamic)"
+        required: true
+        type: string
+      context_path:
+        description: "Docker build context relative to repo root (e.g. resourcesDynamic)"
+        required: true
+        type: string
+      dockerfile_path:
+        description: "Dockerfile path relative to repo root (e.g. resourcesDynamic/docker/Dockerfile)"
+        required: true
+        type: string
+      image_name:
+        description: "Full Harbor image name (e.g. harbor.dyingstar-game.space/dyingstar/resourcesdynamic)"
+        required: true
+        type: string
+      image_tag:
+        description: "Primary image tag (e.g. develop, v1.0.0)"
+        required: true
+        type: string
+      additional_tags:
+        description: "Extra tags to apply, comma-separated (e.g. latest)"
+        required: false
+        type: string
+        default: ""
+      chart_name:
+        description: "Helm chart name in kubernetes repo (e.g. service-resourcesdynamic)"
+        required: true
+        type: string
+      trigger_preprod_deploy:
+        description: "Whether to trigger preprod deployment via repository_dispatch"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      HARBOR_USERNAME:
+        required: true
+      HARBOR_PASSWORD:
+        required: true
+      KUBERNETES_REPO_TOKEN:
+        required: false
+
+env:
+  HARBOR_REGISTRY: harbor.dyingstar-game.space
+
+jobs:
+  build-and-push:
+    name: Build & Push ${{ inputs.service_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image tags list
+        id: tags
+        run: |
+          TAGS="${{ inputs.image_name }}:${{ inputs.image_tag }}"
+          IFS=',' read -ra EXTRA <<< "${{ inputs.additional_tags }}"
+          for tag in "${EXTRA[@]}"; do
+            tag="$(echo "$tag" | xargs)"
+            if [ -n "$tag" ]; then
+              TAGS="${TAGS},${{ inputs.image_name }}:${tag}"
+            fi
+          done
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context_path }}
+          file: ${{ inputs.dockerfile_path }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=registry,ref=${{ inputs.image_name }}:buildcache-${{ inputs.image_tag }}
+          cache-to: type=registry,ref=${{ inputs.image_name }}:buildcache-${{ inputs.image_tag }},mode=max
+
+      - name: Trigger preprod deployment
+        if: inputs.trigger_preprod_deploy
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.KUBERNETES_REPO_TOKEN }}
+          repository: ${{ github.repository_owner }}/kubernetes
+          event-type: deploy-preprod
+          client-payload: '{"chart": "${{ inputs.chart_name }}"}'

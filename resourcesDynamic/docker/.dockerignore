@@ -1,0 +1,47 @@
+# Dependencies
+
+node_modules
+.pnpm-store
+
+# Build output (we rebuild in Docker)
+
+dist
+
+# Development files
+
+.git
+.gitignore
+.env
+.env.\*
+!.env.example
+
+# IDE
+
+.vscode
+.idea
+_.swp
+_.swo
+
+# Test files
+
+tests
+coverage
+_.test.ts
+_.spec.ts
+vitest.config.ts
+
+# Documentation
+
+documentation
+\*.md
+!README.md
+
+# Docker files (avoid recursive copy)
+
+docker/docker-compose.yml
+
+# Misc
+
+.DS_Store
+\*.log
+.cache
