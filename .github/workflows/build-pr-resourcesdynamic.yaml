@@ -1,0 +1,18 @@
+name: "PR Build Check: resourcesDynamic"
+
+on:
+  pull_request:
+    paths:
+      - "resourcesDynamic/**"
+
+jobs:
+  build:
+    name: Build resourcesDynamic (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: resourcesdynamic
+      context_path: resourcesDynamic
+      dockerfile_path: resourcesDynamic/docker/Dockerfile
+      image_name: local/resourcesdynamic
+      image_tag: pr-check
+      push: false
