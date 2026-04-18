@@ -52,8 +52,7 @@ IDP_PAYLOAD=$(cat <<EOF
     "clientAuthMethod": "client_secret_post",
     "authorizationUrl": "https://discord.com/api/oauth2/authorize",
     "tokenUrl": "https://discord.com/api/oauth2/token",
-    "userInfoUrl": "https://discord.com/api/users/@me",
-    "defaultScope": "identify email",
+    "defaultScope": "identify email openid",
     "syncMode": "IMPORT",
     "useJwksUrl": "false",
     "validateSignature": "false",
@@ -71,6 +70,28 @@ if "${KCADM}" get "identity-provider/instances/${IDP_ALIAS}" -r "${KC_REALM}" >/
 else
   echo "Creating Discord IdP on realm ${KC_REALM}..."
   echo "${IDP_PAYLOAD}" | "${KCADM}" create "identity-provider/instances" -r "${KC_REALM}" -f -
+fi
+
+# ── Disable "Review Profile" in the first broker login flow ──────────────────
+# This prevents the "Update Account Information" popup — username and email
+# are imported automatically from Discord via the mappers below.
+echo "Disabling Review Profile in 'first broker login' flow..."
+REVIEW_EXEC_ID=""
+while IFS=',' read -r eid edisplay eprovider; do
+  if [[ "${eprovider}" == "idp-review-profile" ]]; then
+    REVIEW_EXEC_ID="${eid}"
+    break
+  fi
+done < <("${KCADM}" get "authentication/flows/first%20broker%20login/executions" \
+            -r "${KC_REALM}" --fields id,displayName,providerId --format csv --noquotes 2>/dev/null || true)
+
+if [[ -n "${REVIEW_EXEC_ID}" ]]; then
+  "${KCADM}" update "authentication/flows/first%20broker%20login/executions" \
+    -r "${KC_REALM}" \
+    -b "{\"id\": \"${REVIEW_EXEC_ID}\", \"requirement\": \"DISABLED\"}"
+  echo "Review Profile execution disabled."
+else
+  echo "WARNING: Could not find Review Profile execution in 'first broker login' flow."
 fi
 
 # ── Mappers (username, email, avatar) ────────────────────────────────────────
