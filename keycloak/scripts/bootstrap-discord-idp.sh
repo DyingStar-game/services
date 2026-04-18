@@ -35,11 +35,14 @@ echo "Logging in to ${KC_SERVER_URL} as ${KEYCLOAK_ADMIN}..."
   --password "${KEYCLOAK_ADMIN_PASSWORD}"
 
 # ── Identity provider ────────────────────────────────────────────────────────
+# Discord does not implement OIDC (no id_token, no /.well-known endpoint), so
+# we register it as a generic OAuth 2.0 provider (providerId: "oauth2") and
+# point userInfoUrl at https://discord.com/api/users/@me.
 IDP_PAYLOAD=$(cat <<EOF
 {
   "alias": "${IDP_ALIAS}",
   "displayName": "Discord",
-  "providerId": "oidc",
+  "providerId": "oauth2",
   "enabled": true,
   "trustEmail": true,
   "storeToken": false,
@@ -50,19 +53,20 @@ IDP_PAYLOAD=$(cat <<EOF
     "clientId": "${DISCORD_CLIENT_ID}",
     "clientSecret": "${DISCORD_CLIENT_SECRET}",
     "clientAuthMethod": "client_secret_post",
-    "authorizationUrl": "https://discord.com/api/oauth2/authorize",
+    "authorizationUrl": "https://discord.com/oauth2/authorize",
     "tokenUrl": "https://discord.com/api/oauth2/token",
-    "defaultScope": "identify email openid",
+    "userInfoUrl": "https://discord.com/api/users/@me",
+    "defaultScope": "identify email",
+    "userIdAttribute": "id",
+    "userNameAttribute": "username",
+    "pkceEnabled": "false",
     "syncMode": "IMPORT",
-    "useJwksUrl": "false",
-    "validateSignature": "false",
-    "backchannelSupported": "false",
-    "loginHint": "false",
     "guiOrder": "1"
   }
 }
 EOF
 )
+
 
 if "${KCADM}" get "identity-provider/instances/${IDP_ALIAS}" -r "${KC_REALM}" >/dev/null 2>&1; then
   echo "Updating Discord IdP on realm ${KC_REALM}..."
@@ -184,10 +188,11 @@ upsert_mapper "discord-username" "$(cat <<EOF
 {
   "name": "discord-username",
   "identityProviderAlias": "${IDP_ALIAS}",
-  "identityProviderMapper": "oidc-username-idp-mapper",
+  "identityProviderMapper": "oauth2-user-attribute-idp-mapper",
   "config": {
     "syncMode": "INHERIT",
-    "template": "\${CLAIM.username}"
+    "jsonField": "username",
+    "userAttribute": "username"
   }
 }
 EOF
@@ -197,11 +202,11 @@ upsert_mapper "discord-email" "$(cat <<EOF
 {
   "name": "discord-email",
   "identityProviderAlias": "${IDP_ALIAS}",
-  "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+  "identityProviderMapper": "oauth2-user-attribute-idp-mapper",
   "config": {
     "syncMode": "INHERIT",
-    "claim": "email",
-    "user.attribute": "email"
+    "jsonField": "email",
+    "userAttribute": "email"
   }
 }
 EOF
@@ -211,11 +216,11 @@ upsert_mapper "discord-avatar" "$(cat <<EOF
 {
   "name": "discord-avatar",
   "identityProviderAlias": "${IDP_ALIAS}",
-  "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+  "identityProviderMapper": "oauth2-user-attribute-idp-mapper",
   "config": {
     "syncMode": "INHERIT",
-    "claim": "avatar",
-    "user.attribute": "discord_avatar"
+    "jsonField": "avatar",
+    "userAttribute": "discord_avatar"
   }
 }
 EOF
