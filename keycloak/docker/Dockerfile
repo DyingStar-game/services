@@ -9,12 +9,21 @@
 
 ARG KEYCLOAK_VERSION=26.6
 
+# ── Download the Discord identity provider SPI ───────────────────────────────
+FROM curlimages/curl:8.11.1 AS download
+RUN mkdir -p ~/download && \
+    curl -L -o ~/download/keycloak-discord-1.3.1.jar \
+    https://github.com/iForged/keycloak-discord/releases/download/v1.3.1/keycloak-discord-1.3.1.jar
+
 FROM quay.io/keycloak/keycloak:${KEYCLOAK_VERSION} AS builder
 
 ENV KC_DB=postgres \
     KC_HEALTH_ENABLED=true \
     KC_METRICS_ENABLED=true \
     KC_HTTP_RELATIVE_PATH=/
+
+# Install Discord identity provider SPI before building the optimized distribution.
+COPY --from=download /home/curl_user/download/keycloak-discord-1.3.1.jar /opt/keycloak/providers/keycloak-discord-1.3.1.jar
 
 # Pre-build the optimized server distribution.
 RUN /opt/keycloak/bin/kc.sh build

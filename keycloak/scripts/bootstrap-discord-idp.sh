@@ -12,8 +12,9 @@
 #   DISCORD_CLIENT_ID          Discord OAuth2 client id
 #   DISCORD_CLIENT_SECRET      Discord OAuth2 client secret
 #
-# The script is idempotent: it creates the IdP and mappers on first run and
-# updates them on subsequent runs.
+# The script is idempotent: it creates the IdP on first run and updates it on
+# subsequent runs. Username, email and avatar are mapped automatically by the
+# iForged/keycloak-discord SPI — no manual mappers needed.
 
 set -euo pipefail
 
@@ -35,14 +36,14 @@ echo "Logging in to ${KC_SERVER_URL} as ${KEYCLOAK_ADMIN}..."
   --password "${KEYCLOAK_ADMIN_PASSWORD}"
 
 # ── Identity provider ────────────────────────────────────────────────────────
-# Discord does not implement OIDC (no id_token, no /.well-known endpoint), so
-# we register it as a generic OAuth 2.0 provider (providerId: "oauth2") and
-# point userInfoUrl at https://discord.com/api/users/@me.
+# Uses the iForged/keycloak-discord SPI which registers providerId "discord".
+# The SPI hardcodes authorization/token/profile URLs and maps username, email
+# and avatar automatically — we only supply client credentials and preferences.
 IDP_PAYLOAD=$(cat <<EOF
 {
   "alias": "${IDP_ALIAS}",
   "displayName": "Discord",
-  "providerId": "oauth2",
+  "providerId": "discord",
   "enabled": true,
   "trustEmail": true,
   "storeToken": false,
@@ -53,13 +54,7 @@ IDP_PAYLOAD=$(cat <<EOF
     "clientId": "${DISCORD_CLIENT_ID}",
     "clientSecret": "${DISCORD_CLIENT_SECRET}",
     "clientAuthMethod": "client_secret_post",
-    "authorizationUrl": "https://discord.com/oauth2/authorize",
-    "tokenUrl": "https://discord.com/api/oauth2/token",
-    "userInfoUrl": "https://discord.com/api/users/@me",
     "defaultScope": "identify email",
-    "userIdAttribute": "id",
-    "userNameAttribute": "username",
-    "pkceEnabled": "false",
     "syncMode": "IMPORT",
     "guiOrder": "1"
   }
@@ -67,6 +62,17 @@ IDP_PAYLOAD=$(cat <<EOF
 EOF
 )
 
+# If the existing instance uses a different providerId (e.g. "oidc" or
+# "oauth2"), delete it first — Keycloak does not allow changing providerId
+# on an existing identity provider via update.
+if "${KCADM}" get "identity-provider/instances/${IDP_ALIAS}" -r "${KC_REALM}" >/dev/null 2>&1; then
+  CURRENT_PROVIDER_ID=$("${KCADM}" get "identity-provider/instances/${IDP_ALIAS}" \
+    -r "${KC_REALM}" --fields providerId --format csv --noquotes 2>/dev/null | tail -n1 | tr -d '\r\n')
+  if [[ "${CURRENT_PROVIDER_ID}" != "discord" ]]; then
+    echo "Existing Discord IdP uses providerId='${CURRENT_PROVIDER_ID}', deleting before recreating as 'discord'..."
+    "${KCADM}" delete "identity-provider/instances/${IDP_ALIAS}" -r "${KC_REALM}"
+  fi
+fi
 
 if "${KCADM}" get "identity-provider/instances/${IDP_ALIAS}" -r "${KC_REALM}" >/dev/null 2>&1; then
   echo "Updating Discord IdP on realm ${KC_REALM}..."
@@ -161,69 +167,7 @@ EOF
 echo "${USER_PROFILE_PAYLOAD}" | "${KCADM}" update "users/profile" -r "${KC_REALM}" -f -
 echo "Realm user profile updated."
 
-# ── Mappers (username, email, avatar) ────────────────────────────────────────
-upsert_mapper() {
-  local name="$1"
-  local payload="$2"
-  local existing_id=""
-  # List existing mappers and find the one matching $name.
-  # UBI-micro has no awk/grep — use pure bash string matching.
-  while IFS=',' read -r mid mname; do
-    if [[ "${mname}" == "${name}" ]]; then
-      existing_id="${mid}"
-      break
-    fi
-  done < <("${KCADM}" get "identity-provider/instances/${IDP_ALIAS}/mappers" \
-              -r "${KC_REALM}" --fields id,name --format csv --noquotes 2>/dev/null || true)
-  if [[ -n "${existing_id}" ]]; then
-    echo "Updating mapper '${name}' (${existing_id})..."
-    echo "${payload}" | "${KCADM}" update "identity-provider/instances/${IDP_ALIAS}/mappers/${existing_id}" -r "${KC_REALM}" -f -
-  else
-    echo "Creating mapper '${name}'..."
-    echo "${payload}" | "${KCADM}" create "identity-provider/instances/${IDP_ALIAS}/mappers" -r "${KC_REALM}" -f -
-  fi
-}
+# No manual mappers needed — the iForged/keycloak-discord SPI maps username,
+# email and avatar automatically via extractIdentityFromProfile().
 
-upsert_mapper "discord-username" "$(cat <<EOF
-{
-  "name": "discord-username",
-  "identityProviderAlias": "${IDP_ALIAS}",
-  "identityProviderMapper": "oauth2-user-attribute-idp-mapper",
-  "config": {
-    "syncMode": "INHERIT",
-    "jsonField": "username",
-    "userAttribute": "username"
-  }
-}
-EOF
-)"
-
-upsert_mapper "discord-email" "$(cat <<EOF
-{
-  "name": "discord-email",
-  "identityProviderAlias": "${IDP_ALIAS}",
-  "identityProviderMapper": "oauth2-user-attribute-idp-mapper",
-  "config": {
-    "syncMode": "INHERIT",
-    "jsonField": "email",
-    "userAttribute": "email"
-  }
-}
-EOF
-)"
-
-upsert_mapper "discord-avatar" "$(cat <<EOF
-{
-  "name": "discord-avatar",
-  "identityProviderAlias": "${IDP_ALIAS}",
-  "identityProviderMapper": "oauth2-user-attribute-idp-mapper",
-  "config": {
-    "syncMode": "INHERIT",
-    "jsonField": "avatar",
-    "userAttribute": "discord_avatar"
-  }
-}
-EOF
-)"
-
-echo "discord IdP created/updated on realm ${KC_REALM}"
+echo "Discord IdP created/updated on realm ${KC_REALM}"
