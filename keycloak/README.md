@@ -1,6 +1,6 @@
-# StarDeception Keycloak
+# DyingStar Keycloak
 
-Custom Keycloak distribution for the StarDeception platform.
+Custom Keycloak distribution for the DyingSTar game.
 
 This repository owns:
 - the **Docker image** published to `harbor.dyingstar-game.space/dyingstar/keycloak`,
