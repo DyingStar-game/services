@@ -94,6 +94,69 @@ else
   echo "WARNING: Could not find Review Profile execution in 'first broker login' flow."
 fi
 
+# ── Relax the realm user profile ─────────────────────────────────────────────
+# Discord doesn't provide firstName / lastName, so we drop them from the
+# required attributes. Only username and email remain mandatory.
+echo "Updating realm user profile (making firstName/lastName optional)..."
+USER_PROFILE_PAYLOAD=$(cat <<'EOF'
+{
+  "attributes": [
+    {
+      "name": "username",
+      "displayName": "${username}",
+      "validations": {
+        "length": { "min": 3, "max": 255 },
+        "username-prohibited-characters": {},
+        "up-username-not-idn-homograph": {}
+      },
+      "permissions": { "view": ["admin", "user"], "edit": ["admin", "user"] },
+      "multivalued": false
+    },
+    {
+      "name": "email",
+      "displayName": "${email}",
+      "validations": {
+        "email": {},
+        "length": { "max": 255 }
+      },
+      "required": { "roles": ["user"] },
+      "permissions": { "view": ["admin", "user"], "edit": ["admin", "user"] },
+      "multivalued": false
+    },
+    {
+      "name": "firstName",
+      "displayName": "${firstName}",
+      "validations": {
+        "length": { "max": 255 },
+        "person-name-prohibited-characters": {}
+      },
+      "permissions": { "view": ["admin", "user"], "edit": ["admin", "user"] },
+      "multivalued": false
+    },
+    {
+      "name": "lastName",
+      "displayName": "${lastName}",
+      "validations": {
+        "length": { "max": 255 },
+        "person-name-prohibited-characters": {}
+      },
+      "permissions": { "view": ["admin", "user"], "edit": ["admin", "user"] },
+      "multivalued": false
+    }
+  ],
+  "groups": [
+    {
+      "name": "user-metadata",
+      "displayHeader": "User metadata",
+      "displayDescription": "Attributes, which refer to user metadata"
+    }
+  ]
+}
+EOF
+)
+echo "${USER_PROFILE_PAYLOAD}" | "${KCADM}" update "users/profile" -r "${KC_REALM}" -f -
+echo "Realm user profile updated."
+
 # ── Mappers (username, email, avatar) ────────────────────────────────────────
 upsert_mapper() {
   local name="$1"
