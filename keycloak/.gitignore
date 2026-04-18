@@ -1,0 +1,7 @@
+# Local artefacts
+.DS_Store
+*.log
+node_modules/
+
+# Realm exports created locally during dev
+realm/exports/
