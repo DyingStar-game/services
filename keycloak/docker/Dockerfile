@@ -7,7 +7,7 @@
 # Pinned to a specific upstream release; bump together with the chart's
 # appVersion in ../../kubernetes/keycloak/Chart.yaml.
 
-ARG KEYCLOAK_VERSION=26.0.5
+ARG KEYCLOAK_VERSION=26.6
 
 FROM quay.io/keycloak/keycloak:${KEYCLOAK_VERSION} AS builder
 
