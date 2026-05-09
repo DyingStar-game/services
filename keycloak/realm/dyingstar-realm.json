@@ -31,7 +31,23 @@
   "defaultLocale": "en",
   "identityProviders": [],
   "identityProviderMappers": [],
-  "clientScopes": [],
+  "clientScopes": [
+    {
+      "name": "openid",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "profile",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "true" }
+    },
+    {
+      "name": "email",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "true" }
+    }
+  ],
   "clients": [
     {
       "clientId": "dyingstar-launcher",
@@ -46,7 +62,9 @@
       "webOrigins": [],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": []
     }
   ],
   "smtpServer": {},
