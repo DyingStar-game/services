@@ -1,0 +1,9 @@
+/.vs
+/.vscode
+
+# will have compiled files and executables
+persistence/debug/
+persistence/target/
+
+persistence/.cargo
+persistence/Cargo.lock
