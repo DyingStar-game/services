@@ -1,0 +1,322 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Persistence REST API
+  version: 1.0.0
+  description: >
+    REST API for managing generic-props items stored in the DyingStar
+    persistence service. A second server runs on port 3001 alongside the
+    WebSocket server (port 9100).
+
+servers:
+  - url: http://localhost:3001
+    description: Local development
+
+tags:
+  - name: items
+    description: Generic-props item management
+
+paths:
+  /items:
+    get:
+      tags: [items]
+      operationId: getItems
+      summary: Search items
+      description: >
+        Return a paginated, optionally filtered list of all items.
+        Filtering is performed in-process after a full table scan.
+      parameters:
+        - $ref: '#/components/parameters/objectTypeFilter'
+        - $ref: '#/components/parameters/parentIdFilter'
+        - $ref: '#/components/parameters/scenenameFilter'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/pageSize'
+      responses:
+        '200':
+          description: Paginated list of items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedItems'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      tags: [items]
+      operationId: createItem
+      summary: Create an item
+      description: >
+        Create a new item. The `object_uuid` in the request body is used as the
+        item's primary key. Writing through to ScyllaDB and the in-memory cache.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateItemRequest'
+      responses:
+        '201':
+          description: Item created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /items/{uuid}:
+    parameters:
+      - $ref: '#/components/parameters/uuid'
+
+    get:
+      tags: [items]
+      operationId: getItem
+      summary: Get an item
+      description: Return a single item by its UUID.
+      responses:
+        '200':
+          description: The requested item
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    put:
+      tags: [items]
+      operationId: putItem
+      summary: Replace item data
+      description: >
+        Fully replace an item's data. The uuid is taken from the URL path.
+        The response returns the stored item in canonical form.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutItemRequest'
+      responses:
+        '200':
+          description: The updated item
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags: [items]
+      operationId: deleteItem
+      summary: Delete an item
+      description: >
+        Remove an item from the database and the in-memory cache.
+        Always returns 204 — the operation is idempotent.
+      responses:
+        '204':
+          description: Item deleted (or did not exist)
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    uuid:
+      name: uuid
+      in: path
+      required: true
+      description: Item UUID
+      schema:
+        type: string
+        format: uuid
+        example: 550e8400-e29b-41d4-a716-446655440000
+
+    objectTypeFilter:
+      name: object_type
+      in: query
+      required: false
+      description: Filter by object type (exact match)
+      schema:
+        type: string
+        example: box
+
+    parentIdFilter:
+      name: parent_id
+      in: query
+      required: false
+      description: Filter by parent UUID (exact match)
+      schema:
+        type: string
+        format: uuid
+
+    scenenameFilter:
+      name: scenename
+      in: query
+      required: false
+      description: Filter by scene name (exact match)
+      schema:
+        type: string
+        example: scenes/props/testbox/box_50cm.tscn
+
+    page:
+      name: page
+      in: query
+      required: false
+      description: 1-based page number
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    pageSize:
+      name: page_size
+      in: query
+      required: false
+      description: Number of items per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 10000
+        default: 100
+
+  schemas:
+    Vec3:
+      type: object
+      required: [x, y, z]
+      properties:
+        x:
+          type: number
+          format: double
+          example: 10500.0
+        y:
+          type: number
+          format: double
+          example: 0.0
+        z:
+          type: number
+          format: double
+          example: 10510.0
+
+    ObjectData:
+      type: object
+      description: >
+        Arbitrary extra data for the object. The well-known keys
+        (parent_id, scenename, position, rotation) are merged in at
+        the top level of this object when present.
+      properties:
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: UUID of the parent object
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        scenename:
+          type: string
+          nullable: true
+          description: Godot scene path for the object
+          example: scenes/props/testbox/box_50cm.tscn
+        position:
+          $ref: '#/components/schemas/Vec3'
+        rotation:
+          $ref: '#/components/schemas/Vec3'
+      additionalProperties: true
+
+    ItemResponse:
+      type: object
+      required: [object_type, object_uuid, object_data]
+      properties:
+        object_type:
+          type: string
+          description: Object type identifier
+          example: box
+        object_uuid:
+          type: string
+          format: uuid
+          description: Unique identifier for this item
+          example: 550e8400-e29b-41d4-a716-446655440000
+        object_data:
+          $ref: '#/components/schemas/ObjectData'
+
+    PutItemRequest:
+      type: object
+      required: [object_type, object_data]
+      properties:
+        object_type:
+          type: string
+          description: Object type identifier
+          example: box
+        object_data:
+          $ref: '#/components/schemas/ObjectData'
+
+    CreateItemRequest:
+      type: object
+      required: [object_type, object_uuid, object_data]
+      properties:
+        object_type:
+          type: string
+          description: Object type identifier
+          example: box
+        object_uuid:
+          type: string
+          format: uuid
+          description: UUID for the new item (client-assigned)
+          example: 550e8400-e29b-41d4-a716-446655440000
+        object_data:
+          $ref: '#/components/schemas/ObjectData'
+
+    PaginatedItems:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemResponse'
+        total:
+          type: integer
+          description: Total number of items matching the filters (before pagination)
+          example: 42
+        page:
+          type: integer
+          description: Current page number (1-based)
+          example: 1
+        page_size:
+          type: integer
+          description: Number of items per page
+          example: 100
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: "item '550e8400-e29b-41d4-a716-446655440000' not found"
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    BadRequest:
+      description: Invalid request body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

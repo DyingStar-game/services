@@ -1,0 +1,18 @@
+name: "PR Build Check: persistence"
+
+on:
+  pull_request:
+    paths:
+      - "persistence/**"
+
+jobs:
+  build:
+    name: Build persistence (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: persistence
+      context_path: persistence
+      dockerfile_path: persistence/docker/Dockerfile
+      image_name: local/persistence
+      image_tag: pr-check
+      push: false

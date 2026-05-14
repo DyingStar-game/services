@@ -1,0 +1,39 @@
+services:
+  # ─── Persistence service ───────────────────────────────────────────────────
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file: ../.env
+    ports:
+      - "${WS_PORT:-9100}:9100"
+    depends_on:
+      scylladb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ─── ScyllaDB ─────────────────────────────────────────────────────────────
+  scylladb:
+    image: scylladb/scylla:6.2
+    command: --smp 1 --memory 512M --developer-mode 1
+    ports:
+      - "9042:9042"
+    volumes:
+      - scylla_data:/var/lib/scylla
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    networks:
+      - backend
+
+volumes:
+  scylla_data:
+
+networks:
+  backend:
+    driver: bridge
