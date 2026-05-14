@@ -15,6 +15,10 @@ pub struct Config {
     pub cache_flush_interval_secs: u64,
     /// Number of items per WebSocket chunk message.
     pub chunk_size: usize,
+    /// ScyllaDB username (optional, for PasswordAuthenticator).
+    pub scylla_username: Option<String>,
+    /// ScyllaDB password (optional, for PasswordAuthenticator).
+    pub scylla_password: Option<String>,
 }
 
 impl Config {
@@ -50,6 +54,9 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1000);
 
+        let scylla_username = env::var("SCYLLA_USERNAME").ok();
+        let scylla_password = env::var("SCYLLA_PASSWORD").ok();
+
         Self {
             ws_port,
             rest_port,
@@ -57,6 +64,8 @@ impl Config {
             scylla_keyspace,
             cache_flush_interval_secs,
             chunk_size,
+            scylla_username,
+            scylla_password,
         }
     }
 }

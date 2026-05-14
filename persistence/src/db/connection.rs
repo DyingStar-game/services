@@ -4,11 +4,19 @@ use scylla::client::session_builder::SessionBuilder;
 use tracing::info;
 
 /// Build a ScyllaDB session and ensure the keyspace + table exist.
-pub async fn connect(nodes: &[String], keyspace: &str) -> anyhow::Result<Session> {
+pub async fn connect(
+    nodes: &[String],
+    keyspace: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> anyhow::Result<Session> {
     info!("Connecting to ScyllaDB nodes: {:?}", nodes);
 
-    let session = SessionBuilder::new()
-        .known_nodes(nodes)
+    let mut builder = SessionBuilder::new().known_nodes(nodes);
+    if let (Some(user), Some(pass)) = (username, password) {
+        builder = builder.user(user, pass);
+    }
+    let session = builder
         .build()
         .await
         .context("Failed to build ScyllaDB session")?;

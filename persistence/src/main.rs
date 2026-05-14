@@ -38,7 +38,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect to ScyllaDB and prepare statements.
     let session = Arc::new(
-        connect(&config.scylla_nodes, &config.scylla_keyspace).await?,
+        connect(
+            &config.scylla_nodes,
+            &config.scylla_keyspace,
+            config.scylla_username.as_deref(),
+            config.scylla_password.as_deref(),
+        )
+        .await?,
     );
     let queries = Arc::new(Queries::prepare(&session, &config.scylla_keyspace).await?);
 
