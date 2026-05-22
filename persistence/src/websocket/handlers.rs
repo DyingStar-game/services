@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::{
     cache::DualCache,
     config::Config,
-    db::queries::{get_all_items, Queries},
+    db::queries::{get_all_items, get_item_by_uuid, Queries},
     websocket::messages::{BridgeEventEnvelope, GenericPropsRequest, Item},
 };
 
@@ -19,7 +19,7 @@ use crate::{
 pub async fn handle_socket(
     socket: WebSocket,
     session: Arc<Session>,
-    _queries: Arc<Queries>,
+    queries: Arc<Queries>,
     cache: DualCache,
     config: Arc<Config>,
     broadcaster: broadcast::Sender<String>,
@@ -135,6 +135,86 @@ pub async fn handle_socket(
                                     namespace: None,
                                     name: "error".to_string(),
                                     payload: serde_json::json!({ "message": format!("Invalid {} payload: {e}", envelope.name) }),
+                                };
+                                let _ = send_json(&mut sender, &resp).await;
+                            }
+                        }
+                    }
+                    "player_spawn" => {
+                        debug!("Player spawn event received");
+                        match serde_json::from_value::<GenericPropsRequest>(envelope.payload) {
+                            Ok(req) if req.object_type == "player" => {
+                                match get_item_by_uuid(&session, &queries, &req.object_uuid).await {
+                                    Ok(Some(item)) => {
+                                        info!("Player found in DB: uuid={} type={}", item.uuid, item.object_type);
+                                        let mut data_map = item
+                                            .object_data
+                                            .first()
+                                            .and_then(|v| v.as_object())
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        if let Some(ref v) = item.parent_id {
+                                            data_map.insert("parent_id".to_string(), serde_json::json!(v));
+                                        }
+                                        if let Some(ref v) = item.scenename {
+                                            data_map.insert("scenename".to_string(), serde_json::json!(v));
+                                        }
+                                        if let Some(ref v) = item.position {
+                                            data_map.insert("position".to_string(), serde_json::json!(v));
+                                        }
+                                        if let Some(ref v) = item.rotation {
+                                            data_map.insert("rotation".to_string(), serde_json::json!(v));
+                                        }
+                                        let resp = BridgeEventEnvelope {
+                                            event_type: "plugin".to_string(),
+                                            namespace: Some("genericprops".to_string()),
+                                            name: "create_object".to_string(),
+                                            payload: serde_json::json!({
+                                                "object_type": item.object_type,
+                                                "object_uuid": item.uuid,
+                                                "object_data": Value::Object(data_map),
+                                            }),
+                                        };
+                                        let _ = send_json(&mut sender, &resp).await;
+                                    }
+                                    Ok(None) => {
+                                        warn!("player_spawn: player not found in DB for uuid={}", req.object_uuid);
+                                        let resp = BridgeEventEnvelope {
+                                            event_type: "plugin".to_string(),
+                                            namespace: Some("genericprops".to_string()),
+                                            name: "new_player".to_string(),
+                                            payload: serde_json::json!({
+                                                "object_type": "player",
+                                                "object_uuid": &req.object_uuid,
+                                                "object_data": {
+                                                    "name": &req.object_data["name"],
+                                                }
+                                            }),
+                                        };
+                                        let _ = send_json(&mut sender, &resp).await;
+                                    }
+                                    Err(e) => {
+                                        warn!("player_spawn: DB query error: {e}");
+                                        let resp = BridgeEventEnvelope {
+                                            event_type: "core".to_string(),
+                                            namespace: None,
+                                            name: "error".to_string(),
+                                            payload: serde_json::json!({ "message": e.to_string() }),
+                                        };
+                                        let _ = send_json(&mut sender, &resp).await;
+                                    }
+                                }
+                            }
+                            Ok(req) => {
+                                warn!("player_spawn: unexpected object_type={}", req.object_type);
+                            }
+                            Err(e) => {
+                                warn!("player_spawn: invalid payload: {e}");
+                                let resp = BridgeEventEnvelope {
+                                    event_type: "core".to_string(),
+                                    namespace: None,
+                                    name: "error".to_string(),
+                                    payload: serde_json::json!({ "message": format!("Invalid player_spawn payload: {e}") }),
                                 };
                                 let _ = send_json(&mut sender, &resp).await;
                             }
