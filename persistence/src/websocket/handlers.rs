@@ -4,7 +4,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use scylla::client::session::Session;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, error};
 
 use serde_json::Value;
 
@@ -49,13 +49,7 @@ pub async fn handle_socket(
                 let envelope: BridgeEventEnvelope = match serde_json::from_str(&text) {
                     Ok(r) => r,
                     Err(e) => {
-                        let resp = BridgeEventEnvelope {
-                            event_type: "core".to_string(),
-                            namespace: None,
-                            name: "error".to_string(),
-                            payload: serde_json::json!({ "message": format!("Invalid message: {e}") }),
-                        };
-                        let _ = send_json(&mut sender, &resp).await;
+                        error!("Failed to parse message as BridgeEventEnvelope: {e}");
                         continue;
                     }
                 };
@@ -69,14 +63,7 @@ pub async fn handle_socket(
                         )
                         .await
                         {
-                            warn!("get_all_items error: {e}");
-                            let resp = BridgeEventEnvelope {
-                                event_type: "core".to_string(),
-                                namespace: None,
-                                name: "error".to_string(),
-                                payload: serde_json::json!({ "message": e.to_string() }),
-                            };
-                            let _ = send_json(&mut sender, &resp).await;
+                            error!("get_all_items error: {e}");
                         }
                     }
                     "update_item" => {
@@ -86,14 +73,7 @@ pub async fn handle_socket(
                                 cache.insert(item);
                             }
                             Err(e) => {
-                                warn!("update_item: invalid payload: {e}");
-                                let resp = BridgeEventEnvelope {
-                                    event_type: "core".to_string(),
-                                    namespace: None,
-                                    name: "error".to_string(),
-                                    payload: serde_json::json!({ "message": format!("Invalid update_item payload: {e}") }),
-                                };
-                                let _ = send_json(&mut sender, &resp).await;
+                                error!("update_item: invalid payload: {e}");
                             }
                         }
                     }
@@ -129,14 +109,7 @@ pub async fn handle_socket(
                                 cache.insert(item);
                             }
                             Err(e) => {
-                                warn!("{}: invalid payload: {e}", envelope.name);
-                                let resp = BridgeEventEnvelope {
-                                    event_type: "core".to_string(),
-                                    namespace: None,
-                                    name: "error".to_string(),
-                                    payload: serde_json::json!({ "message": format!("Invalid {} payload: {e}", envelope.name) }),
-                                };
-                                let _ = send_json(&mut sender, &resp).await;
+                                error!("{}: invalid payload on create_object*: {e}", envelope.name);
                             }
                         }
                     }
@@ -194,14 +167,7 @@ pub async fn handle_socket(
                                         let _ = send_json(&mut sender, &resp).await;
                                     }
                                     Err(e) => {
-                                        warn!("player_spawn: DB query error: {e}");
-                                        let resp = BridgeEventEnvelope {
-                                            event_type: "core".to_string(),
-                                            namespace: None,
-                                            name: "error".to_string(),
-                                            payload: serde_json::json!({ "message": e.to_string() }),
-                                        };
-                                        let _ = send_json(&mut sender, &resp).await;
+                                        error!("player_spawn: DB query error: {e}");
                                     }
                                 }
                             }
@@ -209,14 +175,7 @@ pub async fn handle_socket(
                                 warn!("player_spawn: unexpected object_type={}", req.object_type);
                             }
                             Err(e) => {
-                                warn!("player_spawn: invalid payload: {e}");
-                                let resp = BridgeEventEnvelope {
-                                    event_type: "core".to_string(),
-                                    namespace: None,
-                                    name: "error".to_string(),
-                                    payload: serde_json::json!({ "message": format!("Invalid player_spawn payload: {e}") }),
-                                };
-                                let _ = send_json(&mut sender, &resp).await;
+                                error!("player_spawn: invalid payload: {e}");
                             }
                         }
                     }
