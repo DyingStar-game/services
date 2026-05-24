@@ -1,0 +1,18 @@
+name: "PR Build Check: monitoring"
+
+on:
+  pull_request:
+    paths:
+      - "monitoring/**"
+
+jobs:
+  build:
+    name: Build monitoring (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: monitoring
+      context_path: monitoring
+      dockerfile_path: monitoring/docker/Dockerfile
+      image_name: local/monitoring
+      image_tag: pr-check
+      push: false

@@ -1,0 +1,37 @@
+name: "Build Production Image: monitoring"
+
+on:
+  push:
+    tags:
+      - "monitoring-v*"
+
+jobs:
+  extract-version:
+    name: Extract version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Extract version
+        id: tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#monitoring-}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build monitoring (prod)
+    needs: extract-version
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: monitoring
+      context_path: monitoring
+      dockerfile_path: monitoring/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/monitoring
+      image_tag: ${{ needs.extract-version.outputs.version }}
+      additional_tags: latest
+      chart_name: service-monitoring
+      trigger_preprod_deploy: false
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}

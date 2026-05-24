@@ -1,0 +1,25 @@
+name: "Build & Deploy to Preprod: monitoring"
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "monitoring/**"
+
+jobs:
+  build:
+    name: Build monitoring (preprod)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: monitoring
+      context_path: monitoring
+      dockerfile_path: monitoring/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/monitoring
+      image_tag: develop
+      chart_name: service-monitoring
+      trigger_preprod_deploy: true
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      KUBERNETES_REPO_TOKEN: ${{ secrets.KUBERNETES_REPO_TOKEN }}
