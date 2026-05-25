@@ -33,6 +33,16 @@ pub struct GenericPropsRequest {
     pub object_data: serde_json::Value,
 }
 
+/// Incoming request payload for update_object / update_object_from_external events.
+/// `object_data` is **partial** — only the fields that changed are present.
+/// `object_uuid` and `object_type` are always present at the same level.
+#[derive(Debug, Deserialize)]
+pub struct UpdateObjectRequest {
+    pub object_type: String,
+    pub object_uuid: String,
+    pub object_data: serde_json::Value,
+}
+
 // ─── REST request messages ─────────────────────────────────────────────────
 
 /// Request body for PUT /items/{uuid}.
