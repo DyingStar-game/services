@@ -76,6 +76,24 @@ impl DualCache {
         }
     }
 
+    /// Look up an item by uuid. Checks the active map first, then the idle map.
+    ///
+    /// Checking the idle map covers the window between a `swap_and_drain` flip
+    /// and the subsequent `idle.clear()`, where an item may not yet be in the
+    /// new active map.
+    pub fn get(&self, uuid: &str) -> Option<Item> {
+        if let Some(item) = self.active_map().get(uuid) {
+            return Some(item.clone());
+        }
+        // Idle map is whichever map is NOT currently active.
+        let idle = if self.active.load(Ordering::Acquire) {
+            &self.map_a
+        } else {
+            &self.map_b
+        };
+        idle.get(uuid).map(|r| r.value().clone())
+    }
+
     /// Number of items currently waiting in the active map.
     pub fn pending_count(&self) -> usize {
         self.active_map().len()

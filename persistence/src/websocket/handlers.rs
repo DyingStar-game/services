@@ -12,7 +12,7 @@ use crate::{
     cache::DualCache,
     config::Config,
     db::queries::{get_all_items, get_item_by_uuid, Queries},
-    websocket::messages::{BridgeEventEnvelope, GenericPropsRequest, Item},
+    websocket::messages::{BridgeEventEnvelope, GenericPropsRequest, Item, UpdateObjectRequest},
 };
 
 /// Handle a single WebSocket connection for its entire lifetime.
@@ -74,6 +74,72 @@ pub async fn handle_socket(
                             }
                             Err(e) => {
                                 error!("update_item: invalid payload: {e}");
+                            }
+                        }
+                    }
+                    "update_object" | "update_object_from_external" => {
+                        match serde_json::from_value::<UpdateObjectRequest>(envelope.payload) {
+                            Ok(req) => {
+                                let mut incoming_map = req.object_data
+                                    .as_object()
+                                    .cloned()
+                                    .unwrap_or_default();
+                                // Extract special fields from the incoming partial data.
+                                let new_parent_id = incoming_map
+                                    .remove("parent_id")
+                                    .and_then(|v| v.as_str().map(str::to_owned));
+                                let new_scenename = incoming_map
+                                    .remove("scenename")
+                                    .and_then(|v| v.as_str().map(str::to_owned));
+                                let new_position = incoming_map
+                                    .remove("position")
+                                    .and_then(|v| serde_json::from_value(v).ok());
+                                let new_rotation = incoming_map
+                                    .remove("rotation")
+                                    .and_then(|v| serde_json::from_value(v).ok());
+
+                                // Fetch current state: cache first (covers items not yet flushed
+                                // to DB), then DB (covers items not in cache).
+                                let existing = match cache.get(&req.object_uuid) {
+                                    Some(item) => Some(item),
+                                    None => match get_item_by_uuid(&session, &queries, &req.object_uuid).await {
+                                        Ok(opt) => opt,
+                                        Err(e) => {
+                                            error!("{}: DB lookup error for uuid={}: {e}", envelope.name, req.object_uuid);
+                                            continue;
+                                        }
+                                    },
+                                };
+
+                                let Some(base) = existing else {
+                                    warn!("{}: uuid={} not found in cache or DB, skipping", envelope.name, req.object_uuid);
+                                    continue;
+                                };
+
+                                // Merge: start from existing object_data, then overwrite with
+                                // incoming fields so that untouched fields are preserved.
+                                let mut merged_data = base
+                                    .object_data
+                                    .first()
+                                    .and_then(|v| v.as_object())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                merged_data.extend(incoming_map);
+
+                                let merged = Item {
+                                    uuid: base.uuid,
+                                    object_type: req.object_type,
+                                    parent_id: new_parent_id.or(base.parent_id),
+                                    scenename: new_scenename.or(base.scenename),
+                                    position: new_position.or(base.position),
+                                    rotation: new_rotation.or(base.rotation),
+                                    object_data: vec![Value::Object(merged_data)],
+                                };
+                                debug!("{}: merged update for uuid={} type={}", envelope.name, merged.uuid, merged.object_type);
+                                cache.insert(merged);
+                            }
+                            Err(e) => {
+                                error!("{}: invalid payload: {e}", envelope.name);
                             }
                         }
                     }
