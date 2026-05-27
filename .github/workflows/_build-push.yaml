@@ -43,6 +43,11 @@ on:
         required: false
         type: boolean
         default: false
+      no_cache:
+        description: "Disable Docker build cache (force full rebuild from source)"
+        required: false
+        type: boolean
+        default: false
     secrets:
       HARBOR_USERNAME:
         required: false
@@ -93,8 +98,9 @@ jobs:
           file: ${{ inputs.dockerfile_path }}
           push: ${{ inputs.push }}
           tags: ${{ steps.tags.outputs.tags }}
-          cache-from: ${{ inputs.push && format('type=registry,ref={0}:buildcache-{1}', inputs.image_name, inputs.image_tag) || '' }}
-          cache-to: ${{ inputs.push && format('type=registry,ref={0}:buildcache-{1},mode=max', inputs.image_name, inputs.image_tag) || '' }}
+          no-cache: ${{ inputs.no_cache }}
+          cache-from: ${{ !inputs.no_cache && inputs.push && format('type=registry,ref={0}:buildcache-{1}', inputs.image_name, inputs.image_tag) || '' }}
+          cache-to: ${{ !inputs.no_cache && inputs.push && format('type=registry,ref={0}:buildcache-{1},mode=max', inputs.image_name, inputs.image_tag) || '' }}
 
       - name: Trigger preprod deployment
         if: inputs.trigger_preprod_deploy

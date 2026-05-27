@@ -6,6 +6,16 @@ on:
       - develop
     paths:
       - "persistence/**"
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Disable Docker layer cache (force full rebuild)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 jobs:
   build:
@@ -19,6 +29,7 @@ jobs:
       image_tag: develop
       chart_name: service-persistence
       trigger_preprod_deploy: true
+      no_cache: ${{ github.event_name == 'workflow_dispatch' && inputs.no_cache == 'true' }}
     secrets:
       HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
       HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
