@@ -1,0 +1,80 @@
+name: Update Changelog
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  extract:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      component: ${{ steps.parse.outputs.component }}
+      entry_en: ${{ steps.parse.outputs.entry_en }}
+      entry_fr: ${{ steps.parse.outputs.entry_fr }}
+    steps:
+      - name: Parse changelog sections and service label from PR
+        id: parse
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels) }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re, sys
+
+          body = os.environ.get('PR_BODY', '')
+          labels_raw = os.environ.get('PR_LABELS', '[]')
+
+          # Determine component from service:* label
+          service_map = {
+              'service:monitoring':       'services/monitoring',
+              'service:persistence':      'services/persistence',
+              'service:resourcesDynamic': 'services/resourcesDynamic',
+          }
+          labels = [lbl['name'] for lbl in json.loads(labels_raw)]
+          component = ''
+          for lbl in labels:
+              if lbl in service_map:
+                  component = service_map[lbl]
+                  break
+
+          if not component:
+              print('No service:* label found — skipping changelog update.', file=sys.stderr)
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+                  fh.write('component=\nentry_en=\nentry_fr=\n')
+              sys.exit(0)
+
+          def extract(tag, text):
+              m = re.search(
+                  rf'<!--\s*{tag}\s*-->(.*?)<!--\s*/{tag}\s*-->',
+                  text,
+                  re.DOTALL | re.IGNORECASE,
+              )
+              return m.group(1).strip() if m else ''
+
+          entry_en = extract('CHANGELOG_EN', body)
+          entry_fr = extract('CHANGELOG_FR', body)
+
+          delimiter = 'GHADELIMITER'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f'component={component}\n')
+              fh.write(f'entry_en<<{delimiter}\n{entry_en}\n{delimiter}\n')
+              fh.write(f'entry_fr<<{delimiter}\n{entry_fr}\n{delimiter}\n')
+          PYEOF
+
+  changelog:
+    needs: [extract]
+    if: |
+      needs.extract.result == 'success' &&
+      needs.extract.outputs.component != '' &&
+      needs.extract.outputs.entry_en != ''
+    uses: DyingStar-game/.github/.github/workflows/update-changelog.yml@main
+    with:
+      component: ${{ needs.extract.outputs.component }}
+      entry_en: ${{ needs.extract.outputs.entry_en }}
+      entry_fr: ${{ needs.extract.outputs.entry_fr }}
+      pr_number: ${{ github.event.pull_request.number }}
+      repo: ${{ github.repository }}
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

@@ -1,0 +1,47 @@
+name: Dispatch Release to Changelog
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# This workflow dispatches a release event for ALL tracked services at once.
+# Only use a tag in this repo when releasing all services together.
+# For per-service releases, trigger this workflow manually with a 'component' input,
+# or extend it to detect which service the tag belongs to (e.g. v-monitoring-1.2.3).
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component:
+          - services/monitoring
+          - services/persistence
+          - services/resourcesDynamic
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: DyingStar-game
+          repositories: changelog
+
+      - name: Send release dispatch to changelog repo
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ github.ref_name }}
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          VERSION="${TAG#v}"
+          DATE=$(date -u +%Y-%m-%d)
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/DyingStar-game/changelog/dispatches \
+            --field event_type=release \
+            --field "client_payload[component]=$COMPONENT" \
+            --field "client_payload[version]=$VERSION" \
+            --field "client_payload[date]=$DATE"
