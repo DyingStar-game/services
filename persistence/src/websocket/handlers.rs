@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::{
     cache::DualCache,
     config::Config,
-    db::queries::{get_all_items, get_item_by_uuid, Queries},
+    db::queries::{delete_item_by_uuid, get_all_items, get_item_by_uuid, Queries},
     websocket::messages::{BridgeEventEnvelope, GenericPropsRequest, Item, UpdateObjectRequest},
 };
 
@@ -176,6 +176,22 @@ pub async fn handle_socket(
                             }
                             Err(e) => {
                                 error!("{}: invalid payload on create_object*: {e}", envelope.name);
+                            }
+                        }
+                    }
+                    "delete_object" => {
+                        match serde_json::from_value::<GenericPropsRequest>(envelope.payload) {
+                            Ok(req) => {
+                                info!("Deleting object uuid={} type={}", req.object_uuid, req.object_type);
+                                // Drop it from the write-back cache first so a pending flush
+                                // cannot resurrect it, then remove it from ScyllaDB.
+                                cache.remove(&req.object_uuid);
+                                if let Err(e) = delete_item_by_uuid(&session, &queries, &req.object_uuid).await {
+                                    error!("delete_object: failed to delete uuid={}: {e}", req.object_uuid);
+                                }
+                            }
+                            Err(e) => {
+                                error!("delete_object: invalid payload: {e}");
                             }
                         }
                     }
