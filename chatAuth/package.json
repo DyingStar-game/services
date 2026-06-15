@@ -1,0 +1,15 @@
+{
+  "name": "chat-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Auth adapter for the text-chat MQTT broker: validates Keycloak JWTs (JWKS) and answers go-auth user/acl checks.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "jose": "^5.9.6"
+  }
+}
