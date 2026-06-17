@@ -1,0 +1,18 @@
+name: "PR Build Check: chatauth"
+
+on:
+  pull_request:
+    paths:
+      - "chatauth/**"
+
+jobs:
+  build:
+    name: Build chatauth (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: chatauth
+      context_path: chatauth
+      dockerfile_path: chatauth/docker/Dockerfile
+      image_name: local/chatauth
+      image_tag: pr-check
+      push: false
