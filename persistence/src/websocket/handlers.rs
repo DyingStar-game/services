@@ -266,7 +266,7 @@ pub async fn handle_socket(
                                                     // object_data by hand silently dropped it, so every
                                                     // NPC arrived as an ordinary player and none of the
                                                     // NPC handling ever ran for it.
-                                                    "is_npc": &req.object_data["is_npc"],
+                                                    "is_npc": req.object_data["is_npc"].as_bool().unwrap_or(false),
                                                 }
                                             }),
                                         };
