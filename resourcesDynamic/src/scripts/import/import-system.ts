@@ -31,7 +31,12 @@ const jsonFiles = files.filter((file) => file.endsWith(".json"));
 const MASS_SUN = 1.989e30;
 const MASS_EARTH = 5.972e24;
 const AU = 1.496e11;
-const DISTANCE_FACTOR = 3;
+// System scale. 1 = true 1:1 — real distances AND real radii. It used to be 3, shrinking the whole
+// system (orbital distances + body radii below), masses kept real, so orbits ran faster and bodies were
+// smaller. But the terrain is authored at the real radius, so at 3 the ephemeris (radii, moon distances)
+// disagreed with the ground you walk on — moons ended up far too close to full-size planets. 1:1 makes
+// the served ephemeris match the terrain. Trade-off: orbits now run at their real (imperceptible) period.
+const DISTANCE_FACTOR = 1;
 
 let flatInfo: FlatType;
 
