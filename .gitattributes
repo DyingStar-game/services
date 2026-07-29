@@ -1,0 +1,5 @@
+# Shell scripts MUST use LF line endings. A CRLF shebang (`#!/bin/sh\r`) makes the
+# kernel look for `/bin/sh\r`, so the container fails to start with
+# `exec ./entrypoint.sh: no such file or directory` — which bites Windows
+# contributors building the images locally (Git checks out CRLF by default).
+*.sh text eol=lf
