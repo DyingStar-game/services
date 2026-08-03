@@ -1,0 +1,23 @@
+# NPC display-name pool. One name per line. Lines starting with `#` are ignored.
+# Names are taken on spawn and released on despawn.
+Alice
+Bob
+Carol
+Dave
+Eve
+Frank
+Grace
+Heidi
+Ivan
+Judy
+Mallory
+Niaj
+Olivia
+Peggy
+Rupert
+Sybil
+Trent
+Victor
+Walter
+Yves
+Zara

@@ -1,0 +1,545 @@
+# NPC roster loaded at service startup.
+# Each entry spawns one NPC connected to Horizon.
+# Fields:
+#   name             (optional) display name; if omitted, drawn from names.txt
+#   uuid             (required) stable UUID used as JWT `sub` and player identity
+#   action_profile   (optional) list of Action::name() values this NPC may run
+#   place_where_work (optional) {uuid, planet, position: {x, y, z}} — NPCs spawn
+#                    in their habitation and are sent here once connected
+#
+# The service signs a HS256 JWT {"sub": uuid, "preferred_username": name}
+# using the JWT_SECRET env var before each connection.
+#
+# Example (commented out; fill in real UUIDs to enable):
+#
+# npcs:
+#   - name: Alice
+#     uuid: "00000000-0000-0000-0000-000000000001"
+#     action_profile:
+#       - detect_player_and_greet
+#   - uuid: "00000000-0000-0000-0000-000000000002"  # name auto-generated
+#     action_profile:
+#       - detect_player_and_greet
+#       - go_to_point
+
+npcs: 
+  - name: Ygind Tars
+    uuid: "b4a36a46-4424-4f66-bd14-caaf8be287cb"
+    action_profile:
+      - detect_player_and_greet
+      - reception_players
+      - going_to_work
+      - depot_store_reception_to_temp_area
+    place_where_work: {
+      uuid: "a9340169-767c-4b02-a2f3-67f2786375b3",
+      planet: null,
+      position: {x: 1.85, y: 0.479, z: 5.913}
+    }
+    depot_store_reception_to_temp_area: {
+      boxes_type_allowed: ["hauling_box.tscn"]
+    }
+  # - name: Bob
+  #   uuid: "c495bbbe-becb-4989-9143-605036730a5e"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Carol
+  #   uuid: "b9a64a0c-c1c1-455d-9c29-87ddb4bb2aac"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Eve
+  #   uuid: "26fc82e7-0be2-450c-9270-377fe56241a0"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Dave
+  #   uuid: "f10d7ae6-dd1e-49a1-a6d2-cf70fab4c9e8"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Frank
+  #   uuid: "a3cca17b-b613-41fc-bac6-722219c82cd8"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Grace
+  #   uuid: "e12800a0-1852-44aa-b6fe-4e72b0cec7ec"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Heidi
+  #   uuid: "b1fa05af-4572-497b-b6fa-a273ac2098c7"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Ivan
+  #   uuid: "bea1c77a-ede5-487f-ab51-0bac17f2d271"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Judy
+  #   uuid: "fd13b060-36f8-441c-b42f-84fdf4059696"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Mallory
+  #   uuid: "c862139e-4ad6-41b3-a81b-b8d868854bba"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Niaj
+  #   uuid: "e5ffe0b2-6649-4761-8667-035bb096d16b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  #     - reception_players
+  #     - going_to_work
+  #   place_where_work: {
+  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
+  #     planet: null,
+  #     position: {x: 50.858, y: 1.0, z: -37.942}
+  #   }
+  # - name: Olivia
+  #   uuid: "1d194b6d-80ea-4d8d-a786-bf0d9ad507e6"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Peggy
+  #   uuid: "f452c62a-19c4-4357-9ff0-22701e485ee0"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Rupert
+  #   uuid: "d122c684-87b5-44e7-9d29-3d5031d48f8c"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Sybil
+  #   uuid: "6edda610-3581-4c2b-9308-9d4ce8a3039c"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Trent
+  #   uuid: "79914008-590d-46f3-a774-8fb1c1904fda"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Victor
+  #   uuid: "628c3163-2bcc-4947-aa33-141d3c0d7a1e"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Walter
+  #   uuid: "04fda97f-4a52-4c58-9709-d346ddef2f8f"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Yves
+  #   uuid: "8057d84b-72cf-49f7-a3b3-b37291a47dd8"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Zach
+  #   uuid: "c10c6840-27bd-417c-979b-6991444883fb"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Aaron
+  #   uuid: "2fcb888e-4fe3-4123-be4b-37b56926665b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: Thomas
+  #   uuid: "70c5b4bd-a234-4f08-b2fa-55335098e3c2"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc025
+  #   uuid: "858b2501-9f07-4353-a08f-3cf1485c2f8b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc026
+  #   uuid: "2fb7df41-1ab6-40c6-b251-4b8472505106"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc027
+  #   uuid: "0ea35e62-17d7-49e7-8a67-938fde05c77c"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc028
+  #   uuid: "867318a7-590f-40b6-a165-5761152f711c"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc029
+  #   uuid: "1b47076d-67e7-471c-9967-7339467617e2"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc030
+  #   uuid: "8b97c71e-f427-46f4-9da9-af008778d904"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc031
+  #   uuid: "03e2656f-97d6-4734-9989-5be0f67dfa58"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc032
+  #   uuid: "d5c4d0ef-79be-493f-b3d4-c413acbdd7eb"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc033
+  #   uuid: "ec64224c-c30c-4cf7-89ea-e8bd6fe583b6"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc034
+  #   uuid: "30d0e5eb-ec8c-4bfd-8f0d-ed8baca18009"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc035
+  #   uuid: "c8f8e024-9de5-4a86-8cbd-d9c72842a713"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc036
+  #   uuid: "b317e90f-37df-465d-b1ee-991a6104d74b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc037
+  #   uuid: "f58e1ea2-ea3e-4931-beca-2427d5905104"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc038
+  #   uuid: "2ebb68a6-5e51-435c-a71a-6e23eefe6082"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc039
+  #   uuid: "9811eeaa-df9a-42a8-aff2-e3811e67e657"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc040
+  #   uuid: "920ce8a8-147f-4da5-958f-695ab9d076f0"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc041
+  #   uuid: "4c4c6d37-5f22-46a0-8657-4233dc800a42"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc042
+  #   uuid: "5d6d2150-d07f-48fc-a113-25d6664d6022"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc043
+  #   uuid: "b1787488-cd39-417b-9976-cb31825f3963"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc044
+  #   uuid: "fa49420c-f2ce-4d66-8eb6-1705b6c75601"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc045
+  #   uuid: "c108aaca-ab9e-4480-ab35-1a58da4c4bd5"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc046
+  #   uuid: "42d31830-5cde-4627-bebc-b6e108bf455e"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc047
+  #   uuid: "90b434b9-da33-4835-a289-5e69c59a40d5"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc048
+  #   uuid: "8da93819-ff46-486e-9fb3-eb7ead9ff489"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc049
+  #   uuid: "f0596e58-841b-429b-b844-72726abbce0b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc050
+  #   uuid: "99ea0946-792c-4c06-8ef4-bb6cc909bd02"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc051
+  #   uuid: "0a1a6883-3f7d-4243-b89b-becc73aa5039"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc052
+  #   uuid: "6cd845fb-3d2c-4a67-b08b-aaf74299c1b1"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc053
+  #   uuid: "e3cef96e-bccd-44ea-961e-0dbe27f84814"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc054
+  #   uuid: "2333b342-564e-46ec-8ea5-3416274ca61c"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc055
+  #   uuid: "ec2184ca-45c9-4a4b-9a35-d9286d1716bb"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc056
+  #   uuid: "c8e95961-9660-4b4c-89d4-6961097f75d8"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc057
+  #   uuid: "174a9b3a-d0f6-4475-8d3d-22eaf019c449"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc058
+  #   uuid: "52395b8f-d1be-46d5-8577-9c206d63d632"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc059
+  #   uuid: "8df9ebcd-a14f-4106-8751-ede498aa7b6f"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc060
+  #   uuid: "f2b395f1-05e2-4e1d-8e6d-12ccc911cd3b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc061
+  #   uuid: "8b8fb00c-9e31-4401-b534-d8616aaf697e"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc062
+  #   uuid: "17e58874-31ac-46c7-b637-550e9d9a4bdc"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc063
+  #   uuid: "c4b61c2e-5148-4855-945d-396744430807"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc064
+  #   uuid: "496110e0-9aba-4731-beae-f0c11938d115"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc065
+  #   uuid: "0ac9810a-79a4-4283-b279-9aa7c989d31f"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc066
+  #   uuid: "9281f620-b95f-4867-b648-1f399bebe51f"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc067
+  #   uuid: "aa447d02-0381-4fa5-b9b2-a429c5fec791"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc068
+  #   uuid: "539533a1-55f3-4c0b-8680-60165af09002"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc069
+  #   uuid: "8a14ed79-fb80-4b2e-b940-8493012eabec"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc070
+  #   uuid: "2bc03efc-c398-4525-b83b-5a6e2233cf79"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc071
+  #   uuid: "b240e0b8-b02a-4812-a042-49a679b5769b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc072
+  #   uuid: "ceacd18f-9d10-4054-93e4-425207bd6445"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc073
+  #   uuid: "1b33dc97-8191-49a6-bb45-442aa650943a"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc074
+  #   uuid: "18ce8c19-4b84-4877-b7c1-5a2dcf1f3a8e"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc075
+  #   uuid: "44101637-0fef-4812-b942-ab1463fd514b"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc076
+  #   uuid: "fb358f8d-c452-40b2-b161-a01ae6f918bd"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc077
+  #   uuid: "895c032e-3d66-4ce6-895a-354fb44ae8e1"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc078
+  #   uuid: "20927984-350a-4a71-88a1-acb0cabdbe41"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc079
+  #   uuid: "a02625e7-bb4f-4110-b131-d0d5b76b3d72"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc080
+  #   uuid: "360bcc0a-4185-435a-a100-97ca3e4992e7"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc081
+  #   uuid: "0286a2ae-a03c-4b6b-ae60-1da081c05550"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc082
+  #   uuid: "7a6f60e1-11b3-40e3-b853-9a4734c99a83"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc083
+  #   uuid: "0e0ce305-30bb-4046-91c2-cee0694c7cff"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc084
+  #   uuid: "b74946f6-0297-44d8-9e7a-5dfec1aa5a10"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc085
+  #   uuid: "b824c77b-46dd-4b8e-9694-1160920feb0e"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc086
+  #   uuid: "a4a14d6a-422d-4203-b5d6-8f9ccc73d9c5"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc087
+  #   uuid: "475d1437-9abf-41b8-928b-95a6dd029f73"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc088
+  #   uuid: "051e3871-4bf8-497c-8793-7d09afa79278"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc089
+  #   uuid: "02598a2c-a719-4942-a1ba-18600d89d6e0"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc090
+  #   uuid: "f8b89eb2-d160-486c-81ce-6aa765c15646"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc091
+  #   uuid: "13b9fdf5-7e96-46ce-85a5-7d107e50418a"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc092
+  #   uuid: "d6c469e3-6900-4931-9779-4226c6c296f6"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc093
+  #   uuid: "ad4cf27d-65bb-49ca-aa29-fb9416b1666a"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc094
+  #   uuid: "6a36d717-c797-4d92-a04b-5e285630135f"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc095
+  #   uuid: "4866f18c-2a00-4b04-97d8-67d76ff6d684"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc096
+  #   uuid: "34846103-1483-4885-b925-145fbdcdd7f4"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc097
+  #   uuid: "239ff8db-e645-4178-a9c0-c101605883a2"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc098
+  #   uuid: "63c4c106-3028-47de-b401-82c378d8f7bb"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc099
+  #   uuid: "c92b024c-dc76-477b-b6af-62fb0e5f2855"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc100
+  #   uuid: "c4d05d34-abb9-476c-afdc-d02295591c4e"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc101
+  #   uuid: "6a392437-65d0-4c3e-88bc-b78b82e1b339"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc102
+  #   uuid: "77ecadb4-5e4a-4a0b-8c29-98ef41a74d40"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc103
+  #   uuid: "c12c7eab-fef2-4602-8e3b-ec11bad9a505"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc104
+  #   uuid: "330d6d16-5213-476f-954e-8fab185fce1d"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc105
+  #   uuid: "9204e179-0b1b-441a-929c-9f0436cf6857"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc106
+  #   uuid: "63b1f467-5f49-4c16-85ec-507b167b3e45"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc107
+  #   uuid: "e3ebf7e0-e2e8-48db-a5fd-248fb3b9d6c1"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc108
+  #   uuid: "2108aa99-6f5b-442b-849d-82bd3cc44710"
+  #   action_profile:
+  #     - detect_player_and_greet
+  # - name: npc109
+  #   uuid: "22f825a5-9873-41c3-8ffd-72a2ba9fd4f6"
+  #   action_profile:
+  #     - detect_player_and_greet

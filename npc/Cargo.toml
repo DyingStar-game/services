@@ -1,0 +1,57 @@
+[package]
+name = "npc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "npc"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# WebSocket client to Horizon
+tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpki-roots"] }
+url = "2"
+
+# HTTP / admin API
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Concurrent maps for WorldView
+dashmap = "6"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Env / config
+dotenvy = "0.15"
+
+# UUID & RNG
+uuid = { version = "1", features = ["v4", "serde"] }
+rand = "0.8"
+
+# JWT generation
+jsonwebtoken = "9"
+
+# Streams / sinks
+futures-util = "0.3"
+
+# Async traits
+async-trait = "0.1"
+
+[dev-dependencies]
+# Paused virtual time in tests (#[tokio::test(start_paused = true)])
+tokio = { version = "1", features = ["full", "test-util"] }
