@@ -62,6 +62,15 @@ pub struct DepotStoreReceptionToTempAreaConfig {
     pub boxes_type_allowed: Vec<String>,
 }
 
+/// Per-NPC configuration of the `depot_store_item` action.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DepotStoreItemConfig {
+    /// Metres the NPC stands in front of the shelf face when dropping a box
+    /// into a slot. `None` = the code default (1.0 m).
+    #[serde(default)]
+    pub stand_distance_m: Option<f64>,
+}
+
 /// Description of a single NPC, supplied either by the YAML roster or by the
 /// admin REST endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +102,11 @@ pub struct NpcSpec {
     /// empty allow-list) disables it even when listed in `action_profile`.
     #[serde(default)]
     pub depot_store_reception_to_temp_area: Option<DepotStoreReceptionToTempAreaConfig>,
+
+    /// Config of the `depot_store_item` action. Optional: unlike the reception
+    /// action, everything has a sane default — only `action_profile` gates it.
+    #[serde(default)]
+    pub depot_store_item: Option<DepotStoreItemConfig>,
 }
 
 /// YAML schema for `config/npcs.yaml`.
@@ -189,6 +203,36 @@ npcs:
             .as_ref()
             .unwrap();
         assert_eq!(cfg.boxes_type_allowed, vec!["hauling_box.tscn"]);
+    }
+
+    #[test]
+    fn parses_depot_store_item_config() {
+        let roster: RosterFile = serde_yaml::from_str(
+            r#"
+npcs:
+  - uuid: "b4a36a46-4424-4f66-bd14-caaf8be287cb"
+    action_profile:
+      - depot_store_item
+    depot_store_item: {
+      stand_distance_m: 1.5
+    }
+"#,
+        )
+        .unwrap();
+        let cfg = roster.npcs[0].depot_store_item.as_ref().unwrap();
+        assert_eq!(cfg.stand_distance_m, Some(1.5));
+
+        // The config block itself is optional.
+        let roster: RosterFile = serde_yaml::from_str(
+            r#"
+npcs:
+  - uuid: "b4a36a46-4424-4f66-bd14-caaf8be287cb"
+    action_profile:
+      - depot_store_item
+"#,
+        )
+        .unwrap();
+        assert!(roster.npcs[0].depot_store_item.is_none());
     }
 
     #[test]

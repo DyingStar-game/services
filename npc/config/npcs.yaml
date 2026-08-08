@@ -38,17 +38,20 @@ npcs:
     depot_store_reception_to_temp_area: {
       boxes_type_allowed: ["hauling_box.tscn"]
     }
-  # - name: Bob
-  #   uuid: "c495bbbe-becb-4989-9143-605036730a5e"
-  #   action_profile:
-  #     - detect_player_and_greet
-  #     - reception_players
-  #     - going_to_work
-  #   place_where_work: {
-  #     uuid: "ed20bda3-f6f3-4053-b9de-968f73ebc44c",
-  #     planet: null,
-  #     position: {x: 50.858, y: 1.0, z: -37.942}
-  #   }
+    depot_store_item: {
+      stand_distance_m: 1.0
+    }
+  - name: Astreos
+    uuid: "c495bbbe-becb-4989-9143-605036730a5e"
+    action_profile:
+      - detect_player_and_greet
+      - going_to_work
+      - depot_store_item
+    place_where_work: {
+      uuid: "a9340169-767c-4b02-a2f3-67f2786375b3",
+      planet: null,
+      position: {x: 1.85, y: 0.479, z: 6.913}
+    }
   # - name: Carol
   #   uuid: "b9a64a0c-c1c1-455d-9c29-87ddb4bb2aac"
   #   action_profile:

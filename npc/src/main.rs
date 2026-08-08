@@ -5,6 +5,7 @@ pub mod error;
 pub mod horizon;
 pub mod jwt;
 pub mod npc;
+pub mod slot_layouts;
 pub mod world;
 
 use std::sync::Arc;

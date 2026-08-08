@@ -47,9 +47,14 @@ impl ActionRegistry {
             Arc::new(
                 super::depot_store_reception_to_temp_area::DepotStoreReceptionToTempArea::new(
                     spec.place_where_work.as_ref().map(|p| p.uuid.clone()),
+                    spec.place_where_work.as_ref().map(|p| p.position),
                     spec.depot_store_reception_to_temp_area.clone(),
                 ),
             ),
+            Arc::new(super::depot_store_item::DepotStoreItem::new(
+                spec.place_where_work.as_ref().map(|p| p.uuid.clone()),
+                spec.depot_store_item.clone(),
+            )),
             Arc::new(super::drive_truck::DriveTruck),
             Arc::new(super::check_vehicle_components::CheckVehicleComponents),
             Arc::new(super::go_sell_object::GoSellObject),

@@ -93,6 +93,59 @@ impl WorldView {
         self.resolve_global(local, self.my_parent().as_deref())
     }
 
+    /// This NPC's position expressed in `frame`'s coordinate system (e.g. the
+    /// depot the NPC works at, whose zone points are all depot-local).
+    ///
+    /// Prefers walking the NPC's own parent chain up to `frame`, which stays
+    /// exact even when `frame`'s ancestors (its planet, …) never replicated
+    /// into view — the situation that makes [`my_global_position`] fail. Only
+    /// when `frame` is not an ancestor does it fall back to the difference of
+    /// root-frame positions. Translation-only, like [`resolve_global`].
+    ///
+    /// [`my_global_position`]: Self::my_global_position
+    pub fn my_position_in(&self, frame: &str) -> Option<Vec3> {
+        let local = self.my_position()?;
+        let parent = self.my_parent();
+        if let Some(v) = self.resolve_up_to(local, parent.as_deref(), frame) {
+            return Some(v);
+        }
+        let npc = self.resolve_global(local, parent.as_deref())?;
+        let origin = {
+            let (pos, pid) = {
+                let f = self.objects.get(frame)?;
+                (f.position, f.parent_id.clone())
+            };
+            self.resolve_global(pos, pid.as_deref())?
+        };
+        Some(Vec3 {
+            x: npc.x - origin.x,
+            y: npc.y - origin.y,
+            z: npc.z - origin.z,
+        })
+    }
+
+    /// `local` (expressed in `parent_id`'s frame) re-expressed in `frame`'s
+    /// coordinates, when `frame` is `parent_id` or one of its ancestors.
+    /// `None` when the chain does not pass through `frame` (or breaks first).
+    fn resolve_up_to(&self, local: Vec3, parent_id: Option<&str>, frame: &str) -> Option<Vec3> {
+        const MAX_DEPTH: usize = 16;
+
+        let mut acc = local;
+        let mut cursor = parent_id.map(str::to_string);
+        for _ in 0..MAX_DEPTH {
+            let pid = cursor.filter(|p| !p.is_empty())?;
+            if pid == frame {
+                return Some(acc);
+            }
+            let parent = self.objects.get(&pid)?;
+            acc.x += parent.position.x;
+            acc.y += parent.position.y;
+            acc.z += parent.position.z;
+            cursor = parent.parent_id.clone();
+        }
+        None
+    }
+
     /// Record position, parent and any other player properties from a frame
     /// about self, if it carries them.
     fn remember_self(&self, frame: &GorcFrame) {
@@ -363,6 +416,35 @@ mod tests {
         let v = WorldView::new("me".into());
         v.apply(&enter_player("me", (0.0, 0.0, 0.0)));
         assert!(!v.has_other_player());
+    }
+
+    #[test]
+    fn my_position_in_a_frame_survives_missing_frame_ancestors() {
+        let v = WorldView::new("me".into());
+        // The depot is parented to a planet that never replicated into view,
+        // so a root-frame resolution of anything inside it must fail…
+        v.apply(&enter_object("depot", (100.0, 0.0, 50.0), Some("planet-never-seen")));
+        let mut me = enter_player("me", (1.0, 0.0, 2.0));
+        me.data["parent_id"] = json!("depot");
+        v.apply(&me);
+        assert_eq!(v.my_global_position(), None);
+        // …but the NPC's position IN the depot frame is exact regardless.
+        let p = v.my_position_in("depot").unwrap();
+        assert_eq!((p.x, p.y, p.z), (1.0, 0.0, 2.0));
+    }
+
+    #[test]
+    fn my_position_in_a_frame_falls_back_to_root_difference() {
+        let v = WorldView::new("me".into());
+        // NPC and depot are siblings under the same (known) planet: the
+        // depot is not an ancestor, so the root-difference fallback applies.
+        v.apply(&enter_object("planet", (1000.0, 0.0, 0.0), None));
+        v.apply(&enter_object("depot", (100.0, 0.0, 50.0), Some("planet")));
+        let mut me = enter_player("me", (103.0, 0.0, 51.0));
+        me.data["parent_id"] = json!("planet");
+        v.apply(&me);
+        let p = v.my_position_in("depot").unwrap();
+        assert_eq!((p.x, p.y, p.z), (3.0, 0.0, 1.0));
     }
 
     #[test]

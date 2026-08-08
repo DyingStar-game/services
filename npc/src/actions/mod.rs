@@ -2,6 +2,8 @@ pub mod context;
 pub mod registry;
 pub mod timing;
 
+pub mod depot_common;
+pub mod depot_store_item;
 pub mod depot_store_reception_to_temp_area;
 pub mod detect_player_and_greet;
 pub mod go_to_point;

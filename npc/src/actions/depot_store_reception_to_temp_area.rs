@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::time;
 use tracing::{info, warn};
 
-use super::{Action, ActionContext, ActionTiming};
+use super::{Action, ActionContext, ActionTiming, depot_common::*};
 use crate::{
     error::Result,
     horizon::messages::Vec3,
@@ -59,6 +59,11 @@ pub const ACCEPTED_ITEM_KEY: &str = "depot_store_reception_accepted_item";
 /// confirmed.
 pub const BOX_IN_HANDS_KEY: &str = "depot_store_reception_box_in_hands";
 
+/// Blackboard flag set once a carry is done, asking the NPC to walk back to its
+/// `place_where_work` spot (where players expect to find it) instead of
+/// lingering at the temp area. Cleared once the walk finishes.
+const RETURN_HOME_KEY: &str = "depot_store_reception_return_home";
+
 /// What the NPC says when more than one item sits on the counter.
 const ONLY_ONE_OBJECT: &str = "Please, put only 1 object";
 
@@ -67,22 +72,9 @@ const ONLY_ONE_OBJECT: &str = "Please, put only 1 object";
 const NO_MORE_PLACE: &str = "Sorry, no more place";
 const NEED_TO_STORE: &str = "I need to put boxes away in the warehouse";
 
-/// Eye height above the NPC's feet, matching the player rig; the head pitch is
-/// computed from here toward the box centre.
-const HEAD_HEIGHT: f64 = 1.80;
-
 /// How long to wait for the server's `npc_arrived` notice before abandoning
 /// the trip (and re-arming the deposit check for a retry).
 const ARRIVAL_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Poll cadence while waiting for `npc_arrived`.
-const ARRIVAL_POLL: Duration = Duration::from_millis(200);
-
-/// Fallback arrival gate: if the NPC's replicated position gets this close
-/// (ground plane, metres) to the walk target, proceed even when the server
-/// never sends `npc_arrived` (its own gate needs `<= 1.5 m` AND an empty
-/// path, which a partial route can miss).
-const ARRIVAL_FALLBACK_DIST: f64 = 0.7;
 
 /// Pause between arriving at the reception place and grabbing the box.
 const SETTLE_BEFORE_PICKUP: Duration = Duration::from_secs(2);
@@ -100,9 +92,6 @@ const PAUSE_BEFORE_ACTION: Duration = Duration::from_millis(500);
 /// reparents the box under the NPC, which replicates back as the box's
 /// `parent_id`.
 const GRAB_CONFIRM_TIMEOUT: Duration = Duration::from_secs(4);
-
-/// Poll cadence while waiting for the grab confirmation.
-const GRAB_CONFIRM_POLL: Duration = Duration::from_millis(200);
 
 /// Pause between arriving at the temp place and dropping the box.
 const SETTLE_BEFORE_DROP: Duration = Duration::from_secs(2);
@@ -138,10 +127,20 @@ const DROP_CONFIRM_TIMEOUT: Duration = Duration::from_secs(4);
 /// presses the action key again — which releases a carried item.
 /// The drop only counts once the box replicates as reparented off the NPC;
 /// otherwise the carry retries on a later run.
+///
+/// Once a box has been stored and nothing new sits on the counter, the NPC
+/// walks back to its `place_where_work` spot (the same `npc_go_to_position`
+/// trip) so it waits for the next customer where players expect to find it,
+/// rather than lingering at the temp area. A fresh deposit always wins over
+/// that return. An NPC configured without a work position simply stays put.
 pub struct DepotStoreReceptionToTempArea {
     /// UUID of the depot the NPC works at, taken from `place_where_work`.
     /// `None` means the NPC has no workplace, so this action never runs.
     work_uuid: Option<String>,
+    /// The NPC's standing spot at the depot (`place_where_work.position`,
+    /// depot-local), walked back to after a carry so the NPC waits for the
+    /// next customer where players expect it. `None` disables the return trip.
+    place_position: Option<Vec3>,
     /// Accepted box scene file names (e.g. `hauling_box.tscn`). Empty (no
     /// config) disables the action rather than rejecting everything.
     boxes_type_allowed: Vec<String>,
@@ -150,10 +149,12 @@ pub struct DepotStoreReceptionToTempArea {
 impl DepotStoreReceptionToTempArea {
     pub fn new(
         work_uuid: Option<String>,
+        place_position: Option<Vec3>,
         config: Option<DepotStoreReceptionToTempAreaConfig>,
     ) -> Self {
         Self {
             work_uuid,
+            place_position,
             boxes_type_allowed: config.map(|c| c.boxes_type_allowed).unwrap_or_default(),
         }
     }
@@ -641,20 +642,68 @@ impl DepotStoreReceptionToTempArea {
         if wait_for_box_released(ctx, item, DROP_CONFIRM_TIMEOUT).await {
             info!(npc = %ctx.npc_name, item = %item, place = %place, "box stored in the temp area");
             ctx.state.remove(BOX_IN_HANDS_KEY);
+            // The carry left the NPC at the temp area; ask it to walk back to
+            // its work spot (unless it has none). A fresh deposit on the
+            // counter still wins — the return step yields to it.
+            if self.place_position.is_some() {
+                ctx.state.set(RETURN_HOME_KEY, json!(true));
+            }
         } else {
             warn!(npc = %ctx.npc_name, item = %item, "drop not confirmed by the server; retrying later");
         }
         Ok(())
     }
-}
 
-/// `pnj_box_temp_zones` key for a `TempZone` place: `PNJPlace4` → `zone_4`
-/// (the digits ending the place name). `None` for a name without a trailing
-/// number.
-fn zone_key(place: &str) -> Option<String> {
-    let digits = place.trim_start_matches(|c: char| !c.is_ascii_digit());
-    (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
-        .then(|| format!("zone_{digits}"))
+    /// Walk back to the configured work spot after a carry, so the NPC waits
+    /// for the next customer where players expect to find it rather than
+    /// lingering at the temp area. Clears [`RETURN_HOME_KEY`] once the walk
+    /// resolves (arrival, close-enough, or timeout) so it runs exactly once.
+    async fn return_to_work(&self, ctx: &mut ActionContext) -> Result<()> {
+        let (Some(depot), Some(position)) = (self.work_uuid.clone(), self.place_position) else {
+            ctx.state.remove(RETURN_HOME_KEY);
+            return Ok(());
+        };
+
+        ctx.world.clear_arrived();
+        info!(npc = %ctx.npc_name, place = %depot, "returning to the work spot");
+        ctx.send
+            .send(
+                "player",
+                "client_action",
+                json!({
+                    "action": "npc_go_to_position",
+                    "uuid": depot,
+                    "position": position,
+                }),
+            )
+            .await?;
+
+        match wait_for_arrival(ctx, &depot, position, ARRIVAL_TIMEOUT).await {
+            ArrivalOutcome::Notified => {
+                info!(npc = %ctx.npc_name, place = %depot, "back at the work spot");
+                ctx.send
+                    .send(
+                        "player",
+                        "client_action",
+                        json!({
+                            "action": "npc_arrived_ack",
+                            "uuid": depot,
+                        }),
+                    )
+                    .await?;
+                ctx.world.clear_arrived();
+            }
+            ArrivalOutcome::CloseEnough => {
+                info!(npc = %ctx.npc_name, place = %depot, "close enough to the work spot (no server arrival notice)");
+            }
+            ArrivalOutcome::TimedOut => {
+                warn!(npc = %ctx.npc_name, place = %depot, "no arrival notice returning to the work spot; giving up the return");
+            }
+        }
+
+        ctx.state.remove(RETURN_HOME_KEY);
+        Ok(())
+    }
 }
 
 /// UUID of the box currently in the NPC's hands, per the blackboard.
@@ -662,158 +711,6 @@ fn box_in_hands(ctx: &ActionContext) -> Option<String> {
     ctx.state
         .get(BOX_IN_HANDS_KEY)
         .and_then(|v| v.as_str().map(str::to_string))
-}
-
-/// Whether `item` currently rides in someone's hands: the server reparents a
-/// carried prop under its carrier, so a player uuid (the NPC's own included)
-/// as `parent_id` means the box is not restable-on-the-counter yet.
-fn carried_by_player(ctx: &ActionContext, item: &str) -> bool {
-    let Some(parent) = ctx.world.objects.get(item).and_then(|o| o.parent_id.clone()) else {
-        return false;
-    };
-    parent == ctx.world.my_uuid || ctx.world.players.contains_key(&parent)
-}
-
-/// Head pitch (radians, Godot camera convention: negative looks down) that
-/// points the NPC's eyes — [`HEAD_HEIGHT`] above its feet — at the centre of
-/// `item`, plus the eye-to-item distance in metres (the server's grab reach is
-/// 3 m). `None` while either global position cannot be resolved.
-fn aim_at(ctx: &ActionContext, item: &str) -> Option<(f64, f64)> {
-    let target = item_global(ctx, item)?;
-    pitch_toward(ctx, target)
-}
-
-/// Global position of `item`, resolved through its parent chain. `None` while
-/// the item or an ancestor is not in view.
-fn item_global(ctx: &ActionContext, item: &str) -> Option<Vec3> {
-    let (pos, parent) = {
-        let o = ctx.world.objects.get(item)?;
-        (o.position, o.parent_id.clone())
-    };
-    ctx.world.resolve_global(pos, parent.as_deref())
-}
-
-/// Same as [`aim_at`], but toward `point` expressed in `parent`'s local frame
-/// (e.g. a temp-zone `target` local to the depot).
-fn aim_at_local(ctx: &ActionContext, parent: &str, point: Vec3) -> Option<(f64, f64)> {
-    let target = ctx.world.resolve_global(point, Some(parent))?;
-    pitch_toward(ctx, target)
-}
-
-/// Head pitch and eye distance from the NPC's eyes to the global `target`.
-fn pitch_toward(ctx: &ActionContext, target: Vec3) -> Option<(f64, f64)> {
-    let npc = ctx.world.my_global_position()?;
-    let dy = target.y - (npc.y + HEAD_HEIGHT);
-    let (dx, dz) = (target.x - npc.x, target.z - npc.z);
-    let horiz = dx.hypot(dz);
-    Some((dy.atan2(horiz), horiz.hypot(dy)))
-}
-
-/// How a wait for the walk target ended.
-enum ArrivalOutcome {
-    /// The server flagged `npc_arrived` (needs an ack).
-    Notified,
-    /// No server notice, but the NPC's own position reached the target
-    /// (within [`ARRIVAL_FALLBACK_DIST`]).
-    CloseEnough,
-    TimedOut,
-}
-
-/// Ground-plane distance (metres) from the NPC to `target` (local to `depot`),
-/// or `None` while either global position cannot be resolved.
-fn ground_distance_to(ctx: &ActionContext, depot: &str, target: Vec3) -> Option<f64> {
-    let npc = ctx.world.my_global_position()?;
-    let goal = ctx.world.resolve_global(target, Some(depot))?;
-    Some((goal.x - npc.x).hypot(goal.z - npc.z))
-}
-
-/// Wait until the box replicates as parented under this NPC (grab confirmed),
-/// or `timeout` elapses.
-async fn wait_for_box_in_hands(ctx: &ActionContext, item: &str, timeout: Duration) -> bool {
-    let deadline = time::Instant::now() + timeout;
-    while time::Instant::now() < deadline {
-        let in_hands = ctx
-            .world
-            .objects
-            .get(item)
-            .and_then(|o| o.parent_id.clone())
-            .is_some_and(|p| p == ctx.world.my_uuid);
-        if in_hands {
-            return true;
-        }
-        time::sleep(GRAB_CONFIRM_POLL).await;
-    }
-    false
-}
-
-/// Wait until the box replicates as no longer parented under this NPC (drop
-/// confirmed), or `timeout` elapses. A box gone from view also counts as
-/// released.
-async fn wait_for_box_released(ctx: &ActionContext, item: &str, timeout: Duration) -> bool {
-    let deadline = time::Instant::now() + timeout;
-    while time::Instant::now() < deadline {
-        let held = ctx
-            .world
-            .objects
-            .get(item)
-            .and_then(|o| o.parent_id.clone())
-            .is_some_and(|p| p == ctx.world.my_uuid);
-        if !held {
-            return true;
-        }
-        time::sleep(GRAB_CONFIRM_POLL).await;
-    }
-    false
-}
-
-/// Wait until the server flags `npc_arrived`, the NPC's replicated position
-/// reaches `target`, or `timeout` elapses.
-async fn wait_for_arrival(
-    ctx: &ActionContext,
-    depot: &str,
-    target: Vec3,
-    timeout: Duration,
-) -> ArrivalOutcome {
-    let deadline = time::Instant::now() + timeout;
-    while time::Instant::now() < deadline {
-        if ctx.world.npc_arrived() {
-            return ArrivalOutcome::Notified;
-        }
-        if ground_distance_to(ctx, depot, target).is_some_and(|d| d <= ARRIVAL_FALLBACK_DIST) {
-            return ArrivalOutcome::CloseEnough;
-        }
-        time::sleep(ARRIVAL_POLL).await;
-    }
-    ArrivalOutcome::TimedOut
-}
-
-/// A replicated vector to a [`Vec3`]. The pipeline is not consistent about
-/// the encoding, so all three observed forms are accepted: a `[x, y, z]`
-/// array (DB-exported `pnj_zones`), a `{x, y, z}` map (top-level frame
-/// positions), and Godot's `"(x, y, z)"` string (a raw `Vector3` passed
-/// through `JSON.stringify`).
-fn vec3_from(v: &Value) -> Option<Vec3> {
-    if let Some(a) = v.as_array() {
-        return Some(Vec3 {
-            x: a.first()?.as_f64()?,
-            y: a.get(1)?.as_f64()?,
-            z: a.get(2)?.as_f64()?,
-        });
-    }
-    if v.is_object() {
-        return Some(Vec3 {
-            x: v.get("x")?.as_f64()?,
-            y: v.get("y")?.as_f64()?,
-            z: v.get("z")?.as_f64()?,
-        });
-    }
-    let s = v.as_str()?.trim().strip_prefix('(')?.strip_suffix(')')?;
-    let mut parts = s.split(',').map(|p| p.trim().parse::<f64>());
-    Some(Vec3 {
-        x: parts.next()?.ok()?,
-        y: parts.next()?.ok()?,
-        z: parts.next()?.ok()?,
-    })
 }
 
 #[async_trait]
@@ -843,6 +740,17 @@ impl Action for DepotStoreReceptionToTempArea {
         if box_in_hands(ctx).is_some() {
             return true;
         }
+        // Hands busy with a shelf-bound box (depot_store_item): pressing the
+        // action key at the counter would release THAT box there. The deposit
+        // stays unconsumed, so this re-arms once the shelf carry resolves.
+        if ctx.state.get(super::depot_store_item::SHELF_BOX_IN_HANDS_KEY).is_some() {
+            return false;
+        }
+        // A finished carry left the NPC at the temp area: it must walk back to
+        // its work spot.
+        if ctx.state.get(RETURN_HOME_KEY).is_some() {
+            return true;
+        }
         // Otherwise only with box types configured, and only when the deposit
         // changed since the last check.
         !self.boxes_type_allowed.is_empty() && self.pending_deposit(ctx).is_some()
@@ -854,6 +762,11 @@ impl Action for DepotStoreReceptionToTempArea {
             return self.store_in_temp_zone(ctx, &item).await;
         }
         let Some(current) = self.pending_deposit(ctx) else {
+            // Nothing new on the counter. If a carry just finished, walk back
+            // to the work spot; a fresh deposit (handled above) always wins.
+            if ctx.state.get(RETURN_HOME_KEY).is_some() {
+                return self.return_to_work(ctx).await;
+            }
             return Ok(());
         };
         let items = Self::deposited_items(&current);
@@ -943,6 +856,10 @@ mod tests {
 
     const DEPOT: &str = "a9340169-767c-4b02-a2f3-67f2786375b3";
     const ITEM: &str = "11111111-1111-1111-1111-111111111111";
+
+    // The NPC's `place_where_work` standing spot (depot-local), walked back to
+    // after a carry.
+    const WORK_POS: (f64, f64, f64) = (2.0, 0.25, 1.0);
 
     // The Reception/PNJPlace0 rectangle used by `depot_frame`.
     const PLACE_CENTER: (f64, f64, f64) = (0.7165, 0.2509, 3.9028);
@@ -1110,6 +1027,7 @@ mod tests {
     fn action() -> DepotStoreReceptionToTempArea {
         DepotStoreReceptionToTempArea::new(
             Some(DEPOT.to_string()),
+            Some(Vec3 { x: WORK_POS.0, y: WORK_POS.1, z: WORK_POS.2 }),
             Some(DepotStoreReceptionToTempAreaConfig {
                 boxes_type_allowed: vec!["hauling_box.tscn".into(), "small_box.tscn".into()],
             }),
@@ -1130,11 +1048,11 @@ mod tests {
         world.apply(&depot_frame(json!([ITEM])));
         let (ctx, _rx) = dummy_ctx(world);
         ctx.state.set_status(NpcStatus::AtWork);
-        assert!(!DepotStoreReceptionToTempArea::new(Some(DEPOT.into()), None).can_run(&ctx));
+        assert!(!DepotStoreReceptionToTempArea::new(Some(DEPOT.into()), None, None).can_run(&ctx));
         let cfg = DepotStoreReceptionToTempAreaConfig {
             boxes_type_allowed: vec!["hauling_box.tscn".into()],
         };
-        assert!(!DepotStoreReceptionToTempArea::new(None, Some(cfg)).can_run(&ctx));
+        assert!(!DepotStoreReceptionToTempArea::new(None, None, Some(cfg)).can_run(&ctx));
     }
 
     #[test]
@@ -1147,6 +1065,26 @@ mod tests {
         let (ctx, _rx) = dummy_ctx(world);
         ctx.state.set_status(NpcStatus::AtWork);
         assert!(!action().can_run(&ctx));
+    }
+
+    #[test]
+    fn shelf_carry_blocks_a_fresh_deposit() {
+        use crate::actions::depot_store_item::SHELF_BOX_IN_HANDS_KEY;
+
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&depot_frame(json!([ITEM])));
+        world.apply(&item_frame(ITEM, "hauling_box.tscn", (1.0, 0.5, 0.0)));
+        let (ctx, _rx) = dummy_ctx(world);
+        ctx.state.set_status(NpcStatus::AtWork);
+
+        let a = action();
+        assert!(a.can_run(&ctx));
+        // The NPC still holds a shelf-bound box (depot_store_item): pressing
+        // the action key at the counter would release THAT box there.
+        ctx.state.set(SHELF_BOX_IN_HANDS_KEY, json!("shelf-box"));
+        assert!(!a.can_run(&ctx), "hands reserved for the shelf carry");
+        ctx.state.remove(SHELF_BOX_IN_HANDS_KEY);
+        assert!(a.can_run(&ctx), "deposit unconsumed; re-arms after the carry");
     }
 
     #[tokio::test]
@@ -1506,7 +1444,9 @@ mod tests {
         assert_eq!(msgs.len(), 3);
 
         assert!(ctx.state.get(BOX_IN_HANDS_KEY).is_none(), "carry consumed");
-        assert!(!a.can_run(&ctx), "nothing left to do");
+        // The finished carry arms the walk back to the work spot.
+        assert!(ctx.state.get(RETURN_HOME_KEY).is_some(), "return home armed");
+        assert!(a.can_run(&ctx), "must walk back to the work spot next");
     }
 
     #[tokio::test]
@@ -1557,19 +1497,6 @@ mod tests {
         let (ctx, _rx) = dummy_ctx(world);
         let free = action().free_temp_places(&ctx).unwrap();
         assert_eq!(free.len(), 2);
-    }
-
-    #[test]
-    fn vec3_accepts_array_map_and_godot_string_encodings() {
-        for v in [
-            json!([1.5, 2.5, 3.5]),
-            json!({"x": 1.5, "y": 2.5, "z": 3.5}),
-            json!("(1.5, 2.5, 3.5)"),
-        ] {
-            let p = vec3_from(&v).unwrap_or_else(|| panic!("failed on {v}"));
-            assert_eq!((p.x, p.y, p.z), (1.5, 2.5, 3.5), "encoding {v}");
-        }
-        assert!(vec3_from(&json!("garbage")).is_none());
     }
 
     #[tokio::test]
@@ -1676,6 +1603,90 @@ mod tests {
             ctx.state.get(LAST_DEPOSITED_KEY).is_none(),
             "counter check re-armed so the box can be handled again"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn returns_to_the_work_spot_after_a_carry() {
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&self_frame("me", (0.0, 0.0, 0.0)));
+        // Counter empty, no box in hands: only the armed return remains.
+        world.apply(&depot_frame(json!([])));
+        let (mut ctx, mut rx) = dummy_ctx(Arc::clone(&world));
+        ctx.state.set_status(NpcStatus::AtWork);
+        ctx.state.set(LAST_DEPOSITED_KEY, json!([]));
+        ctx.state.set(RETURN_HOME_KEY, json!(true));
+
+        let a = action();
+        assert!(a.can_run(&ctx), "an armed return must trigger");
+
+        // Feed the arrival notice mid-walk.
+        let arriver = async {
+            time::sleep(Duration::from_secs(2)).await;
+            world.apply(&arrived_frame("me"));
+        };
+        let (result, ()) = tokio::join!(a.run(&mut ctx), arriver);
+        result.unwrap();
+
+        // Walk order back to the work spot, then the arrival ack.
+        let go = rx.try_recv().unwrap();
+        assert_eq!(go["data"]["action"], json!("npc_go_to_position"));
+        assert_eq!(go["data"]["uuid"], json!(DEPOT));
+        assert_eq!(go["data"]["position"]["x"].as_f64().unwrap(), WORK_POS.0);
+        assert_eq!(go["data"]["position"]["y"].as_f64().unwrap(), WORK_POS.1);
+        assert_eq!(go["data"]["position"]["z"].as_f64().unwrap(), WORK_POS.2);
+        assert_eq!(rx.try_recv().unwrap()["data"]["action"], json!("npc_arrived_ack"));
+        assert!(rx.try_recv().is_err());
+
+        assert!(ctx.state.get(RETURN_HOME_KEY).is_none(), "return consumed");
+        assert!(!a.can_run(&ctx), "nothing left to do at the work spot");
+    }
+
+    #[tokio::test]
+    async fn a_fresh_deposit_wins_over_the_return_home() {
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&self_frame("me", (0.0, 0.0, 0.0)));
+        // A new box waits on the counter while the return is still armed.
+        world.apply(&depot_frame(json!([ITEM])));
+        world.apply(&item_frame(ITEM, "res://items/barrel.tscn", (1.0, 0.5, 0.0)));
+        let (mut ctx, mut rx) = dummy_ctx(world);
+        ctx.state.set_status(NpcStatus::AtWork);
+        ctx.state.set(RETURN_HOME_KEY, json!(true));
+
+        let a = action();
+        a.run(&mut ctx).await.unwrap();
+
+        // The deposit was handled (wrong type here), NOT the walk home.
+        assert_eq!(
+            rx.try_recv().unwrap()["data"]["text"],
+            json!("We only accept the type of box: hauling_box, small_box")
+        );
+        assert!(rx.try_recv().is_err(), "no walk order this run");
+        // The return stays armed, so the NPC still heads home once the counter
+        // is clear again.
+        assert!(ctx.state.get(RETURN_HOME_KEY).is_some());
+    }
+
+    #[tokio::test]
+    async fn no_work_position_clears_a_stray_return_without_walking() {
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&depot_frame(json!([])));
+        let (mut ctx, mut rx) = dummy_ctx(world);
+        ctx.state.set_status(NpcStatus::AtWork);
+        // No `place_where_work` position: there is nowhere to return to.
+        let a = DepotStoreReceptionToTempArea::new(
+            Some(DEPOT.into()),
+            None,
+            Some(DepotStoreReceptionToTempAreaConfig {
+                boxes_type_allowed: vec!["hauling_box.tscn".into()],
+            }),
+        );
+        ctx.state.set(LAST_DEPOSITED_KEY, json!([]));
+        ctx.state.set(RETURN_HOME_KEY, json!(true));
+
+        a.run(&mut ctx).await.unwrap();
+
+        assert!(rx.try_recv().is_err(), "no walk order without a work spot");
+        assert!(ctx.state.get(RETURN_HOME_KEY).is_none(), "stray flag cleared");
     }
 
     #[tokio::test]
