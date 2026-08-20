@@ -208,6 +208,22 @@ pub async fn handle_socket(
                                             .and_then(|v| v.as_object())
                                             .cloned()
                                             .unwrap_or_default();
+                                        // Whatever the caller just sent wins over the stored record:
+                                        // it comes from the authentication that happened a moment ago.
+                                        // is_npc is decided at connect time and is NOT part of the
+                                        // persisted player, so rebuilding object_data from the database
+                                        // alone quietly downgraded every RETURNING NPC to an ordinary
+                                        // player — they stood up on their first connection and lay back
+                                        // down on the next one.
+                                        //
+                                        // Placed before the explicit inserts below so the stored
+                                        // parent_id / scenename / position / rotation still win: those
+                                        // are the object's own state, not something a caller announces.
+                                        if let Some(incoming) = req.object_data.as_object() {
+                                            for (k, v) in incoming {
+                                                data_map.insert(k.clone(), v.clone());
+                                            }
+                                        }
                                         if let Some(ref v) = item.parent_id {
                                             data_map.insert("parent_id".to_string(), serde_json::json!(v));
                                         }
@@ -243,6 +259,14 @@ pub async fn handle_socket(
                                                 "object_uuid": &req.object_uuid,
                                                 "object_data": {
                                                     "name": &req.object_data["name"],
+                                                    // Carry EVERY field the caller sent, not just the
+                                                    // name. is_npc is decided at authentication and is
+                                                    // the only thing that tells the game server this
+                                                    // player is driven by the NPC service; rebuilding
+                                                    // object_data by hand silently dropped it, so every
+                                                    // NPC arrived as an ordinary player and none of the
+                                                    // NPC handling ever ran for it.
+                                                    "is_npc": &req.object_data["is_npc"],
                                                 }
                                             }),
                                         };
