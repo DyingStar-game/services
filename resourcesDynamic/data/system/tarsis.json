@@ -37,50 +37,50 @@
     "P2_a_AU": 0.148665,
     "P2_e": 0.04,
     "P2_i_deg": 0.141,
-    "P3_Albedo": 0.3,
-    "P3_Atm_Ar_pct": 0.93,
-    "P3_Atm_CH4_pct": 0.0002,
-    "P3_Atm_CO2_pct": 0.04,
-    "P3_Atm_H2O_pct": 0.7,
-    "P3_Atm_He_pct": 0.0005,
-    "P3_Atm_N2_pct": 77.6,
-    "P3_Atm_Ne_pct": 0.002,
-    "P3_Atm_O2_pct": 20.7,
-    "P3_Atm_O3_pct": 0.000003,
-    "P3_Atm_pressure_bar": 0.91,
-    "P3_Densite": 5.51,
-    "P3_Masse_Me": 0.783,
-    "P3_Name": "Gaea",
+    "P3_Albedo": 0.32,
+    "P3_Atm_Ar_pct": 1.1,
+    "P3_Atm_CH4_pct": 0.2,
+    "P3_Atm_CO2_pct": 2.0,
+    "P3_Atm_N2_pct": 78.1,
+    "P3_Atm_O2_pct": 18.6,
+    "P3_Atm_pressure_bar": 1.02,
+    "P3_Densite": 5.20,
+    "P3_Masse_Me": 0.788,
+    "P3_Name": "SandBox",
     "P3_Period_days": 171.05,
-    "P3_Rayon_km": 5875,
-    "P3_T_Day_K": 295,
-    "P3_T_Eq_K": 285,
+    "P3_Rayon_km": 6356,
+    "P3_T_Day_K": 290,
+    "P3_T_Eq_K": 258,
     "P3_T_Night_K": 275,
-    "P3_T_Surface_K": 288,
+    "P3_T_Surface_K": 283,
     "P3_Type": "Terrestrial",
     "P3_a_AU": 0.55,
-    "P3_e": 0.02,
-    "P3_i_deg": 1.0,
-    "P4_Albedo": 0.32,
-    "P4_Atm_Ar_pct": 1.1,
-    "P4_Atm_CH4_pct": 0.2,
-    "P4_Atm_CO2_pct": 2.0,
-    "P4_Atm_N2_pct": 96.1,
-    "P4_Atm_O2_pct": 0.6,
-    "P4_Atm_pressure_bar": 1.02,
-    "P4_Densite": 5.2,
-    "P4_Masse_Me": 0.788,
-    "P4_Name": "SandBox",
+    "P3_e": 0.03,
+    "P3_i_deg": 1.5,
+    "P4_Albedo": 0.30,
+    "P4_Atm_Ar_pct": 0.93,
+    "P4_Atm_CH4_pct": 0.0002,
+    "P4_Atm_CO2_pct": 0.04,
+    "P4_Atm_H2O_pct": 0.70,
+    "P4_Atm_He_pct": 0.0005,
+    "P4_Atm_N2_pct": 77.6,
+    "P4_Atm_Ne_pct": 0.002,
+    "P4_Atm_O2_pct": 20.7,
+    "P4_Atm_O3_pct": 0.000003,
+    "P4_Atm_pressure_bar": 0.91,
+    "P4_Densite": 5.51,
+    "P4_Masse_Me": 0.783,
+    "P4_Name": "Gaea",
     "P4_Period_days": 219.77,
-    "P4_Rayon_km": 6356,
-    "P4_T_Day_K": 290,
-    "P4_T_Eq_K": 260,
+    "P4_Rayon_km": 5875,
+    "P4_T_Day_K": 295,
+    "P4_T_Eq_K": 240,
     "P4_T_Night_K": 275,
-    "P4_T_Surface_K": 283,
+    "P4_T_Surface_K": 288,
     "P4_Type": "Terrestrial",
     "P4_a_AU": 0.65,
-    "P4_e": 0.03,
-    "P4_i_deg": 1.5,
+    "P4_e": 0.02,
+    "P4_i_deg": 1.0,
     "P5_Albedo": 0.599,
     "P5_Atm_Ar_pct": 1.0946,
     "P5_Atm_CH4_pct": 0.1343,
@@ -173,7 +173,7 @@
     "STAR1_Lum_Lsun": 0.331138,
     "STAR1_Mass_Sun": 0.758581,
     "STAR1_Radius_Sun": 0.82134,
-    "STAR1_Temp_K": 3555,
+    "STAR1_Temp_K": 4831,
     "STAR1_Type": "K",
     "SYS_Age_Gyr": 4.395,
     "SYS_Binary": 0,
@@ -224,6 +224,7 @@
     ],
     "planets": [
       {
+        "name": "Tarsis 1",
         "M0_deg": 81.9,
         "albedo": 0.210068929992336,
         "apoapsis_AU": 0.0561969378239948,
@@ -372,6 +373,7 @@
         "type": "Terrestrial"
       },
       {
+        "name": "Tarsis 2",
         "M0_deg": 282.9,
         "albedo": 0.104149526851782,
         "apoapsis_AU": 0.15461151192179,
@@ -517,160 +519,10 @@
         "type": "Terrestrial"
       },
       {
-        "M0_deg": 140.0,
-        "albedo": 0.3,
-        "apoapsis_AU": 0.561,
-        "arg_peri_deg": 102.0,
-        "ascending_node_deg": 75.0,
-        "atmosphere": {
-          "gases_pct": {
-            "Ar": 0.93,
-            "CH4": 0.0002,
-            "CO2": 0.04,
-            "H2O": 0.7,
-            "He": 0.0005,
-            "N2": 77.6,
-            "Ne": 0.002,
-            "O2": 20.7,
-            "O3": 0.000003
-          },
-          "pressure_bar": 0.91,
-          "thickness_km": 112.0
-        },
-        "composition_bulk_pct": {
-          "Aluminium": null,
-          "Argent": null,
-          "Azote": null,
-          "Calcium": null,
-          "Chrome": null,
-          "Cobalt": null,
-          "Cuivre": null,
-          "Fer": null,
-          "Magnesium": null,
-          "Manganese": null,
-          "Nickel": null,
-          "Or": null,
-          "Oxygene": null,
-          "Platine": null,
-          "Potassium": null,
-          "Silicium": null,
-          "Sodium": null,
-          "Soufre": null,
-          "Thorium": null,
-          "Titane": null,
-          "Uranium": null,
-          "Zinc": null
-        },
-        "density_kg_m3": 5510,
-        "eccentricity": 0.02,
-        "inclination_deg": 1.0,
-        "mass_Me": 0.783,
-        "orbit_center": "primary",
-        "periapsis_AU": 0.539,
-        "period_days": 171.05,
-        "radius_Re": 0.922,
-        "radius_km": 5875,
-        "resources": {
-          "Aluminium": null,
-          "Argent": null,
-          "Cuivre": null,
-          "Fer": null,
-          "Nickel": null,
-          "Or": null,
-          "PGMs": null,
-          "Platine": null,
-          "RareEarths": null,
-          "Thorium": null,
-          "Titane": null,
-          "Uranium": null,
-          "Zinc": null,
-          "accessibility": "",
-          "budget_tonnes": null,
-          "mining": {
-            "Aluminium": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Argent": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Cuivre": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Fer": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Nickel": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Or": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "PGMs": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Platine": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "RareEarths": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Thorium": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Titane": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Uranium": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            },
-            "Zinc": {
-              "mines": null,
-              "total_tonnes": null,
-              "typical_mine_tonnage": null
-            }
-          }
-        },
-        "rings": false,
-        "rotation_h": 24.0,
-        "semi_major_AU": 0.55,
-        "temperatures": {
-          "T_day_K": 295,
-          "T_night_K": 275,
-          "T_surface_K": 288,
-          "Teq_K": 285
-        },
-        "tidal_locked": false,
-        "tilt_deg": 23.5,
-        "type": "Terrestrial"
-      },
-      {
+      	"name": "Sandbox",
         "M0_deg": 20.0,
         "albedo": 0.32,
-        "apoapsis_AU": 0.67,
+        "apoapsis_AU": 0.5665,
         "arg_peri_deg": 45.0,
         "ascending_node_deg": 110.0,
         "atmosphere": {
@@ -678,8 +530,8 @@
             "Ar": 1.1,
             "CH4": 0.2,
             "CO2": 2.0,
-            "N2": 96.1,
-            "O2": 0.6
+            "N2": 78.1,
+            "O2": 18.6
           },
           "pressure_bar": 1.02,
           "thickness_km": 110.0
@@ -734,7 +586,7 @@
             "index": 1,
             "mass_Me": 0.007102,
             "mass_kg": 4.24115008234622e22,
-            "name": "P4_M1",
+            "name": "P3_M1",
             "periapsis_km": 108900,
             "period_days": 4.734,
             "radius_Re": 0.235,
@@ -852,25 +704,18 @@
             "index": 2,
             "mass_Me": 0.000601,
             "mass_kg": 3.59188760060433e21,
-            "name": "P4_M2",
+            "name": "P3_M2",
             "periapsis_km": 313600,
             "period_days": 23.49,
             "radius_Re": 0.11,
             "radius_km": 700,
             "resources": {
-              "Aluminium": null,
-              "Argent": null,
-              "Cuivre": null,
-              "Fer": null,
-              "Nickel": null,
-              "Or": null,
-              "PGMs": null,
-              "Platine": null,
-              "RareEarths": null,
-              "Thorium": null,
-              "Titane": null,
-              "Uranium": null,
-              "Zinc": null,
+              "Phyllosilicate": 40.0,
+              "H2O": 30.0,
+              "Sulfate": 7.5,
+              "Carbonate": 7.5,
+              "Magnesium": 10,
+              "Iron": 5,
               "accessibility": "",
               "budget_tonnes": null,
               "mining": {
@@ -952,8 +797,8 @@
           }
         ],
         "orbit_center": "primary",
-        "periapsis_AU": 0.631,
-        "period_days": 219.77,
+        "periapsis_AU": 0.5335,
+        "period_days": 171.05,
         "radius_Re": 0.941,
         "radius_km": 6356,
         "resources": {
@@ -1043,18 +888,296 @@
 
         "rings": false,
         "rotation_h": 25.0,
-        "semi_major_AU": 0.65,
+        "semi_major_AU": 0.55,
         "temperatures": {
           "T_day_K": 290,
           "T_night_K": 275,
           "T_surface_K": 283,
-          "Teq_K": 260
+          "Teq_K": 258.5
         },
         "tidal_locked": false,
         "tilt_deg": 15,
         "type": "Terrestrial"
       },
       {
+      	"name": "Gaea",
+        "M0_deg": 140.0,
+        "albedo": 0.3,
+        "arg_peri_deg": 102.0,
+        "ascending_node_deg": 75.0,
+        "atmosphere": {
+          "gases_pct": {
+            "Ar": 0.93,
+            "CH4": 0.0002,
+            "CO2": 0.04,
+            "H2O": 0.7,
+            "He": 0.0005,
+            "N2": 77.6,
+            "Ne": 0.002,
+            "O2": 20.7,
+            "O3": 0.000003
+          },
+          "pressure_bar": 0.91,
+          "thickness_km": 112.0
+        },
+        "composition_bulk_pct": {
+          "Aluminium": null,
+          "Argent": null,
+          "Azote": null,
+          "Calcium": null,
+          "Chrome": null,
+          "Cobalt": null,
+          "Cuivre": null,
+          "Fer": null,
+          "Magnesium": null,
+          "Manganese": null,
+          "Nickel": null,
+          "Or": null,
+          "Oxygene": null,
+          "Platine": null,
+          "Potassium": null,
+          "Silicium": null,
+          "Sodium": null,
+          "Soufre": null,
+          "Thorium": null,
+          "Titane": null,
+          "Uranium": null,
+          "Zinc": null
+        },
+        "density_kg_m3": 5510,
+        "eccentricity": 0.02,
+        "inclination_deg": 1.0,
+        "mass_Me": 0.783,
+        "moons": [
+          {
+            "M0_deg": 24.3,
+            "albedo": 0.18,
+            "apoapsis_km": 111100,
+            "arg_peri_deg": 60.0,
+            "ascending_node_deg": 111.2,
+            "atmosphere": {
+              "gases_pct": {
+              "Ar": 57.0,
+              "Ne": 22.0,
+              "H2": 21.0
+              },
+              "meta": {
+                "pressure_bar": 0,
+                "scale_height_km": 0,
+                "thickness_km": 0
+              }
+            },
+            "composition_bulk_pct": {},
+            "density_kg_m3": 3000,
+            "eccentricity": 0.01,
+            "inclination_deg": 1.5,
+            "index": 1,
+            "mass_Me": 0.007102,
+            "mass_kg": 4.24115008234622e22,
+            "name": "P4_M1",
+            "periapsis_km": 108900,
+            "period_days": 4.734,
+            "radius_Re": 0.235,
+            "radius_km": 1500,
+            "resources": {
+              "Aluminium": 4000000000,
+              "Argent": 3000000,
+              "Cuivre": 20000,
+              "Fer": 20000000000,
+              "Nickel": 5000000000,
+              "Or": 1000000,
+              "PGMs": 5000000,
+              "Platine": 1000000,
+              "RareEarths": 100000000,
+              "Thorium": 5000000,
+              "Titane": 1000000000,
+              "Uranium": 2000000,
+              "Zinc": 1000000000,
+              "accessibility": "medium",
+              "budget_tonnes": 31117000000,
+              "mining": {
+                "Aluminium": {
+                  "mines": 100,
+                  "total_tonnes": 4000000000,
+                  "typical_mine_tonnage": 40000000
+                },
+                "Argent": {
+                  "mines": 60,
+                  "total_tonnes": 3000000,
+                  "typical_mine_tonnage": 50000
+                },
+                "Cuivre": {
+                  "mines": 0,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Fer": {
+                  "mines": 100,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Nickel": {
+                  "mines": 100,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Or": {
+                  "mines": 50,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "PGMs": {
+                  "mines": 100,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Platine": {
+                  "mines": 50,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "RareEarths": {
+                  "mines": 100,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Thorium": {
+                  "mines": 50,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Titane": {
+                  "mines": 50,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Uranium": {
+                  "mines": 200,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                },
+                "Zinc": {
+                  "mines": 50,
+                  "total_tonnes": null,
+                  "typical_mine_tonnage": null
+                }
+              }
+            },
+            "semi_major_km": 110000,
+            "spin_locked": true,
+            "spin_period_h": 113.62,
+            "temperatures": {
+              "T_day_K": 287.5,
+              "T_night_K": 257.5,
+              "Teq_K": 272.5
+            }
+          }
+        ],
+        "orbit_center": "primary",
+        "apoapsis_AU": 0.663,
+        "periapsis_AU": 0.637,
+        "period_days": 219.77,
+        "radius_Re": 0.922,
+        "radius_km": 5875,
+        "resources": {
+          "Aluminium": null,
+          "Argent": null,
+          "Cuivre": null,
+          "Fer": null,
+          "Nickel": null,
+          "Or": null,
+          "PGMs": null,
+          "Platine": null,
+          "RareEarths": null,
+          "Thorium": null,
+          "Titane": null,
+          "Uranium": null,
+          "Zinc": null,
+          "accessibility": "",
+          "budget_tonnes": null,
+          "mining": {
+            "Aluminium": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Argent": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Cuivre": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Fer": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Nickel": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Or": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "PGMs": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Platine": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "RareEarths": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Thorium": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Titane": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Uranium": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            },
+            "Zinc": {
+              "mines": null,
+              "total_tonnes": null,
+              "typical_mine_tonnage": null
+            }
+          }
+        },
+        "rings": false,
+        "rotation_h": 24.0,
+        "semi_major_AU": 0.65,
+        "temperatures": {
+          "T_day_K": 295,
+          "T_night_K": 275,
+          "T_surface_K": 288,
+          "Teq_K": 239.5
+        },
+        "tidal_locked": false,
+        "tilt_deg": 23.5,
+        "type": "Terrestrial"
+      },
+      {
+        "name": "Tarsis 5",
         "M0_deg": 240.4,
         "albedo": 0.598847082346242,
         "apoapsis_AU": 1.12945799465535,
@@ -1875,6 +1998,7 @@
         "type": "GasGiant"
       },
       {
+        "name": "Tarsis 6",
         "M0_deg": 35.2,
         "albedo": 0.700557396164891,
         "apoapsis_AU": 6.48693981676293,
@@ -2174,6 +2298,7 @@
         "type": "IceGiant"
       },
       {
+        "name": "Tarsis 7",
         "M0_deg": 311.3,
         "albedo": 0.228782086782701,
         "apoapsis_AU": 8.10648711707767,
@@ -2320,6 +2445,7 @@
         "type": "Terrestrial"
       },
       {
+        "name": "Tarsis 8",
         "M0_deg": 227.1,
         "albedo": 0.20211765856656,
         "apoapsis_AU": 16.2800914316724,
@@ -2897,7 +3023,7 @@
         "name": "Tarsis",
         "radius_Sun": 0.821340087234373,
         "stage": "MS",
-        "temp_K": 3555.25909388696,
+        "temp_K": 4831.33343660761,
         "type": "K"
       }
     ],
