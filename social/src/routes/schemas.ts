@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 
-import { PRESENCE_STATUSES } from '../db/schema/index.js';
+import { GUILD_PERMISSIONS, GUILD_RECRUITMENT_MODES, PRESENCE_STATUSES } from '../db/schema/index.js';
 
 export const uuidSchema = z.string().uuid();
 
@@ -71,3 +71,58 @@ export const encounterBody = z
 export const upsertPlayerBody = z.object({
   displayName: z.string().trim().min(2).max(32),
 });
+
+// ── Guilds ──────────────────────────────────────────────────────────────────
+
+export const guildIdParams = z.object({ guildId: uuidSchema });
+export const guildMemberParams = guildIdParams.extend({ playerId: uuidSchema });
+export const guildRankParams = guildIdParams.extend({ rankId: z.coerce.number().int().positive() });
+export const guildRequestParams = guildIdParams.extend({ id: z.coerce.number().int().positive() });
+
+const guildName = z.string().trim().min(3).max(48);
+const guildTag = z
+  .string()
+  .trim()
+  .min(2)
+  .max(5)
+  .regex(/^[A-Za-z0-9]+$/, 'Tag must be alphanumeric')
+  .transform((t) => t.toUpperCase());
+
+export const createGuildBody = z.object({
+  name: guildName,
+  tag: guildTag,
+  description: nullableText(2000),
+  logoUrl: z.string().trim().url().max(512).nullable().optional(),
+  recruitment: z.enum(GUILD_RECRUITMENT_MODES).optional(),
+});
+
+export const guildPatchBody = z
+  .object({
+    name: guildName.optional(),
+    tag: guildTag.optional(),
+    description: nullableText(2000),
+    logoUrl: z.string().trim().url().max(512).nullable().optional(),
+    recruitment: z.enum(GUILD_RECRUITMENT_MODES).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
+export const rankBody = z.object({
+  name: z.string().trim().min(1).max(32),
+  priority: z.number().int().min(0).max(99),
+  permissions: z.array(z.enum(GUILD_PERMISSIONS)).default([]),
+  isDefault: z.boolean().optional(),
+});
+
+// Not `rankBody.partial()`: the `permissions` default would turn every patch into a permissions change.
+export const rankPatchBody = z
+  .object({
+    name: z.string().trim().min(1).max(32).optional(),
+    priority: z.number().int().min(0).max(99).optional(),
+    permissions: z.array(z.enum(GUILD_PERMISSIONS)).optional(),
+    isDefault: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
+export const memberRankBody = z.object({ rankId: z.number().int().positive() });
+
+export const joinGuildBody = z.object({ message: z.string().trim().max(500).optional() });

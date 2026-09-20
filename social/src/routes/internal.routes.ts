@@ -7,6 +7,7 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { validate } from '../middleware/validate.js';
 import { recordActivity } from '../services/activity.service.js';
 import { recordEncounter } from '../services/encounters.service.js';
+import { getMembership } from '../services/guilds.service.js';
 import { setPresence } from '../services/presence.service.js';
 import { applyStats, ensureProfile } from '../services/profiles.service.js';
 import {
@@ -59,6 +60,16 @@ internalRoutes.post(
   asyncHandler(async (req, res) => {
     await recordActivity(req.params.playerId, req.body.type, req.body.details);
     res.status(204).send();
+  }),
+);
+
+/** GET /players/:playerId/guild — Guild and rank of a player (null if guildless). */
+internalRoutes.get(
+  '/players/:playerId/guild',
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const membership = await getMembership(req.params.playerId);
+    res.json(membership ? { ...membership.guild, rank: membership.rank } : null);
   }),
 );
 

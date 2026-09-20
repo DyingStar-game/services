@@ -5,6 +5,7 @@ import { Router, type IRouter } from 'express';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { validate } from '../middleware/validate.js';
+import { getGuildRefMap } from '../services/guilds.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { requireProfile, searchProfiles } from '../services/profiles.service.js';
 import { playerIdParams, searchQuery } from './schemas.js';
@@ -27,7 +28,7 @@ profilesRoutes.get(
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     const profile = await requireProfile(req.params.playerId);
-    const presence = await getPresence(profile.playerId);
-    res.json({ ...profile, status: presence.status });
+    const [presence, guildRefs] = await Promise.all([getPresence(profile.playerId), getGuildRefMap([profile.playerId])]);
+    res.json({ ...profile, status: presence.status, guild: guildRefs.get(profile.playerId) ?? null });
   }),
 );

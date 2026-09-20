@@ -4,3 +4,4 @@ export * from './friendships.js';
 export * from './blocks.js';
 export * from './encounters.js';
 export * from './activity.js';
+export * from './guilds.js';

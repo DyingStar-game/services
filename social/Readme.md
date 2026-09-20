@@ -63,6 +63,35 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | GET | `/api/blocks` | Joueurs bloqués |
 | POST | `/api/blocks` `{playerId}` | Bloquer (supprime amitié / demandes, empêche les nouvelles) |
 | DELETE | `/api/blocks/:playerId` | Débloquer |
+| GET | `/api/me/guild` | Ma guilde + mon grade (`null` si aucune) |
+| GET | `/api/me/guild/requests` | Mes invitations et candidatures en attente |
+| POST | `/api/me/guild/requests/:id/accept` | Accepter une invitation |
+| POST | `/api/me/guild/requests/:id/decline` | Refuser une invitation / retirer une candidature |
+
+### Guildes (`Authorization: Bearer <JWT Keycloak>`) — un joueur appartient à une guilde max
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/guilds?search=&limit=` | Annuaire (nom/tag, nombre de membres) |
+| POST | `/api/guilds` `{name, tag, description?, logoUrl?, recruitment?}` | Créer ; le créateur devient propriétaire avec le grade leader |
+| GET | `/api/guilds/:guildId` | Page publique : guilde, grades, membres + présence |
+| PATCH | `/api/guilds/:guildId` | `manage_guild` — nom, tag, logo, description, `recruitment` ∈ `open\|apply\|closed` |
+| DELETE | `/api/guilds/:guildId` | Dissoudre (propriétaire) |
+| POST | `/api/guilds/:guildId/transfer` `{playerId}` | Transférer la propriété (propriétaire) |
+| GET | `/api/guilds/:guildId/activity?limit=` | Journal interne (membres) |
+| GET | `/api/guilds/:guildId/members` | Membres avec grade et présence |
+| PATCH | `/api/guilds/:guildId/members/:playerId` `{rankId}` | Changer le grade (`manage_members`, grades strictement inférieurs au sien) |
+| DELETE | `/api/guilds/:guildId/members/:playerId` | Quitter (soi-même) ou exclure (`manage_members`) |
+| GET | `/api/guilds/:guildId/ranks` | Grades (priorité décroissante) |
+| POST | `/api/guilds/:guildId/ranks` `{name, priority, permissions[], isDefault?}` | Créer un grade (`manage_ranks`) |
+| PATCH | `/api/guilds/:guildId/ranks/:rankId` | Modifier (`manage_ranks` ; le grade leader n'accepte qu'un renommage) |
+| DELETE | `/api/guilds/:guildId/ranks/:rankId` | Supprimer (membres déplacés vers le grade par défaut) |
+| POST | `/api/guilds/:guildId/join` `{message?}` | Rejoindre directement (`open`) ou candidater (`apply`) |
+| POST | `/api/guilds/:guildId/invitations` `{playerId}` | Inviter (`invite`) |
+| GET | `/api/guilds/:guildId/requests` | Candidatures et invitations en attente (`recruit` ou `invite`) |
+| POST | `/api/guilds/:guildId/requests/:id/accept` | Accepter une candidature (`recruit`) |
+| POST | `/api/guilds/:guildId/requests/:id/decline` | Refuser une candidature (`recruit`) ou retirer une invitation (`invite`) |
+
+Permissions de grade : `manage_guild`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade leader (unique, indélébile) les a toutes. Grades créés par défaut : Leader (100), Officer (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
 
 ### Interne — serveur de jeu (`X-Internal-Key`)
 | Méthode | Route | Description |
@@ -71,6 +100,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
 | POST | `/api/internal/players/:playerId/stats` | `playtimeSecondsDelta, reputationDelta, level, role` |
 | POST | `/api/internal/players/:playerId/activity` `{type, details?}` | Ajouter une entrée d'activité |
+| GET | `/api/internal/players/:playerId/guild` | Guilde et grade d'un joueur (`null` si aucune) |
 | POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | Enregistrer une rencontre (alimente les suggestions) |
 
 ## Structure
@@ -79,7 +109,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity)
+  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, guilds)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT / clé interne), validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
@@ -103,16 +133,16 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [x] Liste d'amis et gestion des invitations
 - [x] Statut en ligne (connecté / mission / hors ligne)
 - [x] Localisation des amis dans l'univers persistant
-- [ ] Invitations contextuelles (groupe, guilde, mission)
+- [~] Invitations contextuelles (groupe, guilde, mission) — guilde faite, groupe/mission à venir
 - [x] Système de recommandations ("joueurs rencontrés récemment")
 
 ### Guildes
-- [ ] Création et gestion de guilde (nom, logo, description, tag)
-- [ ] Système de grades et permissions internes
-- [ ] Page publique de guilde avec présentation et statistiques
-- [ ] Recrutement et gestion des membres
+- [x] Création et gestion de guilde (nom, logo, description, tag)
+- [x] Système de grades et permissions internes
+- [x] Page publique de guilde avec présentation et statistiques
+- [x] Recrutement et gestion des membres
 - [ ] Relations diplomatiques (alliances, trêves, guerres)
-- [ ] Journal d'activité interne (actions, promotions, missions)
+- [x] Journal d'activité interne (actions, promotions, missions)
 - [ ] Système de territoires (stations, flottes, zones contrôlées)
 - [ ] Classements et influence inter-guildes
 
