@@ -1,0 +1,58 @@
+# Local stack: API in watch mode + PostgreSQL. Run from the service root:
+#   docker compose -f docker/docker-compose.yml --env-file .env up
+name: social
+
+services:
+  app:
+    image: node:22
+    command: >
+      sh -c "
+        corepack enable &&
+        corepack prepare pnpm@10 --activate &&
+        pnpm install &&
+        pnpm dev
+      "
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - ..:/app
+    working_dir: /app
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-social}
+      - NODE_ENV=${NODE_ENV:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+
+  postgres:
+    image: postgres:17
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-social}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-social}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  backend:
+    driver: bridge

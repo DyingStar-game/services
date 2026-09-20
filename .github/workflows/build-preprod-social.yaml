@@ -1,0 +1,25 @@
+name: "Build & Deploy to Preprod: social"
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "social/**"
+
+jobs:
+  build:
+    name: Build social (preprod)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: social
+      context_path: social
+      dockerfile_path: social/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/social
+      image_tag: develop
+      chart_name: service-social
+      trigger_preprod_deploy: true
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      KUBERNETES_REPO_TOKEN: ${{ secrets.KUBERNETES_REPO_TOKEN }}

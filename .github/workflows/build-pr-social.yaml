@@ -1,0 +1,18 @@
+name: "PR Build Check: social"
+
+on:
+  pull_request:
+    paths:
+      - "social/**"
+
+jobs:
+  build:
+    name: Build social (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: social
+      context_path: social
+      dockerfile_path: social/docker/Dockerfile
+      image_name: local/social
+      image_tag: pr-check
+      push: false
