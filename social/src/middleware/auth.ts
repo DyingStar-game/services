@@ -16,6 +16,10 @@ export interface AuthenticatedPlayer {
   roles: string[];
 }
 
+/** Moderation roles, lowest to highest; each level implies the ones below. */
+export const MODERATION_ROLES = ['moderator', 'admin', 'supervisor'] as const;
+export type ModerationRole = (typeof MODERATION_ROLES)[number];
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Lazily created so a missing Keycloak does not break startup in dev-bypass mode.
@@ -49,7 +53,8 @@ export async function playerAuth(req: Request, _res: Response, next: NextFunctio
   if (env.authDevBypass) {
     const id = req.header('x-player-id');
     if (id && UUID_RE.test(id)) {
-      req.player = { id, username: req.header('x-player-name') ?? id, roles: [] };
+      const roles = (req.header('x-player-roles') ?? '').split(',').map((r) => r.trim()).filter(Boolean);
+      req.player = { id, username: req.header('x-player-name') ?? id, roles };
       next();
       return;
     }
@@ -75,6 +80,44 @@ export async function playerAuth(req: Request, _res: Response, next: NextFunctio
   } catch {
     next(new HttpError(401, 'UNAUTHORIZED', 'Invalid token'));
   }
+}
+
+/**
+ * Highest moderation role held by a player, or null.
+ * @param player - Authenticated player.
+ * @returns Role.
+ */
+export function moderationRoleOf(player: AuthenticatedPlayer): ModerationRole | null {
+  for (let i = MODERATION_ROLES.length - 1; i >= 0; i--) {
+    if (player.roles.includes(MODERATION_ROLES[i])) return MODERATION_ROLES[i];
+  }
+  return null;
+}
+
+/**
+ * Whether a player holds at least the given moderation role.
+ * @param player - Authenticated player.
+ * @param role - Minimum role.
+ * @returns True if allowed.
+ */
+export function hasRole(player: AuthenticatedPlayer, role: ModerationRole): boolean {
+  const held = moderationRoleOf(player);
+  return held !== null && MODERATION_ROLES.indexOf(held) >= MODERATION_ROLES.indexOf(role);
+}
+
+/**
+ * Middleware requiring at least `role` (after `playerAuth`).
+ * @param role - Minimum moderation role.
+ * @returns Middleware responding 403 otherwise.
+ */
+export function requireRole(role: ModerationRole) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.player || !hasRole(req.player, role)) {
+      next(new HttpError(403, 'FORBIDDEN', `Requires role ${role}`));
+      return;
+    }
+    next();
+  };
 }
 
 /**

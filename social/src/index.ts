@@ -10,6 +10,7 @@ import { testConnection } from './db/connection.js';
 import { runMigrations } from './db/migrate.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { apiRouter } from './routes/index.js';
+import { startRehabilitationScheduler } from './services/reputation.service.js';
 
 const app = express();
 
@@ -42,6 +43,10 @@ async function start(): Promise<void> {
   }
   if (!env.internalApiKey) {
     console.warn('INTERNAL_API_KEY is empty: /api/internal/* will answer 503');
+  }
+
+  if (startRehabilitationScheduler()) {
+    console.log(`Reputation rehabilitation pass every ${env.reputation.rehabIntervalMinutes} min`);
   }
 
   app.listen(env.port, () => {

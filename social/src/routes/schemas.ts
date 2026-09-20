@@ -3,7 +3,16 @@
  */
 import { z } from 'zod';
 
-import { GUILD_PERMISSIONS, GUILD_RECRUITMENT_MODES, PRESENCE_STATUSES } from '../db/schema/index.js';
+import {
+  ESCALATION_LEVELS,
+  GUILD_PERMISSIONS,
+  GUILD_RECRUITMENT_MODES,
+  PRESENCE_STATUSES,
+  REPORT_REASONS,
+  REPORT_STATUSES,
+  REPORT_TARGET_TYPES,
+  SANCTION_TYPES,
+} from '../db/schema/index.js';
 
 export const uuidSchema = z.string().uuid();
 
@@ -54,6 +63,7 @@ export const statsBody = z
   .object({
     playtimeSecondsDelta: z.number().int().min(0).optional(),
     reputationDelta: z.number().int().optional(),
+    reputationReason: z.string().trim().max(128).optional(),
     level: z.number().int().min(0).optional(),
     role: nullableText(64),
   })
@@ -126,3 +136,46 @@ export const rankPatchBody = z
 export const memberRankBody = z.object({ rankId: z.number().int().positive() });
 
 export const joinGuildBody = z.object({ message: z.string().trim().max(500).optional() });
+
+// ── Reputation & moderation ─────────────────────────────────────────────────
+
+export const createReportBody = z.object({
+  targetType: z.enum(REPORT_TARGET_TYPES),
+  targetId: uuidSchema,
+  reason: z.enum(REPORT_REASONS),
+  message: z.string().trim().max(1000).optional(),
+});
+
+export const reportIdParams = z.object({ id: z.coerce.number().int().positive() });
+
+export const reportsQuery = limitQuery.extend({
+  status: z.enum(REPORT_STATUSES).optional(),
+  escalation: z.enum(ESCALATION_LEVELS).optional(),
+  targetPlayerId: uuidSchema.optional(),
+});
+
+export const reportStatusBody = z.object({
+  status: z.enum(['reviewing', 'resolved', 'dismissed']),
+  note: z.string().trim().max(1000).optional(),
+});
+
+export const reputationAdjustBody = z.object({
+  delta: z.number().int().min(-100).max(100).refine((d) => d !== 0, { message: 'delta must not be 0' }),
+  reason: z.string().trim().min(1).max(128),
+});
+
+export const sanctionBody = z.object({
+  type: z.enum(SANCTION_TYPES),
+  reason: z.string().trim().min(1).max(256),
+  durationHours: z.number().int().positive().max(24 * 365).nullable().optional(),
+});
+
+export const sanctionIdParams = z.object({ id: z.coerce.number().int().positive() });
+
+export const sanctionsQuery = limitQuery.extend({
+  playerId: uuidSchema.optional(),
+  active: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+});

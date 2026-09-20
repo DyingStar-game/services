@@ -11,6 +11,8 @@ import { listPlayerRequests, resolvePlayerRequest } from '../services/guildReque
 import { getGuildRefMap, getMembership } from '../services/guilds.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { ensureProfile, updateProfile } from '../services/profiles.service.js';
+import { listReputationEvents } from '../services/reputation.service.js';
+import { listActiveSanctions } from '../services/sanctions.service.js';
 import { limitQuery, profilePatchBody, requestIdParams } from './schemas.js';
 
 /** Router for the current player's profile and history. */
@@ -84,5 +86,30 @@ meRoutes.post(
   asyncHandler(async (req, res) => {
     await resolvePlayerRequest(requirePlayer(req).id, Number(req.params.id), false);
     res.status(204).send();
+  }),
+);
+
+// ── Reputation ──────────────────────────────────────────────────────────────
+
+/** GET /reputation?limit= — Score, history and active sanctions (reachable while sanctioned). */
+meRoutes.get(
+  '/reputation',
+  validate(limitQuery, 'query'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const profile = await ensureProfile(player.id, player.username);
+    const [events, activeSanctions] = await Promise.all([
+      listReputationEvents(player.id, Number(req.query.limit)),
+      listActiveSanctions(player.id),
+    ]);
+    res.json({ reputation: profile.reputation, events, activeSanctions });
+  }),
+);
+
+/** GET /sanctions — My active sanctions (reachable while sanctioned). */
+meRoutes.get(
+  '/sanctions',
+  asyncHandler(async (req, res) => {
+    res.json(await listActiveSanctions(requirePlayer(req).id));
   }),
 );

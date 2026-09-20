@@ -17,10 +17,9 @@ export interface ProfilePatch {
   rpSheet?: RpSheet | null;
 }
 
-/** Stat deltas / values reported by the game server. */
+/** Stat deltas / values reported by the game server (reputation goes through `reputation.service`). */
 export interface StatsUpdate {
   playtimeSecondsDelta?: number;
-  reputationDelta?: number;
   level?: number;
   role?: string | null;
 }
@@ -128,9 +127,6 @@ export async function applyStats(playerId: string, stats: StatsUpdate): Promise<
     .set({
       playtimeSeconds: stats.playtimeSecondsDelta
         ? sql`${playerProfiles.playtimeSeconds} + ${stats.playtimeSecondsDelta}`
-        : undefined,
-      reputation: stats.reputationDelta
-        ? sql`${playerProfiles.reputation} + ${stats.reputationDelta}`
         : undefined,
       level: stats.level,
       role: stats.role,

@@ -33,7 +33,8 @@ curl localhost:3000/api/me -H "X-Player-Id: 11111111-1111-4111-8111-111111111111
 | `DATABASE_URL` | PostgreSQL (obligatoire) |
 | `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE` | Validation des JWT Keycloak (`player_id` = claim `sub`) |
 | `INTERNAL_API_KEY` | Secret attendu dans `X-Internal-Key` sur `/api/internal/*` |
-| `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` sans JWT (dev uniquement) |
+| `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` (+ `X-Player-Name`, `X-Player-Roles`) sans JWT (dev uniquement) |
+| `REPUTATION_*` | Pénalités (blocage, signalement, signalement confirmé), seuils de sanctions automatiques (`WARN_AT`, `MUTE_AT`, `SUSPEND_AT`, `ESCALATE_AT`), durées, réhabilitation (`REHAB_AFTER_DAYS`, `REHAB_STEP`, `REHAB_INTERVAL_MINUTES`) — voir `.env.example` |
 
 ## Endpoints
 
@@ -67,6 +68,12 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | GET | `/api/me/guild/requests` | Mes invitations et candidatures en attente |
 | POST | `/api/me/guild/requests/:id/accept` | Accepter une invitation |
 | POST | `/api/me/guild/requests/:id/decline` | Refuser une invitation / retirer une candidature |
+| GET | `/api/me/reputation?limit=` | Mon score, l'historique des variations et mes sanctions actives (accessible même suspendu) |
+| GET | `/api/me/sanctions` | Mes sanctions actives (accessible même suspendu) |
+| POST | `/api/reports` `{targetType: player\|guild, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
+| GET | `/api/reports?limit=` | Mes signalements |
+
+Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 
 ### Guildes (`Authorization: Bearer <JWT Keycloak>`) — un joueur appartient à une guilde max
 | Méthode | Route | Description |
@@ -93,12 +100,31 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 
 Permissions de grade : `manage_guild`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade leader (unique, indélébile) les a toutes. Grades créés par défaut : Leader (100), Officer (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
 
+### Modération (`Authorization: Bearer` avec rôle Keycloak `moderator` < `admin` < `supervisor`)
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/admin/stats` | Analyse communautaire : joueurs/en ligne, guildes (top 5), signalements par statut, sanctions actives, activité 24h, plus signalés, réputations les plus basses |
+| GET | `/api/admin/log?limit=` | Journal d'audit des actions de modération |
+| GET | `/api/admin/reports?status=&escalation=&targetPlayerId=&limit=` | File des signalements |
+| GET | `/api/admin/reports/:id` | Détail |
+| PATCH | `/api/admin/reports/:id` `{status: reviewing\|resolved\|dismissed, note?}` | `resolved` = signalement confirmé (pénalité `UPHELD_REPORT_PENALTY`), `dismissed` rembourse la pénalité initiale |
+| POST | `/api/admin/reports/:id/escalate` | Escalade d'un niveau (moderator → admin → supervisor) |
+| GET | `/api/admin/players/:playerId` | Fiche : profil, historique de réputation, sanctions, signalements reçus, activité |
+| POST | `/api/admin/players/:playerId/reputation` `{delta, reason}` | Ajustement manuel (**admin**) |
+| POST | `/api/admin/players/:playerId/sanctions` `{type, reason, durationHours?}` | `warning`/`mute` : moderator ; `suspension`/`ban` : **admin** |
+| GET | `/api/admin/sanctions?playerId=&active=&limit=` | Liste des sanctions |
+| DELETE | `/api/admin/sanctions/:id` | Révoquer |
+
+**Réputation** : chaque variation est un événement (`source` ∈ `game, block, report, sanction, moderation, rehabilitation`). Blocage = −`BLOCK_PENALTY` (rendu au déblocage), signalement = −`REPORT_PENALTY`, signalement confirmé = −`UPHELD_REPORT_PENALTY`. Sous les seuils, sanction automatique si aucune du même type n'est active : avertissement (`WARN_AT`), mute `MUTE_HOURS` (`MUTE_AT`), suspension `SUSPEND_HOURS` (`SUSPEND_AT`) ; sous `ESCALATE_AT` un signalement système est ouvert au niveau `admin`. **Réhabilitation** : les joueurs sous 0 sans événement depuis `REHAB_AFTER_DAYS` jours regagnent `REHAB_STEP` point(s) à chaque passe (planifiée en process toutes les `REHAB_INTERVAL_MINUTES` minutes, ou déclenchée via l'API interne).
+
 ### Interne — serveur de jeu (`X-Internal-Key`)
 | Méthode | Route | Description |
 |---|---|---|
 | PUT | `/api/internal/players/:playerId` `{displayName}` | Créer le profil au login (nom existant conservé) |
 | PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
-| POST | `/api/internal/players/:playerId/stats` | `playtimeSecondsDelta, reputationDelta, level, role` |
+| POST | `/api/internal/players/:playerId/stats` | `playtimeSecondsDelta, level, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
+| GET | `/api/internal/players/:playerId/sanctions` | Sanctions actives (pour appliquer mute/ban côté jeu) |
+| POST | `/api/internal/reputation/rehabilitate` | Lancer une passe de réhabilitation |
 | POST | `/api/internal/players/:playerId/activity` `{type, details?}` | Ajouter une entrée d'activité |
 | GET | `/api/internal/players/:playerId/guild` | Guilde et grade d'un joueur (`null` si aucune) |
 | POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | Enregistrer une rencontre (alimente les suggestions) |
@@ -109,9 +135,9 @@ Permissions de grade : `manage_guild`, `manage_ranks`, `manage_members`, `invite
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, guilds)
+  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, guilds, moderation)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
-  middleware/       auth (JWT / clé interne), validate (zod), errorHandler
+  middleware/       auth (JWT / clé interne / rôles), sanctions, validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
   services/         logique métier (une fonction exportée par cas d'usage)
 ```
@@ -126,7 +152,7 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [x] Création et gestion du profil (nom, avatar, faction, biographie)
 - [x] Statistiques personnelles (temps de jeu, niveau, réputation (joueur), rôle, etc.)
 - [x] Historique d'activité
-- [ ] Réputation (joueur) dynamique selon les interactions et signalements
+- [x] Réputation (joueur) dynamique selon les interactions et signalements
 - [x] Fiche RP optionnelle (identité de personnage, histoire, alignement)
 
 ### Relations Sociales
@@ -147,12 +173,12 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [ ] Classements et influence inter-guildes
 
 ### Réputation joueur & Modération
-- [ ] Système de réputation global pour chaque joueur
-- [ ] Signalement d'un joueur ou d'une guilde avec motif
-- [ ] Impact des blocages/ignorances sur la réputation
-- [ ] Sanctions automatiques selon le score de réputation
-- [ ] Escalade automatique vers des instances supérieures
-- [ ] Historique de réputation et mécanisme de réhabilitation
+- [x] Système de réputation global pour chaque joueur
+- [x] Signalement d'un joueur ou d'une guilde avec motif
+- [x] Impact des blocages/ignorances sur la réputation
+- [x] Sanctions automatiques selon le score de réputation
+- [x] Escalade automatique vers des instances supérieures
+- [x] Historique de réputation et mécanisme de réhabilitation
 
 ### API & Intégration
 - [x] API interne connectée au serveur du jeu (mise à jour régulière)
@@ -161,6 +187,6 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [ ] Support des outils externes (bots, extensions, overlays)
 
 ### Administration & Modération
-- [ ] Rôles spécifiques de modération (modérateurs, administrateurs, superviseurs)
-- [ ] Tableau de bord de gestion des signalements et réputations
-- [ ] Outils d'analyse communautaire (activité, interactions, guildes influentes)
+- [x] Rôles spécifiques de modération (modérateurs, administrateurs, superviseurs)
+- [x] Tableau de bord de gestion des signalements et réputations
+- [~] Outils d'analyse communautaire (activité, interactions, guildes influentes) — `GET /api/admin/stats` (base), à enrichir

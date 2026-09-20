@@ -6,8 +6,10 @@ import { and, eq, inArray, or } from 'drizzle-orm';
 import { db } from '../db/connection.js';
 import { friendships, playerBlocks, playerProfiles, type PlayerProfile } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
+import { env } from '../config/env.js';
 import { recordActivity } from './activity.service.js';
 import { requireProfile } from './profiles.service.js';
+import { adjustReputation } from './reputation.service.js';
 
 /**
  * Whether either player has blocked the other.
@@ -65,8 +67,8 @@ export async function listBlocks(playerId: string): Promise<Array<PlayerProfile 
 export async function blockPlayer(blockerId: string, blockedId: string): Promise<void> {
   if (blockerId === blockedId) throw new HttpError(400, 'INVALID_TARGET', 'Cannot block yourself');
   await requireProfile(blockedId);
-  await db.transaction(async (tx) => {
-    await tx.insert(playerBlocks).values({ blockerId, blockedId }).onConflictDoNothing();
+  const inserted = await db.transaction(async (tx) => {
+    const rows = await tx.insert(playerBlocks).values({ blockerId, blockedId }).onConflictDoNothing().returning();
     await tx
       .delete(friendships)
       .where(
@@ -75,8 +77,11 @@ export async function blockPlayer(blockerId: string, blockedId: string): Promise
           inArray(friendships.addresseeId, [blockerId, blockedId]),
         ),
       );
+    return rows.length > 0;
   });
+  if (!inserted) return;
   await recordActivity(blockerId, 'player_blocked', { playerId: blockedId });
+  await adjustReputation(blockedId, -env.reputation.blockPenalty, 'block', 'Blocked by a player', { actorId: blockerId });
 }
 
 /**
@@ -92,6 +97,7 @@ export async function unblockPlayer(blockerId: string, blockedId: string): Promi
     .returning({ blockedId: playerBlocks.blockedId });
   if (deleted.length > 0) {
     await recordActivity(blockerId, 'player_unblocked', { playerId: blockedId });
+    await adjustReputation(blockedId, env.reputation.blockPenalty, 'block', 'Unblocked by a player', { actorId: blockerId });
   }
   return deleted.length > 0;
 }

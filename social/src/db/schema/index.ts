@@ -5,3 +5,4 @@ export * from './blocks.js';
 export * from './encounters.js';
 export * from './activity.js';
 export * from './guilds.js';
+export * from './moderation.js';

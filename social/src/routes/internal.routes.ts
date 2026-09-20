@@ -9,7 +9,9 @@ import { recordActivity } from '../services/activity.service.js';
 import { recordEncounter } from '../services/encounters.service.js';
 import { getMembership } from '../services/guilds.service.js';
 import { setPresence } from '../services/presence.service.js';
-import { applyStats, ensureProfile } from '../services/profiles.service.js';
+import { applyStats, ensureProfile, getProfile } from '../services/profiles.service.js';
+import { adjustReputation, rehabilitate } from '../services/reputation.service.js';
+import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
   activityBody,
   encounterBody,
@@ -48,7 +50,14 @@ internalRoutes.post(
   validate(playerIdParams, 'params'),
   validate(statsBody),
   asyncHandler(async (req, res) => {
-    res.json(await applyStats(req.params.playerId, req.body));
+    const { reputationDelta, reputationReason, ...stats } = req.body;
+    const profile = Object.keys(stats).length ? await applyStats(req.params.playerId, stats) : await getProfile(req.params.playerId);
+    if (reputationDelta) {
+      const reputation = await adjustReputation(req.params.playerId, reputationDelta, 'game', reputationReason ?? 'Game event');
+      res.json({ ...profile, reputation });
+      return;
+    }
+    res.json(profile);
   }),
 );
 
@@ -70,6 +79,23 @@ internalRoutes.get(
   asyncHandler(async (req, res) => {
     const membership = await getMembership(req.params.playerId);
     res.json(membership ? { ...membership.guild, rank: membership.rank } : null);
+  }),
+);
+
+/** GET /players/:playerId/sanctions — Active sanctions (for the game server to enforce mutes/bans). */
+internalRoutes.get(
+  '/players/:playerId/sanctions',
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await listActiveSanctions(req.params.playerId));
+  }),
+);
+
+/** POST /reputation/rehabilitate — Run one rehabilitation pass now. */
+internalRoutes.post(
+  '/reputation/rehabilitate',
+  asyncHandler(async (_req, res) => {
+    res.json({ rehabilitated: await rehabilitate() });
   }),
 );
 
