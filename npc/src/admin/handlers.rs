@@ -20,8 +20,23 @@ pub async fn list_npcs(State(mgr): State<Arc<NpcManager>>) -> Json<Value> {
         "npcs": specs.iter().map(|s| json!({
             "name": s.name,
             "actions": s.action_profile,
+            "schedule": s.schedule,
         })).collect::<Vec<_>>(),
     }))
+}
+
+/// Current planetary time and scheduled activity for every NPC — for verifying
+/// the rota as the 25 h day drifts against real time.
+pub async fn schedule_status(State(mgr): State<Arc<NpcManager>>) -> Json<Value> {
+    let reports = mgr.schedule_status().await;
+    Json(json!({ "count": reports.len(), "npcs": reports }))
+}
+
+/// What each NPC sees on its workplace object — the replicated properties every
+/// depot behaviour gates on. First stop when an NPC is idle at its post.
+pub async fn world_status(State(mgr): State<Arc<NpcManager>>) -> Json<Value> {
+    let reports = mgr.world_status().await;
+    Json(json!({ "count": reports.len(), "npcs": reports }))
 }
 
 pub async fn create_npc(

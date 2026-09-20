@@ -34,6 +34,18 @@ pub enum NpcStatus {
     Driving,
     /// Heading home.
     GoingHome,
+    /// Walking to the common zone for a meal.
+    GoingToMeal,
+    /// Eating in the common zone (schedule activity `r`).
+    AtMeal,
+    /// Walking to the mandatory-activities area.
+    GoingToMandatory,
+    /// Doing mandatory activities — medical / RH / cleaning / chores (`a`).
+    DoingMandatory,
+    /// Strolling toward a random point picked nearby (`take_a_walk`).
+    Walking,
+    /// Standing at the point a stroll reached, before setting off again.
+    WalkPause,
 }
 
 impl Default for NpcStatus {

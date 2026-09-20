@@ -159,6 +159,8 @@ mod tests {
             state: Arc::new(NpcState::new()),
             send: HorizonSender::__test_new(tx),
             rng: StdRng::seed_from_u64(0),
+            allowed_actions: None,
+            depot_role: crate::depot::DepotRole::Uncoordinated,
         };
         (ctx, rx)
     }

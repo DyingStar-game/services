@@ -8,7 +8,10 @@ use tracing::{debug, info, warn};
 
 use super::{
     Action, ActionContext, ActionTiming, depot_common::*,
-    depot_store_reception_to_temp_area::BOX_IN_HANDS_KEY as RECEPTION_BOX_IN_HANDS_KEY,
+    depot_store_reception_to_temp_area::{
+        BOX_IN_HANDS_KEY as RECEPTION_BOX_IN_HANDS_KEY,
+        RETURN_HOME_KEY as RECEPTION_RETURN_HOME_KEY, counter_box_is_fresh, reception_idle,
+    },
 };
 use crate::{
     error::Result,
@@ -725,6 +728,35 @@ impl Action for DepotStoreItem {
         if box_in_hands(ctx).is_some() {
             return true;
         }
+        // Reception role split: the reception owner only HELPS stock when it has
+        // nothing to receive — no waiting player, no counter box — and is not
+        // mid walk-back to its reception spot. Stockers and uncoordinated NPCs
+        // stock as usual. (Placed after the in-hands check so a role flip while
+        // carrying a shelf box never strands it.)
+        if let Some(depot) = &self.work_uuid {
+            match ctx.depot_role {
+                crate::depot::DepotRole::Reception => {
+                    if ctx.state.get(RECEPTION_RETURN_HOME_KEY).is_some() {
+                        return false;
+                    }
+                    if !reception_idle(ctx, depot) {
+                        return false;
+                    }
+                }
+                // A box that just landed on the counter is the reception NPC's
+                // to take, but the stocker must not disappear into a shelf carry
+                // meanwhile: if the reception NPC does not collect it, the
+                // stocker takes over as soon as the grace passes
+                // (`depot_store_reception_to_temp_area`, priority 95), and the
+                // box would otherwise wait out a whole carry first.
+                crate::depot::DepotRole::Stocker => {
+                    if counter_box_is_fresh(ctx, depot) {
+                        return false;
+                    }
+                }
+                crate::depot::DepotRole::Uncoordinated => {}
+            }
+        }
         // Shelf availability is deliberately NOT checked here (can_run is
         // polled every tick); `run` checks it before grabbing anything.
         self.takeable_temp_box(ctx).is_some()
@@ -820,6 +852,8 @@ mod tests {
             state: Arc::new(NpcState::new()),
             send: HorizonSender::__test_new(tx),
             rng: StdRng::seed_from_u64(0),
+            allowed_actions: None,
+            depot_role: crate::depot::DepotRole::Uncoordinated,
         };
         (ctx, rx)
     }
@@ -1141,6 +1175,100 @@ mod tests {
         let (ctx, _rx) = dummy_ctx(world);
         ctx.state.set_status(NpcStatus::AtWork);
         assert!(!action().can_run(&ctx));
+    }
+
+    #[test]
+    fn reception_owner_only_helps_stock_when_reception_is_idle() {
+        use crate::depot::DepotRole;
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&depot_frame(json!({"zone_0": [ITEM]})));
+        world.apply(&item_frame(ITEM, (-4.5, 0.5, 9.4)));
+        let (mut ctx, _rx) = dummy_ctx(Arc::clone(&world));
+        ctx.state.set_status(NpcStatus::AtWork);
+
+        // Reception owner, counter idle: it helps stock.
+        ctx.depot_role = DepotRole::Reception;
+        assert!(action().can_run(&ctx));
+
+        // A box lands on the reception counter: reception is no longer idle, so
+        // the owner stops stocking and tends the counter instead.
+        world.apply(&GorcFrame {
+            kind: GorcKind::UpdateProperty,
+            channel: 0,
+            object_id: DEPOT.into(),
+            object_type: "cargo_depot".into(),
+            player_id: None,
+            timestamp: None,
+            sub_event: None,
+            data: json!({ "pnj_reception_deposited_item": ["box-9"] }),
+        });
+        assert!(!action().can_run(&ctx));
+
+        // Counter cleared again -> back to helping.
+        world.apply(&GorcFrame {
+            kind: GorcKind::UpdateProperty,
+            channel: 0,
+            object_id: DEPOT.into(),
+            object_type: "cargo_depot".into(),
+            player_id: None,
+            timestamp: None,
+            sub_event: None,
+            data: json!({ "pnj_reception_deposited_item": [] }),
+        });
+        assert!(action().can_run(&ctx));
+
+        // But not while it still owes the walk back to its reception spot.
+        ctx.state.set(
+            crate::actions::depot_store_reception_to_temp_area::RETURN_HOME_KEY,
+            json!(true),
+        );
+        assert!(!action().can_run(&ctx));
+        ctx.state
+            .remove(crate::actions::depot_store_reception_to_temp_area::RETURN_HOME_KEY);
+
+        // A stocker stocks while the counter is empty.
+        ctx.depot_role = DepotRole::Stocker;
+        assert!(action().can_run(&ctx));
+    }
+
+    #[test]
+    fn stocker_waits_out_a_fresh_deposit_instead_of_starting_a_carry() {
+        use crate::depot::DepotRole;
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&depot_frame(json!({"zone_0": [ITEM]})));
+        world.apply(&item_frame(ITEM, (-4.5, 0.5, 9.4)));
+        let (mut ctx, _rx) = dummy_ctx(Arc::clone(&world));
+        ctx.state.set_status(NpcStatus::AtWork);
+        ctx.depot_role = DepotRole::Stocker;
+        assert!(action().can_run(&ctx));
+
+        // A box lands on the counter. The stocker holds off: a shelf carry runs
+        // far longer than the grace, so starting one now would leave the box
+        // waiting even after the reception NPC has visibly failed to take it.
+        world.apply(&GorcFrame {
+            kind: GorcKind::UpdateProperty,
+            channel: 0,
+            object_id: DEPOT.into(),
+            object_type: "cargo_depot".into(),
+            player_id: None,
+            timestamp: None,
+            sub_event: None,
+            data: json!({ "pnj_reception_deposited_item": ["box-9"] }),
+        });
+        assert!(!action().can_run(&ctx));
+
+        // Once the grace passes the counter is the stocker's to clear, and
+        // `depot_store_reception_to_temp_area` (priority 95) outranks stocking —
+        // so this action is eligible again rather than deadlocked on a box
+        // nobody accepts.
+        {
+            let mut depot = world.objects.get_mut(DEPOT).unwrap();
+            let then = std::time::Instant::now() - Duration::from_secs(30);
+            depot
+                .props_changed_at
+                .insert("pnj_reception_deposited_item".into(), then);
+        }
+        assert!(action().can_run(&ctx));
     }
 
     #[test]

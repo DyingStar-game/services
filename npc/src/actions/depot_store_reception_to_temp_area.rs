@@ -16,6 +16,12 @@ use crate::{
 /// How often the NPC checks the reception counter while at work.
 const CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long a box must have sat on the reception counter before a *stocker*
+/// takes it over. Long enough for the reception NPC to have set off (it acts on
+/// the very next tick), short enough that a box is never left waiting out a
+/// whole shelf carry because that NPC is mid-carry, away, or absent.
+const STOCKER_GRACE: Duration = Duration::from_secs(6);
+
 /// Depot property carrying what is currently deposited on the reception
 /// counter: an array of item UUIDs (a bare string is treated as one item).
 const DEPOSITED_PROP: &str = "pnj_reception_deposited_item";
@@ -61,8 +67,10 @@ pub const BOX_IN_HANDS_KEY: &str = "depot_store_reception_box_in_hands";
 
 /// Blackboard flag set once a carry is done, asking the NPC to walk back to its
 /// `place_where_work` spot (where players expect to find it) instead of
-/// lingering at the temp area. Cleared once the walk finishes.
-const RETURN_HOME_KEY: &str = "depot_store_reception_return_home";
+/// lingering at the temp area. Cleared once the walk finishes. `pub(crate)` so
+/// `depot_store_item` can tell a reception NPC not to wander off stocking while
+/// it still owes this walk back.
+pub(crate) const RETURN_HOME_KEY: &str = "depot_store_reception_return_home";
 
 /// What the NPC says when more than one item sits on the counter.
 const ONLY_ONE_OBJECT: &str = "Please, put only 1 object";
@@ -713,6 +721,53 @@ fn box_in_hands(ctx: &ActionContext) -> Option<String> {
         .and_then(|v| v.as_str().map(str::to_string))
 }
 
+/// Whether the depot's reception has nothing pending: no player waiting at the
+/// counter and no (non-empty) box on it. `true` when the depot is not in view.
+/// Read by `depot_store_item` so the reception owner only helps stock when it
+/// has nothing to receive (`pub(crate)`; the property names live here).
+pub(crate) fn reception_idle(ctx: &ActionContext, depot_uuid: &str) -> bool {
+    let Some(depot) = ctx.world.objects.get(depot_uuid) else {
+        return true;
+    };
+    let players_waiting = depot
+        .property(RECEPTION_PLAYERS_PROP)
+        .and_then(Value::as_array)
+        .is_some_and(|a| !a.is_empty());
+    if players_waiting {
+        return false;
+    }
+    !counter_has_box(ctx, depot_uuid)
+}
+
+/// Whether a box is sitting on the depot's reception counter. `false` when the
+/// depot is not in view.
+pub(crate) fn counter_has_box(ctx: &ActionContext, depot_uuid: &str) -> bool {
+    let Some(depot) = ctx.world.objects.get(depot_uuid) else {
+        return false;
+    };
+    match depot.property(DEPOSITED_PROP) {
+        Some(Value::Array(a)) => a.iter().any(|v| v.as_str().is_some_and(|s| !s.is_empty())),
+        Some(Value::String(s)) => !s.is_empty(),
+        _ => false,
+    }
+}
+
+/// Whether a box on the counter is still the reception NPC's to take: it landed
+/// less than [`STOCKER_GRACE`] ago. Read by `depot_store_item` so a stocker
+/// waits that window out instead of vanishing into another shelf carry — and,
+/// once it passes, stops waiting even if nobody ever takes the box (a type the
+/// depot refuses stays on the counter for good).
+pub(crate) fn counter_box_is_fresh(ctx: &ActionContext, depot_uuid: &str) -> bool {
+    if !counter_has_box(ctx, depot_uuid) {
+        return false;
+    }
+    ctx.world
+        .objects
+        .get(depot_uuid)
+        .and_then(|d| d.property_age(DEPOSITED_PROP))
+        .is_some_and(|age| age < STOCKER_GRACE)
+}
+
 #[async_trait]
 impl Action for DepotStoreReceptionToTempArea {
     fn name(&self) -> &'static str {
@@ -750,6 +805,19 @@ impl Action for DepotStoreReceptionToTempArea {
         // its work spot.
         if ctx.state.get(RETURN_HOME_KEY).is_some() {
             return true;
+        }
+        // Reception role split: the counter belongs to the reception NPC, so a
+        // stocker leaves a fresh deposit alone — that is what keeps the two from
+        // walking to the same box. It DOES step in once the box has sat there
+        // for `STOCKER_GRACE` without being taken: the reception NPC is then
+        // mid-carry, off at a meal, or simply not there, and a box waiting on
+        // the counter outranks tidying the temp zone. The in-flight-carry
+        // exceptions above win first, so a role flip mid-carry never strands a
+        // box.
+        if ctx.depot_role == crate::depot::DepotRole::Stocker
+            && counter_box_is_fresh(ctx, self.work_uuid.as_deref().unwrap_or_default())
+        {
+            return false;
         }
         // Otherwise only with box types configured, and only when the deposit
         // changed since the last check.
@@ -882,6 +950,8 @@ mod tests {
             state: Arc::new(NpcState::new()),
             send: HorizonSender::__test_new(tx),
             rng: StdRng::seed_from_u64(0),
+            allowed_actions: None,
+            depot_role: crate::depot::DepotRole::Uncoordinated,
         };
         (ctx, rx)
     }
@@ -1065,6 +1135,76 @@ mod tests {
         let (ctx, _rx) = dummy_ctx(world);
         ctx.state.set_status(NpcStatus::AtWork);
         assert!(!action().can_run(&ctx));
+    }
+
+    /// Backdate the depot's deposit property so the box reads as having sat on
+    /// the counter for `age` (the stamps are `std::time::Instant`, which no test
+    /// clock can fast-forward).
+    fn age_deposit(world: &WorldView, age: Duration) {
+        let mut depot = world.objects.get_mut(DEPOT).unwrap();
+        let then = std::time::Instant::now() - age;
+        depot.props_changed_at.insert(DEPOSITED_PROP.into(), then);
+    }
+
+    #[test]
+    fn stocker_leaves_a_fresh_deposit_but_still_finishes_an_in_flight_carry() {
+        use crate::depot::DepotRole;
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&depot_frame(json!([ITEM])));
+        world.apply(&item_frame(ITEM, "hauling_box.tscn", (1.0, 0.5, 0.0)));
+        let (mut ctx, _rx) = dummy_ctx(world);
+        ctx.state.set_status(NpcStatus::AtWork);
+        let a = action();
+
+        // Baseline (uncoordinated / reception): a fresh deposit triggers.
+        assert!(a.can_run(&ctx));
+
+        // A stocker leaves a box that just landed to the reception NPC.
+        ctx.depot_role = DepotRole::Stocker;
+        assert!(!a.can_run(&ctx));
+
+        // ...unless it is mid reception carry (role flipped while holding a box):
+        // it must finish, so the in-flight-carry exception still wins.
+        ctx.state.set(BOX_IN_HANDS_KEY, json!(ITEM));
+        assert!(a.can_run(&ctx));
+        ctx.state.remove(BOX_IN_HANDS_KEY);
+
+        // ...or still owes the walk back after a carry.
+        ctx.state.set(RETURN_HOME_KEY, json!(true));
+        assert!(a.can_run(&ctx));
+    }
+
+    #[test]
+    fn stocker_takes_over_a_deposit_nobody_collected() {
+        use crate::depot::DepotRole;
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&depot_frame(json!([ITEM])));
+        world.apply(&item_frame(ITEM, "hauling_box.tscn", (1.0, 0.5, 0.0)));
+        let (mut ctx, _rx) = dummy_ctx(world);
+        ctx.state.set_status(NpcStatus::AtWork);
+        ctx.depot_role = DepotRole::Stocker;
+        let a = action();
+
+        // Just deposited: the reception NPC's box.
+        assert!(!a.can_run(&ctx));
+        assert!(counter_box_is_fresh(&ctx, DEPOT));
+
+        // Still there once the grace has passed — the reception NPC is mid-carry,
+        // away, or gone. The stocker takes it rather than leave it on the counter.
+        age_deposit(&ctx.world, STOCKER_GRACE + Duration::from_secs(1));
+        assert!(!counter_box_is_fresh(&ctx, DEPOT));
+        assert!(a.can_run(&ctx));
+    }
+
+    #[test]
+    fn an_empty_counter_is_never_fresh() {
+        // Otherwise a stocker would hold off from stocking forever on a depot
+        // whose deposit property simply has not changed in a long time.
+        let world = Arc::new(WorldView::new("me".into()));
+        world.apply(&depot_frame(json!([])));
+        let (ctx, _rx) = dummy_ctx(world);
+        assert!(!counter_has_box(&ctx, DEPOT));
+        assert!(!counter_box_is_fresh(&ctx, DEPOT));
     }
 
     #[test]

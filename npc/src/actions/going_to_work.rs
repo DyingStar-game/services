@@ -1,28 +1,61 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
-use super::{Action, ActionContext};
+use super::{Action, ActionContext, trip::TripWatch};
 use crate::{error::Result, npc::spec::PlaceWhereWork, npc::state::NpcStatus};
 
 /// Walks an NPC from its habitation to its `place_where_work` and completes the
 /// trip when the server reports arrival.
 ///
 /// Lifecycle, driven by [`NpcStatus`]:
-/// - `AtHome` (set at spawn for a working NPC): dispatch the go-to-position
-///   command and advance to `GoingToWork`.
+/// - any settled status other than `AtWork`/`GoingToWork` (`AtHome` at spawn,
+///   or `AtMeal`/`DoingMandatory`/`GoingHome` when a work window follows a
+///   break): dispatch the go-to-position command and advance to `GoingToWork`.
 /// - `GoingToWork`: wait until the server sets the `npc_arrived` player
 ///   property, then acknowledge it and advance to `AtWork`.
+/// - `AtWork`: nothing to do.
+///
+/// Because it resumes work from *any* non-work status, it is the universal
+/// "return to work" behaviour — the shift schedule only makes it *eligible*
+/// during `T`/`t` windows, so it never fights the break behaviours.
 ///
 /// State is rebuilt per Horizon session, so a reconnected NPC (respawned back
 /// in its habitation as `AtHome`) is sent to work again.
 pub struct GoingToWork {
     place: Option<PlaceWhereWork>,
+    /// Watchdog over the walk in flight: the server may never answer with
+    /// `npc_arrived` (a dropped order, or no path out of the habitation the NPC
+    /// spawned in), and without this the NPC would wait for it all shift.
+    trip: TripWatch,
 }
 
 impl GoingToWork {
     pub fn new(place: Option<PlaceWhereWork>) -> Self {
-        Self { place }
+        Self {
+            place,
+            trip: TripWatch::new(),
+        }
+    }
+
+    /// Send the NPC to `place` and start the arrival watchdog.
+    async fn dispatch(&self, ctx: &mut ActionContext, place: &PlaceWhereWork) -> Result<()> {
+        // A stale `npc_arrived: true` persisted from a previous session
+        // replicates with the spawn data and would complete this trip
+        // instantly, leaving the NPC standing at home while believing
+        // it is at work. Reset it on the server (the ack clears and
+        // re-replicates it) and locally before walking.
+        ctx.send
+            .send("player", "client_action", arrived_ack_data(place))
+            .await?;
+        ctx.world.clear_arrived();
+        ctx.send
+            .send("player", "client_action", go_to_work_data(place))
+            .await?;
+        self.trip.dispatched();
+        // Now travelling; `whereami` is effectively "travel to work".
+        ctx.state.set_status(NpcStatus::GoingToWork);
+        Ok(())
     }
 }
 
@@ -44,12 +77,15 @@ impl Action for GoingToWork {
             return false;
         }
         match ctx.state.status() {
-            // Ready to leave home.
-            NpcStatus::AtHome => true,
-            // En route: only act once the server says we've arrived. Otherwise
-            // yield the slot so other actions can run during the trip.
-            NpcStatus::GoingToWork => ctx.world.npc_arrived(),
-            _ => false,
+            // Already at work: nothing to do.
+            NpcStatus::AtWork => false,
+            // En route: act once the server says we've arrived — or once it has
+            // stayed silent long enough that the trip is presumed lost, so it
+            // can be re-dispatched. Otherwise yield the slot so other actions
+            // still run during the trip.
+            NpcStatus::GoingToWork => ctx.world.npc_arrived() || self.trip.timed_out(),
+            // Any other settled status (home, meal, mandatory, …): go to work.
+            _ => true,
         }
     }
 
@@ -58,35 +94,36 @@ impl Action for GoingToWork {
             return Ok(());
         };
         match ctx.state.status() {
-            NpcStatus::AtHome => {
+            // Already at work: nothing to do.
+            NpcStatus::AtWork => {}
+            // Travelling: complete the trip once the server reports arrival.
+            NpcStatus::GoingToWork => {
+                if ctx.world.npc_arrived() {
+                    info!(npc = %ctx.npc_name, place = %place.uuid, "arrived at work");
+                    ctx.send
+                        .send("player", "client_action", arrived_ack_data(place))
+                        .await?;
+                    // Drop the local flag so a stale echo cannot re-ack, and
+                    // settle into the workplace.
+                    ctx.world.clear_arrived();
+                    self.trip.arrived();
+                    ctx.state.set_status(NpcStatus::AtWork);
+                } else {
+                    warn!(
+                        npc = %ctx.npc_name,
+                        place = %place.uuid,
+                        waiting_s = self.trip.waiting_s(),
+                        my_parent = ?ctx.world.my_parent(),
+                        "no arrival notice; asking to walk to work again"
+                    );
+                    self.dispatch(ctx, place).await?;
+                }
+            }
+            // Any other settled status: dispatch to work.
+            _ => {
                 info!(npc = %ctx.npc_name, place = %place.uuid, "going to work");
-                // A stale `npc_arrived: true` persisted from a previous session
-                // replicates with the spawn data and would complete this trip
-                // instantly, leaving the NPC standing at home while believing
-                // it is at work. Reset it on the server (the ack clears and
-                // re-replicates it) and locally before walking.
-                ctx.send
-                    .send("player", "client_action", arrived_ack_data(place))
-                    .await?;
-                ctx.world.clear_arrived();
-                ctx.send
-                    .send("player", "client_action", go_to_work_data(place))
-                    .await?;
-                // Now travelling; `whereami` is effectively "travel to work".
-                ctx.state.set_status(NpcStatus::GoingToWork);
+                self.dispatch(ctx, place).await?;
             }
-            NpcStatus::GoingToWork if ctx.world.npc_arrived() => {
-                info!(npc = %ctx.npc_name, place = %place.uuid, "arrived at work");
-                ctx.send
-                    .send("player", "client_action", arrived_ack_data(place))
-                    .await?;
-                // Drop the local flag so a stale echo cannot re-ack, and settle
-                // into the workplace.
-                ctx.world.clear_arrived();
-                ctx.state.set_status(NpcStatus::AtWork);
-            }
-            // Nothing to do (still travelling, or already at work).
-            _ => {}
         }
         Ok(())
     }
@@ -145,6 +182,8 @@ mod tests {
             state: Arc::new(NpcState::new()),
             send: HorizonSender::__test_new(tx),
             rng: StdRng::seed_from_u64(0),
+            allowed_actions: None,
+            depot_role: crate::depot::DepotRole::Uncoordinated,
         };
         (ctx, rx)
     }
@@ -195,12 +234,16 @@ mod tests {
     }
 
     #[test]
-    fn dispatches_only_from_at_home() {
+    fn dispatches_from_any_non_work_status() {
         let (ctx, _rx) = dummy_ctx();
         let a = GoingToWork::new(Some(place()));
-        // Idle at construction: nothing to do until spawned at home.
-        assert!(!a.can_run(&ctx));
+        // Dispatches from home…
         ctx.state.set_status(NpcStatus::AtHome);
+        assert!(a.can_run(&ctx));
+        // …and when resuming work after a break (meal / mandatory).
+        ctx.state.set_status(NpcStatus::AtMeal);
+        assert!(a.can_run(&ctx));
+        ctx.state.set_status(NpcStatus::DoingMandatory);
         assert!(a.can_run(&ctx));
     }
 
@@ -298,5 +341,42 @@ mod tests {
         // Already at work: further runs are no-ops.
         a.run(&mut ctx).await.unwrap();
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_trip_is_dispatched_again() {
+        // `npc_go_to_position` is fire-and-forget: when the server never answers
+        // with `npc_arrived` (a dropped order, or no path out of the habitation
+        // the NPC spawned in), the NPC used to wait for it for the whole shift.
+        let (mut ctx, mut rx) = dummy_ctx();
+        ctx.state.set_status(NpcStatus::AtHome);
+        let a = GoingToWork::new(Some(place()));
+
+        a.run(&mut ctx).await.unwrap();
+        assert_eq!(ctx.state.status(), NpcStatus::GoingToWork);
+        while rx.try_recv().is_ok() {}
+
+        // Mid-trip with no arrival notice: stand down, the walk is under way.
+        assert!(!a.can_run(&ctx));
+
+        // Still nothing after the timeout: walk to work again rather than wait
+        // on a flag that is not coming.
+        a.trip.age_by(crate::actions::trip::ARRIVAL_TIMEOUT);
+        assert!(a.can_run(&ctx));
+        a.run(&mut ctx).await.unwrap();
+        let ack = rx.try_recv().unwrap();
+        assert_eq!(ack["data"]["action"], json!("npc_arrived_ack"));
+        let go = rx.try_recv().unwrap();
+        assert_eq!(go["data"]["action"], json!("npc_go_to_position"));
+        assert_eq!(ctx.state.status(), NpcStatus::GoingToWork);
+
+        // The retry restarts the clock: no second re-dispatch straight away.
+        assert!(!a.can_run(&ctx));
+
+        // And a real arrival still wins over the watchdog.
+        mark_arrived(&ctx);
+        assert!(a.can_run(&ctx));
+        a.run(&mut ctx).await.unwrap();
+        assert_eq!(ctx.state.status(), NpcStatus::AtWork);
     }
 }

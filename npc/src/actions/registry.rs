@@ -55,6 +55,43 @@ impl ActionRegistry {
                 spec.place_where_work.as_ref().map(|p| p.uuid.clone()),
                 spec.depot_store_item.clone(),
             )),
+            Arc::new(super::depot_reception_coordinator::DepotReceptionCoordinator::new(
+                spec.place_where_work.as_ref().map(|p| p.uuid.clone()),
+            )),
+            // Schedule-driven "go to place and idle" behaviours (MVP). Each is
+            // only eligible during its activity window; priority 120 sits above
+            // greeting (100) so travel happens before ambient chatter, and below
+            // going_to_work (200).
+            //
+            // `go_home` defaults to the NPC's remembered spawn position (an NPC
+            // spawns in its habitation), so `home` in the roster is an optional
+            // override, not a requirement.
+            Arc::new(super::go_to_place::GoToPlace::new(
+                "go_home",
+                match spec.home.clone() {
+                    Some(p) => super::go_to_place::PlaceTarget::Configured(Some(p)),
+                    None => super::go_to_place::PlaceTarget::SpawnHome,
+                },
+                crate::npc::state::NpcStatus::GoingHome,
+                crate::npc::state::NpcStatus::AtHome,
+                120,
+            )),
+            Arc::new(super::go_to_place::GoToPlace::new(
+                "go_to_meal",
+                super::go_to_place::PlaceTarget::Configured(spec.meal_place.clone()),
+                crate::npc::state::NpcStatus::GoingToMeal,
+                crate::npc::state::NpcStatus::AtMeal,
+                120,
+            )),
+            Arc::new(super::go_to_place::GoToPlace::new(
+                "mandatory_activity",
+                super::go_to_place::PlaceTarget::Configured(spec.mandatory_place.clone()),
+                crate::npc::state::NpcStatus::GoingToMandatory,
+                crate::npc::state::NpcStatus::DoingMandatory,
+                120,
+            )),
+            // Ambient strolling: hop to a random point nearby, pause, repeat.
+            Arc::new(super::take_a_walk::TakeAWalk::new(spec.take_a_walk.clone())),
             Arc::new(super::drive_truck::DriveTruck),
             Arc::new(super::check_vehicle_components::CheckVehicleComponents),
             Arc::new(super::go_sell_object::GoSellObject),
@@ -103,13 +140,21 @@ impl ActionRegistry {
         true
     }
 
-    /// Choose the highest-priority action that is both past its timing gates
-    /// and whose `can_run` returns true.
+    /// Choose the highest-priority action that is past its timing gates, is
+    /// permitted by the shift schedule (when one is active), and whose `can_run`
+    /// returns true.
     pub fn pick(&self, ctx: &ActionContext) -> Option<Arc<dyn Action>> {
         let now = Instant::now();
         self.entries
             .iter()
             .filter(|e| Self::timing_ok(e, now))
+            // Shift-schedule gate: when `allowed_actions` is set, only actions
+            // the current planetary hour permits are eligible. `None` = no
+            // schedule, so nothing is gated.
+            .filter(|e| match &ctx.allowed_actions {
+                Some(allowed) => allowed.contains(e.action.name()),
+                None => true,
+            })
             .filter(|e| e.action.can_run(ctx))
             .max_by_key(|e| e.action.priority())
             .map(|e| Arc::clone(&e.action))
@@ -196,6 +241,8 @@ mod tests {
             state: Arc::new(NpcState::new()),
             send: HorizonSender::__test_new(tx),
             rng: StdRng::seed_from_u64(0),
+            allowed_actions: None,
+            depot_role: crate::depot::DepotRole::Uncoordinated,
         }
     }
 
@@ -230,6 +277,27 @@ mod tests {
             reg.pick(&ctx).is_none(),
             "still within cooldown of last finish"
         );
+    }
+
+    #[test]
+    fn schedule_gate_filters_out_disallowed_actions() {
+        use std::collections::HashSet;
+        let reg = registry_with(Dummy {
+            name: "work",
+            timing: ActionTiming::default(),
+        });
+        let mut ctx = dummy_ctx();
+
+        // No schedule => eligible.
+        assert!(reg.pick(&ctx).is_some());
+
+        // Schedule allows a different action => filtered out.
+        ctx.allowed_actions = Some(HashSet::from(["go_home".to_string()]));
+        assert!(reg.pick(&ctx).is_none());
+
+        // Schedule allows this action => eligible again.
+        ctx.allowed_actions = Some(HashSet::from(["work".to_string()]));
+        assert!(reg.pick(&ctx).is_some());
     }
 
     #[test]

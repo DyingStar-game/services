@@ -46,6 +46,15 @@ impl WorldView {
         !self.players.is_empty()
     }
 
+    /// The latest line `uuid` is heard saying, with when it was heard — the
+    /// replicated `conversation` property of a nearby entity (player or NPC).
+    /// `None` when that entity is not in view or is not currently saying
+    /// anything. Lets an NPC react to a co-worker it overhears.
+    pub fn heard_from(&self, uuid: &str) -> Option<(String, Instant)> {
+        let ps = self.players.get(uuid)?;
+        Some((ps.conversation.clone()?, ps.conversation_at?))
+    }
+
     /// This NPC's own position, or `None` if Horizon has not echoed one back
     /// yet. Callers must not substitute the origin: world coordinates are far
     /// from `(0,0,0)`, so a wrong reference point silently breaks distances.
@@ -311,6 +320,18 @@ fn apply_player_data(ps: &mut PlayerState, frame: &GorcFrame) {
     if let Some(r) = parse_vec3(&frame.data, "rotation") {
         ps.rotation = r;
     }
+    // A spoken line replicates as `{"conversation": <text>}` on the speaker's
+    // player channel (200 m); `null`/empty clears it once it has been shown.
+    // Retaining it is what lets an NPC hear a nearby peer.
+    if let Some(c) = frame.data.get("conversation") {
+        match c.as_str() {
+            Some(text) if !text.is_empty() => {
+                ps.conversation = Some(text.to_string());
+                ps.conversation_at = Some(Instant::now());
+            }
+            _ => ps.conversation = None,
+        }
+    }
     ps.last_seen = Instant::now();
 }
 
@@ -334,7 +355,14 @@ fn apply_object_data(o: &mut ObjectState, frame: &GorcFrame) {
     // Merge, don't replace: a frame overwrites only the keys it carries, and
     // the newest frame wins for each key regardless of its channel.
     if let Some(obj) = frame.data.as_object() {
+        let now = Instant::now();
         for (k, v) in obj {
+            // Stamp only the keys whose VALUE moved, so `property_age` measures
+            // how long the current value has held rather than how recently the
+            // object replicated (which is every frame, for every key it carries).
+            if o.props.get(k) != Some(v) {
+                o.props_changed_at.insert(k.clone(), now);
+            }
             o.props.insert(k.clone(), v.clone());
         }
     }

@@ -71,6 +71,27 @@ pub struct DepotStoreItemConfig {
     pub stand_distance_m: Option<f64>,
 }
 
+/// Per-NPC configuration of the `take_a_walk` action.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TakeAWalkConfig {
+    /// Radius (metres) of the disc, centred on the NPC, each next point is
+    /// drawn from. `None` = the code default (100 m).
+    #[serde(default)]
+    pub radius_m: Option<f64>,
+
+    /// Seconds the NPC stands at a reached point before setting off again.
+    /// `None` = the code default (30 s).
+    #[serde(default)]
+    pub pause_s: Option<u64>,
+
+    /// Metres from its **spawn position** the NPC may not stray beyond: points
+    /// drawn outside are pulled back inside, and an NPC already outside is
+    /// walked back in. `null`/unset = no limit, so it may wander arbitrarily
+    /// far (each hop is drawn around its current position).
+    #[serde(default)]
+    pub max_distance_m: Option<f64>,
+}
+
 /// Description of a single NPC, supplied either by the YAML roster or by the
 /// admin REST endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +113,26 @@ pub struct NpcSpec {
     #[serde(default)]
     pub place_where_work: Option<PlaceWhereWork>,
 
+    /// Name of the shift pattern in `config/schedules.yaml` that gates which
+    /// actions this NPC may run per planetary hour. `None` = no schedule gating
+    /// (the NPC may run any action in its `action_profile` at any time).
+    #[serde(default)]
+    pub schedule: Option<String>,
+
+    /// Optional override of where the NPC goes off-shift. By default `go_home`
+    /// returns the NPC to its *spawn position* (an NPC spawns in its
+    /// habitation), remembered at session start — so this is usually left unset.
+    #[serde(default)]
+    pub home: Option<PlaceWhereWork>,
+
+    /// Common zone the NPC goes to for meals (`r`). Target of `go_to_meal`.
+    #[serde(default)]
+    pub meal_place: Option<PlaceWhereWork>,
+
+    /// Area for mandatory activities (`a`). Target of `mandatory_activity`.
+    #[serde(default)]
+    pub mandatory_place: Option<PlaceWhereWork>,
+
     /// Per-action timing overrides, keyed by `Action::name()`. Actions not
     /// listed here use their code-default [`ActionTiming`]. Lets designers tune
     /// cadence per NPC without recompiling.
@@ -107,6 +148,11 @@ pub struct NpcSpec {
     /// action, everything has a sane default — only `action_profile` gates it.
     #[serde(default)]
     pub depot_store_item: Option<DepotStoreItemConfig>,
+
+    /// Config of the `take_a_walk` action. Optional: everything has a sane
+    /// default — only `action_profile` gates it.
+    #[serde(default)]
+    pub take_a_walk: Option<TakeAWalkConfig>,
 }
 
 /// YAML schema for `config/npcs.yaml`.
@@ -233,6 +279,40 @@ npcs:
         )
         .unwrap();
         assert!(roster.npcs[0].depot_store_item.is_none());
+    }
+
+    #[test]
+    fn parses_take_a_walk_config() {
+        let roster: RosterFile = serde_yaml::from_str(
+            r#"
+npcs:
+  - uuid: "b4a36a46-4424-4f66-bd14-caaf8be287cb"
+    action_profile:
+      - take_a_walk
+    take_a_walk: {
+      radius_m: 50.0,
+      pause_s: 10,
+      max_distance_m: 300.0
+    }
+"#,
+        )
+        .unwrap();
+        let cfg = roster.npcs[0].take_a_walk.as_ref().unwrap();
+        assert_eq!(cfg.radius_m, Some(50.0));
+        assert_eq!(cfg.pause_s, Some(10));
+        assert_eq!(cfg.max_distance_m, Some(300.0));
+
+        // The config block itself is optional (code defaults apply).
+        let roster: RosterFile = serde_yaml::from_str(
+            r#"
+npcs:
+  - uuid: "b4a36a46-4424-4f66-bd14-caaf8be287cb"
+    action_profile:
+      - take_a_walk
+"#,
+        )
+        .unwrap();
+        assert!(roster.npcs[0].take_a_walk.is_none());
     }
 
     #[test]

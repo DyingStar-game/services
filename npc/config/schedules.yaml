@@ -1,0 +1,64 @@
+# Shift schedules for the cargo-depot NPCs.
+#
+# Loaded at startup (SCHEDULES_PATH, default config/schedules.yaml). Each NPC in
+# config/npcs.yaml references one pattern by name via its `schedule:` field.
+#
+# A pattern is a grid of PLANETARY hours: one line per rota-day (`days:`), each
+# line EXACTLY 25 characters long (the planet turns in 25 h), one character per
+# planetary hour 0..24. The service advances through the days in order, then
+# wraps back to day 1 — a repeating 5-day rota.
+#
+# Legend (mirrors the planning spreadsheet):
+#   T  travail            — depot work (reception -> temp zone, stocking shelves)
+#   t  transmission       — shift handoff (treated as work for MVP: box flow continues)
+#   r  repas              — meal in the common zone  (-> go_to_meal)
+#   a  activites oblig.   — medical / RH / cleaning / chores  (-> mandatory_activity)
+#   .  off-shift          — home / sleep  (-> go_home)
+#
+# NOTE (verify me): this is a best-effort transcription of the pasted planning
+# image, laid out as a rotating rota — 5 magasiniers evenly spaced ~5 h apart so
+# the depot is always staffed (checked: no hour has zero workers), and each NPC
+# cycles through all time-slots over the 5 days (fair rotation). A shift is one
+# 18 h block "t TTTTT aa r a TTTTT aa r"; some shifts wrap across the day
+# boundary (a night shift). Correct any individual cells to match the sheet.
+
+schedules:
+  magasinier_1:
+    days:
+      - "TTTTTaaratTTTTTaar......."   # jour 1
+      - "....tTTTTTaaratTTTTT....."   # jour 2
+      - "....tTTTTTaaratTTTTT....."   # jour 3
+      - ".......r.tTTTTTaaratTTTTT"   # jour 4
+      - "a........................"   # jour 5
+
+  magasinier_2:
+    days:
+      - "....tTTTTTaaratTTTTTaar.."   # jour 1
+      - "....tTTTTTaaratTTTTT....."   # jour 2
+      - ".......r.tTTTTTaaratTTTTT"   # jour 3
+      - "a.....................r.t"   # jour 4
+      - "TTTTTaaratTTTTTaar......."   # jour 5
+
+  magasinier_3:
+    days:
+      - "....tTTTTTaaratTTTTTaar.."   # jour 1
+      - ".......r.tTTTTTaaratTTTTT"   # jour 2
+      - "a.....................r.t"   # jour 3
+      - "TTTTTaaratTTTTTaar......."   # jour 4
+      - "....tTTTTTaaratTTTTT....."   # jour 5
+
+  magasinier_4:
+    days:
+      - ".......r.tTTTTTaaratTTTTT"   # jour 1
+      - "a.....................r.t"   # jour 2
+      - "TTTTTaaratTTTTTaar......."   # jour 3
+      - "....tTTTTTaaratTTTTT....."   # jour 4
+      - "....tTTTTTaaratTTTTT....."   # jour 5
+
+  magasinier_5:
+    days:
+      - "......................r.t"   # jour 1
+      - "TTTTTaaratTTTTTaar......."   # jour 2
+      - "....tTTTTTaaratTTTTT....."   # jour 3
+      - "....tTTTTTaaratTTTTT....."   # jour 4
+      - ".......r.tTTTTTaaratTTTTT"   # jour 5

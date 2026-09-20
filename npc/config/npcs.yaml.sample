@@ -1,0 +1,146 @@
+# NPC roster loaded at service startup.
+# Each entry spawns one NPC connected to Horizon.
+# Fields:
+#   name             (optional) display name; if omitted, drawn from names.txt
+#   uuid             (required) stable UUID used as JWT `sub` and player identity
+#   action_profile   (optional) list of Action::name() values this NPC may run
+#   place_where_work (optional) {uuid, planet, position: {x, y, z}} — NPCs spawn
+#                    in their habitation and are sent here once connected
+#   take_a_walk      (optional) {radius_m, pause_s, max_distance_m} — tuning of
+#                    the `take_a_walk` action: radius of the disc the next point
+#                    is drawn from (default 100 m), pause at each point
+#                    (default 30 s), and how far from its SPAWN position the NPC
+#                    may stray (`null`/unset = no limit)
+#
+# The service signs a HS256 JWT {"sub": uuid, "preferred_username": name}
+# using the JWT_SECRET env var before each connection.
+#
+# Example (commented out; fill in real UUIDs to enable):
+#
+# npcs:
+#   - name: Alice
+#     uuid: "00000000-0000-0000-0000-000000000001"
+#     action_profile:
+#       - detect_player_and_greet
+#   - uuid: "00000000-0000-0000-0000-000000000002"  # name auto-generated
+#     action_profile:
+#       - detect_player_and_greet
+#       - go_to_point
+
+npcs: 
+  # --- The 5 cargo-depot magasiniers (rotating 25 h shift, see config/schedules.yaml) ---
+  #
+  # New per-NPC fields for the schedule layer:
+  #   schedule         name of a pattern in schedules.yaml; gates which actions
+  #                    may run each planetary hour
+  #   place_where_work.planet  planet key (its internal_name) -> resolves the
+  #                    rotation period from resourcesDynamic (default tarsis_4)
+  #   meal_place / mandatory_place  where the NPC goes for meals (`r`) / for
+  #                    mandatory activities (`a`)
+  #
+  # `go_home` needs no config: the NPC spawns in its habitation, so its spawn
+  # position is remembered as home (add an optional `home: {...}` only to override).
+  #
+  # NOTE: meal_place/mandatory_place positions below are PLACEHOLDERS reusing the
+  # depot as the nav anchor — replace `uuid`/`position` with the real common-zone
+  # and RH/medical-area places. Work positions are spread out so the NPCs don't
+  # stack on the same spot.
+  - name: Ygind Tars
+    uuid: "b4a36a46-4424-4f66-bd14-caaf8be287cb"
+    schedule: magasinier_1
+    action_profile:
+      - detect_player_and_greet
+      - reception_players
+      - going_to_work
+      - depot_store_reception_to_temp_area
+      - depot_store_item
+      - depot_reception_coordinator
+      - go_to_meal
+      - mandatory_activity
+      - go_home
+    place_where_work: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 1.85, y: 0.479, z: 5.913} }
+    meal_place:      { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: -2.803,  y: 0.0, z: 86.452}   }
+    mandatory_place: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 4.527,  y: 0.0, z: 86.985}  }
+    depot_store_reception_to_temp_area: { boxes_type_allowed: ["hauling_box.tscn"] }
+    depot_store_item: { stand_distance_m: 1.0 }
+  - name: Astreos
+    uuid: "c495bbbe-becb-4989-9143-605036730a5e"
+    schedule: magasinier_2
+    action_profile:
+      - detect_player_and_greet
+      - reception_players
+      - going_to_work
+      - depot_store_reception_to_temp_area
+      - depot_store_item
+      - depot_reception_coordinator
+      - go_to_meal
+      - mandatory_activity
+      - go_home
+    place_where_work: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 1.85, y: 0.479, z: 6.913} }
+    meal_place:      { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: -3.445,  y: 0.0, z: 88.602}   }
+    mandatory_place: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 2.665,  y: 0.0, z: 88.493}  }
+    depot_store_reception_to_temp_area: { boxes_type_allowed: ["hauling_box.tscn"] }
+    depot_store_item: { stand_distance_m: 1.0 }
+  - name: Alain Deloin
+    uuid: "b9a64a0c-c1c1-455d-9c29-87ddb4bb2aac"
+    schedule: magasinier_3
+    action_profile:
+      - detect_player_and_greet
+      - reception_players
+      - going_to_work
+      - depot_store_reception_to_temp_area
+      - depot_store_item
+      - depot_reception_coordinator
+      - go_to_meal
+      - mandatory_activity
+      - go_home
+    place_where_work: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 1.85, y: 0.479, z: 7.913} }
+    meal_place:      { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: -1.782,  y: 0.0, z: 90.489}   }
+    mandatory_place: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 4.758,  y: 0.0, z: 89.905}  }
+    depot_store_reception_to_temp_area: { boxes_type_allowed: ["hauling_box.tscn"] }
+    depot_store_item: { stand_distance_m: 1.0 }
+  - name: Crate Roberts
+    uuid: "26fc82e7-0be2-450c-9270-377fe56241a0"
+    schedule: magasinier_4
+    action_profile:
+      - detect_player_and_greet
+      - reception_players
+      - going_to_work
+      - depot_store_reception_to_temp_area
+      - depot_store_item
+      - depot_reception_coordinator
+      - go_to_meal
+      - mandatory_activity
+      - go_home
+    place_where_work: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 1.85, y: 0.479, z: 8.913} }
+    meal_place:      { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: -2.42,  y: 0.0, z: 93.247}   }
+    mandatory_place: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 3.943,  y: 0.0, z: 92.663}  }
+    depot_store_reception_to_temp_area: { boxes_type_allowed: ["hauling_box.tscn"] }
+    depot_store_item: { stand_distance_m: 1.0 }
+  - name: Jean Caisse
+    uuid: "f10d7ae6-dd1e-49a1-a6d2-cf70fab4c9e8"
+    schedule: magasinier_5
+    action_profile:
+      - detect_player_and_greet
+      - reception_players
+      - going_to_work
+      - depot_store_reception_to_temp_area
+      - depot_store_item
+      - depot_reception_coordinator
+      - go_to_meal
+      - mandatory_activity
+      - go_home
+    place_where_work: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 1.85, y: 0.479, z: 9.913} }
+    meal_place:      { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: -4.395,  y: 0.0, z: 91.591}   }
+    mandatory_place: { uuid: "a9340169-767c-4b02-a2f3-67f2786375b3", planet: "tarsis_4", position: {x: 1.968,  y: 0.0, z: 91.007}  }
+    depot_store_reception_to_temp_area: { boxes_type_allowed: ["hauling_box.tscn"] }
+    depot_store_item: { stand_distance_m: 1.0 }
+  # --- Balade d'ambiance : pas de planning, donc aucune restriction horaire ---
+  - name: Frank
+    uuid: "a3cca17b-b613-41fc-bac6-722219c82cd8"
+    action_profile:
+      - detect_player_and_greet
+      - take_a_walk
+    # max_distance_m: null = aucune limite ; mettre p.ex. 300.0 pour le garder
+    # a 300 m de son point de spawn (sinon les sauts successifs derivent).
+    take_a_walk: { radius_m: 100.0, pause_s: 30, max_distance_m: null }
