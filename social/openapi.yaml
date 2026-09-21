@@ -1,0 +1,2014 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Social API
+  version: 0.1.0
+  description: >
+    Social API of DyingStar: player profiles, friends, presence, guilds,
+    reputation and moderation.
+
+    Three kinds of callers:
+
+    * **Players** send a Keycloak JWT (`Authorization: Bearer`). The player id is
+      the `sub` claim. With `AUTH_DEV_BYPASS=true` (never in production) the
+      `X-Player-Id` / `X-Player-Name` / `X-Player-Roles` headers are accepted instead.
+    * **Moderation staff** are players carrying a Keycloak role:
+      `moderator` < `admin` < `supervisor` (`/api/admin/*`).
+    * **The game server** and trusted services use the shared `X-Internal-Key`
+      header (`/api/internal/*`).
+
+    A player under an active **suspension** or **ban** gets `403 SANCTIONED` on
+    every player route except `GET /api/me/reputation` and `GET /api/me/sanctions`.
+
+    Every error is `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: public
+    description: Unauthenticated endpoints
+  - name: me
+    description: The authenticated player's own profile, activity, guild and reputation
+  - name: profiles
+    description: Looking up other players
+  - name: friends
+    description: Friend list, requests and suggestions
+  - name: blocks
+    description: Block list
+  - name: guilds
+    description: Guild directory, pages, members, ranks and recruitment
+  - name: reports
+    description: Reporting players or guilds
+  - name: admin
+    description: Moderation dashboard (`moderator` role at least)
+  - name: internal
+    description: Game-server integration (`X-Internal-Key`)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ── Public ──────────────────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [public]
+      operationId: getHealth
+      summary: Liveness check
+      security: []
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+                  service: { type: string, const: social }
+                  version: { type: string, example: 0.1.0 }
+
+  # ── Me ──────────────────────────────────────────────────────────────────────
+  /api/me:
+    get:
+      tags: [me]
+      operationId: getMe
+      summary: Own profile with presence and guild
+      description: The profile is created on first call from the token identity.
+      responses:
+        '200':
+          description: Own profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: object
+                    required: [presence, guild]
+                    properties:
+                      presence: { $ref: '#/components/schemas/Presence' }
+                      guild:
+                        oneOf:
+                          - $ref: '#/components/schemas/GuildRef'
+                          - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    patch:
+      tags: [me]
+      operationId: updateMe
+      summary: Update editable profile fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfilePatch' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409':
+          description: Display name already taken
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/me/activity:
+    get:
+      tags: [me]
+      operationId: getMyActivity
+      summary: Own activity history (newest first)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Activity entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ActivityEntry' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/guild:
+    get:
+      tags: [me]
+      operationId: getMyGuild
+      summary: Own guild with rank
+      responses:
+        '200':
+          description: Guild membership, or `null` when guildless
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/Guild'
+                      - type: object
+                        required: [joinedAt, rank]
+                        properties:
+                          joinedAt: { type: string, format: date-time }
+                          rank: { $ref: '#/components/schemas/GuildRank' }
+                  - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/guild/requests:
+    get:
+      tags: [me]
+      operationId: getMyGuildRequests
+      summary: My pending guild invitations and applications
+      responses:
+        '200':
+          description: Pending requests with the guild reference
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PlayerGuildRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/guild/requests/{id}/accept:
+    post:
+      tags: [me]
+      operationId: acceptGuildInvitation
+      summary: Accept a guild invitation
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Joined the guild }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/me/guild/requests/{id}/decline:
+    post:
+      tags: [me]
+      operationId: declineGuildRequest
+      summary: Decline an invitation or withdraw an application
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Request removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/me/reputation:
+    get:
+      tags: [me]
+      operationId: getMyReputation
+      summary: Own reputation score, history and active sanctions
+      description: Reachable while suspended or banned.
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Reputation summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reputation, events, activeSanctions]
+                properties:
+                  reputation: { type: integer }
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReputationEvent' }
+                  activeSanctions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Sanction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/me/sanctions:
+    get:
+      tags: [me]
+      operationId: getMySanctions
+      summary: Own active sanctions
+      description: Reachable while suspended or banned.
+      responses:
+        '200':
+          description: Active sanctions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Sanction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Profiles ────────────────────────────────────────────────────────────────
+  /api/profiles:
+    get:
+      tags: [profiles]
+      operationId: searchProfiles
+      summary: Search profiles by display name
+      parameters:
+        - $ref: '#/components/parameters/search'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Matching profiles, sorted by display name
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/profiles/{playerId}:
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      summary: Public profile with online status
+      description: Location is not exposed here (friends only, see `/api/friends`).
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: object
+                    required: [status, guild]
+                    properties:
+                      status: { $ref: '#/components/schemas/PresenceStatus' }
+                      guild:
+                        oneOf:
+                          - $ref: '#/components/schemas/GuildRef'
+                          - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Friends ─────────────────────────────────────────────────────────────────
+  /api/friends:
+    get:
+      tags: [friends]
+      operationId: listFriends
+      summary: Friends with presence
+      responses:
+        '200':
+          description: Accepted friends with status and location
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Friend' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/friends/online:
+    get:
+      tags: [friends]
+      operationId: listOnlineFriends
+      summary: Friends currently online or in mission
+      responses:
+        '200':
+          description: Friends whose status is not `offline`
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Friend' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/friends/suggestions:
+    get:
+      tags: [friends]
+      operationId: listFriendSuggestions
+      summary: Recently met players who are not friends yet
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Suggested players
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FriendSuggestion' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/friends/requests:
+    get:
+      tags: [friends]
+      operationId: listFriendRequests
+      summary: Pending friend requests
+      responses:
+        '200':
+          description: Incoming and outgoing requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [incoming, outgoing]
+                properties:
+                  incoming:
+                    type: array
+                    items: { $ref: '#/components/schemas/FriendRequest' }
+                  outgoing:
+                    type: array
+                    items: { $ref: '#/components/schemas/FriendRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [friends]
+      operationId: sendFriendRequest
+      summary: Send a friend request
+      description: If the target already sent a pending request, it is accepted instead (`200`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '201':
+          description: Request created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Friendship' }
+        '200':
+          description: Reverse request auto-accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Friendship' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already friends, request already pending, or a block exists (`BLOCKED`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/friends/requests/{id}/accept:
+    post:
+      tags: [friends]
+      operationId: acceptFriendRequest
+      summary: Accept an incoming request (addressee only)
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Accepted friendship
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Friendship' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/friends/requests/{id}/decline:
+    post:
+      tags: [friends]
+      operationId: declineFriendRequest
+      summary: Decline (addressee) or cancel (requester) a pending request
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Request removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/friends/{playerId}:
+    delete:
+      tags: [friends]
+      operationId: removeFriend
+      summary: Remove a friend
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Friendship removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Blocks ──────────────────────────────────────────────────────────────────
+  /api/blocks:
+    get:
+      tags: [blocks]
+      operationId: listBlocks
+      summary: Blocked players
+      responses:
+        '200':
+          description: Blocked profiles with block date
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/PlayerProfile'
+                    - type: object
+                      required: [blockedAt]
+                      properties:
+                        blockedAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [blocks]
+      operationId: blockPlayer
+      summary: Block a player
+      description: >
+        Drops any friendship or pending request between the two players, prevents
+        new ones and costs the blocked player `REPUTATION_BLOCK_PENALTY` (refunded on unblock).
+        Idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '204': { description: Player blocked }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/blocks/{playerId}:
+    delete:
+      tags: [blocks]
+      operationId: unblockPlayer
+      summary: Unblock a player
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Block removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Guilds ──────────────────────────────────────────────────────────────────
+  /api/guilds:
+    get:
+      tags: [guilds]
+      operationId: listGuilds
+      summary: Guild directory
+      parameters:
+        - $ref: '#/components/parameters/search'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Guilds matching name or tag, with member counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GuildSummary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [guilds]
+      operationId: createGuild
+      summary: Create a guild
+      description: >
+        The caller becomes owner with the leader rank. Default ranks are created:
+        Leader (100, all permissions), Officer (50: invite, recruit, manage_members),
+        Member (0, default rank). A player belongs to at most one guild.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGuild' }
+      responses:
+        '201':
+          description: Guild created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Guild' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409':
+          description: Already in a guild, or name/tag already taken
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/guilds/{guildId}:
+    parameters:
+      - $ref: '#/components/parameters/guildId'
+    get:
+      tags: [guilds]
+      operationId: getGuild
+      summary: Public guild page
+      responses:
+        '200':
+          description: Guild with ranks and members (with presence)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/GuildSummary'
+                  - type: object
+                    required: [ranks, members]
+                    properties:
+                      ranks:
+                        type: array
+                        items: { $ref: '#/components/schemas/GuildRank' }
+                      members:
+                        type: array
+                        items: { $ref: '#/components/schemas/GuildMember' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [guilds]
+      operationId: updateGuild
+      summary: Edit a guild
+      description: Requires the `manage_guild` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GuildPatch' }
+      responses:
+        '200':
+          description: Updated guild
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Guild' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [guilds]
+      operationId: disbandGuild
+      summary: Disband a guild (owner only)
+      responses:
+        '204': { description: Guild disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/guilds/{guildId}/transfer:
+    post:
+      tags: [guilds]
+      operationId: transferGuildOwnership
+      summary: Transfer ownership to another member (owner only)
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '200':
+          description: Updated guild
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Guild' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/guilds/{guildId}/activity:
+    get:
+      tags: [guilds]
+      operationId: getGuildActivity
+      summary: Internal guild journal (members only)
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Journal entries, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GuildActivityEntry' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/guilds/{guildId}/members:
+    get:
+      tags: [guilds]
+      operationId: listGuildMembers
+      summary: Members with rank and presence
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GuildMember' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/guilds/{guildId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/guildId'
+      - $ref: '#/components/parameters/playerId'
+    patch:
+      tags: [guilds]
+      operationId: setGuildMemberRank
+      summary: Change a member's rank
+      description: Requires `manage_members`; only ranks strictly below the actor's own may be given or taken.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rankId]
+              properties:
+                rankId: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GuildMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [guilds]
+      operationId: removeGuildMember
+      summary: Leave (self) or kick (`manage_members`) a member
+      description: The owner cannot leave; transfer ownership or disband first.
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/guilds/{guildId}/ranks:
+    parameters:
+      - $ref: '#/components/parameters/guildId'
+    get:
+      tags: [guilds]
+      operationId: listGuildRanks
+      summary: Ranks, highest priority first
+      responses:
+        '200':
+          description: Ranks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GuildRank' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [guilds]
+      operationId: createGuildRank
+      summary: Create a rank (`manage_ranks`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRank' }
+      responses:
+        '201':
+          description: Rank created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GuildRank' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/guilds/{guildId}/ranks/{rankId}:
+    parameters:
+      - $ref: '#/components/parameters/guildId'
+      - name: rankId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    patch:
+      tags: [guilds]
+      operationId: updateGuildRank
+      summary: Edit a rank (`manage_ranks`)
+      description: The leader rank only accepts a rename.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RankPatch' }
+      responses:
+        '200':
+          description: Updated rank
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GuildRank' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [guilds]
+      operationId: deleteGuildRank
+      summary: Delete a rank (`manage_ranks`)
+      description: Members holding it are moved to the default rank. The leader and default ranks cannot be deleted.
+      responses:
+        '204': { description: Rank deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/guilds/{guildId}/join:
+    post:
+      tags: [guilds]
+      operationId: joinGuild
+      summary: Join directly (`open`) or apply (`apply`)
+      description: A pending invitation from that guild is accepted instead (`200`).
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Joined the guild
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinedResult' }
+        '201':
+          description: Application created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PendingRequestResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Guild is `closed`, or caller is sanctioned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already in a guild, or application already pending
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/guilds/{guildId}/invitations:
+    post:
+      tags: [guilds]
+      operationId: inviteToGuild
+      summary: Invite a player (`invite`)
+      description: A pending application from that player is accepted instead (`200`).
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '200':
+          description: Player joined the guild
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinedResult' }
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PendingRequestResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Player already in a guild, invitation already pending, or a block exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/guilds/{guildId}/requests:
+    get:
+      tags: [guilds]
+      operationId: listGuildRequests
+      summary: Pending applications and invitations (`recruit` or `invite`)
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+      responses:
+        '200':
+          description: Requests with the player's profile
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GuildRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/guilds/{guildId}/requests/{id}/accept:
+    post:
+      tags: [guilds]
+      operationId: acceptGuildApplication
+      summary: Accept an application (`recruit`)
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Player added to the guild }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/guilds/{guildId}/requests/{id}/decline:
+    post:
+      tags: [guilds]
+      operationId: declineGuildApplication
+      summary: Decline an application (`recruit`) or withdraw an invitation (`invite`)
+      parameters:
+        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Request removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Reports ─────────────────────────────────────────────────────────────────
+  /api/reports:
+    post:
+      tags: [reports]
+      operationId: createReport
+      summary: Report a player or a guild
+      description: Reporting a player costs them `REPUTATION_REPORT_PENALTY` (refunded if the report is dismissed).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReport' }
+      responses:
+        '201':
+          description: Report filed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [reports]
+      operationId: listMyReports
+      summary: Reports I filed
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Reports, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Report' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  # ── Admin ───────────────────────────────────────────────────────────────────
+  /api/admin/stats:
+    get:
+      tags: [admin]
+      operationId: getCommunityStats
+      summary: Community analytics
+      responses:
+        '200':
+          description: Aggregated counters and top lists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommunityStats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/log:
+    get:
+      tags: [admin]
+      operationId: getModerationLog
+      summary: Moderation audit log
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Log entries, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ModerationLogEntry' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/reports:
+    get:
+      tags: [admin]
+      operationId: listReports
+      summary: Report queue
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ReportStatus' }
+        - name: escalation
+          in: query
+          schema: { $ref: '#/components/schemas/EscalationLevel' }
+        - name: targetPlayerId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Reports, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReportView' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/reports/{id}:
+    parameters:
+      - $ref: '#/components/parameters/reportId'
+    get:
+      tags: [admin]
+      operationId: getReport
+      summary: One report
+      responses:
+        '200':
+          description: Report with reporter and target names
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [admin]
+      operationId: updateReportStatus
+      summary: Move a report through the workflow
+      description: >
+        `resolved` upholds the report (target loses `REPUTATION_UPHELD_REPORT_PENALTY`),
+        `dismissed` refunds the initial report penalty.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [reviewing, resolved, dismissed]
+                note: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: Updated report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/admin/reports/{id}/escalate:
+    post:
+      tags: [admin]
+      operationId: escalateReport
+      summary: Escalate one level (moderator → admin → supervisor)
+      parameters:
+        - $ref: '#/components/parameters/reportId'
+      responses:
+        '200':
+          description: Escalated report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already at the top level
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/players/{playerId}:
+    get:
+      tags: [admin]
+      operationId: getPlayerRecord
+      summary: Player record
+      description: Profile with reputation history, sanctions, reports received and activity (50 rows each).
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Player record
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: object
+                    required: [reputationEvents, sanctions, reports, activity]
+                    properties:
+                      reputationEvents:
+                        type: array
+                        items: { $ref: '#/components/schemas/ReputationEvent' }
+                      sanctions:
+                        type: array
+                        items: { $ref: '#/components/schemas/Sanction' }
+                      reports:
+                        type: array
+                        items: { $ref: '#/components/schemas/ReportView' }
+                      activity:
+                        type: array
+                        items: { $ref: '#/components/schemas/ActivityEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/admin/players/{playerId}/reputation:
+    post:
+      tags: [admin]
+      operationId: adjustReputation
+      summary: Manual reputation adjustment (`admin`)
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [delta, reason]
+              properties:
+                delta:
+                  type: integer
+                  minimum: -100
+                  maximum: 100
+                  description: Non-zero
+                reason: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: New score
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, reputation]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  reputation: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/admin/players/{playerId}/sanctions:
+    post:
+      tags: [admin]
+      operationId: issueSanction
+      summary: Issue a sanction
+      description: '`warning` / `mute`: moderator. `suspension` / `ban`: admin.'
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, reason]
+              properties:
+                type: { $ref: '#/components/schemas/SanctionType' }
+                reason: { type: string, minLength: 1, maxLength: 256 }
+                durationHours:
+                  type: [integer, 'null']
+                  minimum: 1
+                  maximum: 8760
+                  description: Omit or `null` for a permanent sanction (warnings are instantaneous)
+      responses:
+        '201':
+          description: Sanction issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sanction' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/admin/sanctions:
+    get:
+      tags: [admin]
+      operationId: listSanctions
+      summary: Sanctions listing
+      parameters:
+        - name: playerId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: active
+          in: query
+          description: Only active (not revoked, not expired) sanctions
+          schema:
+            type: string
+            enum: ['true', 'false']
+            default: 'true'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Sanctions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Sanction' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/sanctions/{id}:
+    delete:
+      tags: [admin]
+      operationId: revokeSanction
+      summary: Revoke a sanction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Revoked sanction
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sanction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Internal ────────────────────────────────────────────────────────────────
+  /api/internal/players/{playerId}:
+    put:
+      tags: [internal]
+      operationId: internalUpsertPlayer
+      summary: Ensure a profile exists at login
+      description: An existing display name is kept. On collision a short suffix is appended.
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                displayName: { type: string, minLength: 2, maxLength: 32 }
+      responses:
+        '200':
+          description: Existing or created profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/presence:
+    put:
+      tags: [internal]
+      operationId: internalSetPresence
+      summary: Set status and location
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/PresenceStatus' }
+                location:
+                  oneOf:
+                    - $ref: '#/components/schemas/Location'
+                    - type: 'null'
+                  description: '`null` clears the location; omitted keeps the previous one'
+      responses:
+        '200':
+          description: Stored presence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    required: [playerId]
+                    properties:
+                      playerId: { type: string, format: uuid }
+                  - $ref: '#/components/schemas/Presence'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/stats:
+    post:
+      tags: [internal]
+      operationId: internalApplyStats
+      summary: Apply playtime / reputation deltas, level and role
+      description: "Reputation changes go through the event system (`source: game`)."
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                playtimeSecondsDelta: { type: integer, minimum: 0 }
+                level: { type: integer, minimum: 0 }
+                role: { type: [string, 'null'], maxLength: 64 }
+                reputationDelta: { type: integer }
+                reputationReason: { type: string, maxLength: 128, default: Game event }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/activity:
+    post:
+      tags: [internal]
+      operationId: internalRecordActivity
+      summary: Append an activity entry
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, minLength: 1, maxLength: 64 }
+                details: { type: object, additionalProperties: true }
+      responses:
+        '204': { description: Entry recorded }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/guild:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerGuild
+      summary: Guild and rank of a player
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Guild with the player's rank, or `null`
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/Guild'
+                      - type: object
+                        required: [rank]
+                        properties:
+                          rank: { $ref: '#/components/schemas/GuildRank' }
+                  - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/sanctions:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerSanctions
+      summary: Active sanctions (to enforce mutes / bans in game)
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Active sanctions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Sanction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/reputation/rehabilitate:
+    post:
+      tags: [internal]
+      operationId: internalRehabilitate
+      summary: Run one rehabilitation pass now
+      description: >
+        Players below 0 with no reputation event for `REPUTATION_REHAB_AFTER_DAYS`
+        days gain `REPUTATION_REHAB_STEP` point(s).
+      security: [{ internalKey: [] }]
+      responses:
+        '200':
+          description: Number of players rehabilitated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rehabilitated]
+                properties:
+                  rehabilitated: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/encounters:
+    post:
+      tags: [internal]
+      operationId: internalRecordEncounter
+      summary: Record that two players met
+      description: Feeds friend suggestions. Symmetric.
+      security: [{ internalKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId, otherPlayerId]
+              properties:
+                playerId: { type: string, format: uuid }
+                otherPlayerId: { type: string, format: uuid }
+      responses:
+        '204': { description: Encounter recorded }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak access token (RS256, validated against the realm JWKS). Moderation
+        routes read the realm roles `moderator`, `admin`, `supervisor`.
+        Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id`, `X-Player-Name`,
+        `X-Player-Roles` headers may replace the token.
+    internalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: Shared secret (`INTERNAL_API_KEY`) for the game server and trusted services.
+
+  parameters:
+    playerId:
+      name: playerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    guildId:
+      name: guildId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    requestId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    reportId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    search:
+      name: search
+      in: query
+      description: Case-insensitive substring; empty lists everything
+      schema: { type: string, maxLength: 64, default: '' }
+
+  responses:
+    ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid token / internal key (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Missing role or guild permission (`FORBIDDEN`), or caller is suspended/banned (`SANCTIONED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Sanctioned:
+      description: Caller is under an active suspension or ban (`SANCTIONED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict (`CONFLICT`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalAuthNotConfigured:
+      description: '`INTERNAL_API_KEY` is not set on the server (`INTERNAL_AUTH_NOT_CONFIGURED`)'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, status]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SANCTIONED, NOT_FOUND, CONFLICT, BLOCKED, INVALID_TARGET, INTERNAL_ERROR]
+        message: { type: string }
+        status: { type: integer }
+
+    # ── Enums ──
+    PresenceStatus:
+      type: string
+      enum: [online, mission, offline]
+    GuildRecruitmentMode:
+      type: string
+      enum: [open, apply, closed]
+    GuildPermission:
+      type: string
+      enum: [manage_guild, manage_ranks, manage_members, invite, recruit]
+    GuildRequestKind:
+      type: string
+      enum: [invitation, application]
+    ReputationSource:
+      type: string
+      enum: [game, block, report, sanction, moderation, rehabilitation]
+    ReportTargetType:
+      type: string
+      enum: [player, guild]
+    ReportReason:
+      type: string
+      enum: [harassment, cheating, griefing, offensive_name, scam, other]
+    ReportStatus:
+      type: string
+      enum: [open, reviewing, resolved, dismissed]
+    EscalationLevel:
+      type: string
+      enum: [moderator, admin, supervisor]
+    SanctionType:
+      type: string
+      enum: [warning, mute, suspension, ban]
+
+    # ── Profiles & presence ──
+    RpSheet:
+      type: object
+      properties:
+        characterName: { type: string, maxLength: 64 }
+        story: { type: string, maxLength: 4000 }
+        alignment: { type: string, maxLength: 32 }
+
+    PlayerProfile:
+      type: object
+      required: [playerId, displayName, avatarUrl, faction, biography, role, level, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
+      properties:
+        playerId: { type: string, format: uuid, description: Keycloak subject }
+        displayName: { type: string }
+        avatarUrl: { type: [string, 'null'], format: uri }
+        faction: { type: [string, 'null'] }
+        biography: { type: [string, 'null'] }
+        role: { type: [string, 'null'], description: In-game role reported by the game server }
+        level: { type: integer }
+        reputation: { type: integer }
+        playtimeSeconds: { type: integer }
+        rpSheet:
+          oneOf:
+            - $ref: '#/components/schemas/RpSheet'
+            - type: 'null'
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ProfilePatch:
+      type: object
+      minProperties: 1
+      properties:
+        displayName: { type: string, minLength: 2, maxLength: 32 }
+        avatarUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+        faction: { type: [string, 'null'], maxLength: 64 }
+        biography: { type: [string, 'null'], maxLength: 2000 }
+        rpSheet:
+          oneOf:
+            - $ref: '#/components/schemas/RpSheet'
+            - type: 'null'
+
+    Location:
+      type: object
+      properties:
+        system: { type: string, maxLength: 64 }
+        scene: { type: string, maxLength: 128 }
+        position:
+          type: object
+          required: [x, y, z]
+          properties:
+            x: { type: number }
+            y: { type: number }
+            z: { type: number }
+
+    Presence:
+      type: object
+      required: [status, location, updatedAt]
+      properties:
+        status: { $ref: '#/components/schemas/PresenceStatus' }
+        location:
+          oneOf:
+            - $ref: '#/components/schemas/Location'
+            - type: 'null'
+        updatedAt: { type: string, format: date-time }
+
+    ActivityEntry:
+      type: object
+      required: [id, playerId, type, details, createdAt]
+      properties:
+        id: { type: integer }
+        playerId: { type: string, format: uuid }
+        type:
+          type: string
+          examples: [profile_created, profile_updated, friend_request_sent, friend_added, player_blocked, level_changed, guild_application_sent]
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    TargetPlayer:
+      type: object
+      required: [playerId]
+      properties:
+        playerId: { type: string, format: uuid }
+
+    # ── Friends ──
+    Friendship:
+      type: object
+      required: [id, requesterId, addresseeId, status, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        requesterId: { type: string, format: uuid }
+        addresseeId: { type: string, format: uuid }
+        status: { type: string, enum: [pending, accepted] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Friend:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [friendsSince, status, location]
+          properties:
+            friendsSince: { type: string, format: date-time }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    FriendRequest:
+      type: object
+      required: [id, createdAt, player]
+      properties:
+        id: { type: integer }
+        createdAt: { type: string, format: date-time }
+        player: { $ref: '#/components/schemas/PlayerProfile', description: The other party }
+
+    FriendSuggestion:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [lastMetAt, encounters]
+          properties:
+            lastMetAt: { type: string, format: date-time }
+            encounters: { type: integer }
+
+    # ── Guilds ──
+    GuildRef:
+      type: object
+      required: [id, name, tag]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        tag: { type: string }
+
+    Guild:
+      type: object
+      required: [id, name, tag, logoUrl, description, recruitment, ownerId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        tag: { type: string, description: "Uppercase alphanumeric, 2–5 chars" }
+        logoUrl: { type: [string, 'null'], format: uri }
+        description: { type: [string, 'null'] }
+        recruitment: { $ref: '#/components/schemas/GuildRecruitmentMode' }
+        ownerId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    GuildSummary:
+      allOf:
+        - $ref: '#/components/schemas/Guild'
+        - type: object
+          required: [memberCount]
+          properties:
+            memberCount: { type: integer }
+
+    CreateGuild:
+      type: object
+      required: [name, tag]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 48 }
+        tag: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$', description: Stored uppercased }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        logoUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+        recruitment: { $ref: '#/components/schemas/GuildRecruitmentMode', default: apply }
+
+    GuildPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 3, maxLength: 48 }
+        tag: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$' }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        logoUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+        recruitment: { $ref: '#/components/schemas/GuildRecruitmentMode' }
+
+    GuildRank:
+      type: object
+      required: [id, guildId, name, priority, permissions, isLeader, isDefault]
+      properties:
+        id: { type: integer }
+        guildId: { type: string, format: uuid }
+        name: { type: string }
+        priority: { type: integer, description: Higher wins; a member may only act on ranks strictly below their own }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/GuildPermission' }
+        isLeader: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
+        isDefault: { type: boolean, description: Rank given to new members }
+
+    CreateRank:
+      type: object
+      required: [name, priority]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 32 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          default: []
+          items: { $ref: '#/components/schemas/GuildPermission' }
+        isDefault: { type: boolean }
+
+    RankPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 32 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/GuildPermission' }
+        isDefault: { type: boolean }
+
+    GuildMembership:
+      type: object
+      required: [guildId, playerId, rankId, joinedAt]
+      properties:
+        guildId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        rankId: { type: integer }
+        joinedAt: { type: string, format: date-time }
+
+    GuildMember:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [joinedAt, rank, status, location]
+          properties:
+            joinedAt: { type: string, format: date-time }
+            rank: { $ref: '#/components/schemas/GuildRank' }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    GuildJoinRequest:
+      type: object
+      required: [id, guildId, playerId, kind, message, createdBy, createdAt]
+      properties:
+        id: { type: integer }
+        guildId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/GuildRequestKind' }
+        message: { type: [string, 'null'] }
+        createdBy: { type: [string, 'null'], format: uuid, description: Inviting member for invitations; null for applications }
+        createdAt: { type: string, format: date-time }
+
+    GuildRequest:
+      description: A guild-side view of a request, with the player's profile
+      allOf:
+        - $ref: '#/components/schemas/GuildJoinRequest'
+        - type: object
+          required: [player]
+          properties:
+            player: { $ref: '#/components/schemas/PlayerProfile' }
+
+    PlayerGuildRequest:
+      description: A player-side view of a request, with the guild reference
+      allOf:
+        - $ref: '#/components/schemas/GuildJoinRequest'
+        - type: object
+          required: [guild]
+          properties:
+            guild:
+              type: object
+              required: [id, name, tag, logoUrl]
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+                tag: { type: string }
+                logoUrl: { type: [string, 'null'], format: uri }
+
+    JoinedResult:
+      type: object
+      required: [joined]
+      properties:
+        joined: { type: boolean, const: true }
+
+    PendingRequestResult:
+      type: object
+      required: [joined, request]
+      properties:
+        joined: { type: boolean, const: false }
+        request: { $ref: '#/components/schemas/GuildJoinRequest' }
+
+    GuildActivityEntry:
+      type: object
+      required: [id, guildId, actorId, type, details, createdAt]
+      properties:
+        id: { type: integer }
+        guildId: { type: string, format: uuid }
+        actorId: { type: [string, 'null'], format: uuid }
+        type:
+          type: string
+          examples: [guild_created, member_joined, member_left, member_kicked, rank_changed, player_invited, ownership_transferred]
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    # ── Reputation & moderation ──
+    ReputationEvent:
+      type: object
+      required: [id, playerId, delta, balance, source, reason, actorId, details, createdAt]
+      properties:
+        id: { type: integer }
+        playerId: { type: string, format: uuid }
+        delta: { type: integer }
+        balance: { type: integer, description: Score after applying the delta }
+        source: { $ref: '#/components/schemas/ReputationSource' }
+        reason: { type: string }
+        actorId: { type: [string, 'null'], format: uuid }
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    CreateReport:
+      type: object
+      required: [targetType, targetId, reason]
+      properties:
+        targetType: { $ref: '#/components/schemas/ReportTargetType' }
+        targetId: { type: string, format: uuid, description: Player id or guild id depending on `targetType` }
+        reason: { $ref: '#/components/schemas/ReportReason' }
+        message: { type: string, maxLength: 1000 }
+
+    Report:
+      type: object
+      required: [id, reporterId, targetType, targetPlayerId, targetGuildId, reason, message, status, escalation, resolvedBy, resolutionNote, resolvedAt, createdAt]
+      properties:
+        id: { type: integer }
+        reporterId: { type: [string, 'null'], format: uuid, description: Null for reports raised automatically by the system }
+        targetType: { $ref: '#/components/schemas/ReportTargetType' }
+        targetPlayerId: { type: [string, 'null'], format: uuid }
+        targetGuildId: { type: [string, 'null'], format: uuid }
+        reason:
+          type: string
+          enum: [harassment, cheating, griefing, offensive_name, scam, other, reputation_threshold]
+          description: '`reputation_threshold` is set on system-raised reports'
+        message: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/ReportStatus' }
+        escalation: { $ref: '#/components/schemas/EscalationLevel' }
+        resolvedBy: { type: [string, 'null'], format: uuid }
+        resolutionNote: { type: [string, 'null'] }
+        resolvedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    ReportView:
+      allOf:
+        - $ref: '#/components/schemas/Report'
+        - type: object
+          required: [reporterName, targetName]
+          properties:
+            reporterName: { type: [string, 'null'] }
+            targetName: { type: [string, 'null'] }
+
+    Sanction:
+      type: object
+      required: [id, playerId, type, reason, automatic, issuedBy, expiresAt, revokedAt, revokedBy, createdAt]
+      properties:
+        id: { type: integer }
+        playerId: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/SanctionType' }
+        reason: { type: string }
+        automatic: { type: boolean, description: Issued by the reputation thresholds rather than a moderator }
+        issuedBy: { type: [string, 'null'], format: uuid }
+        expiresAt: { type: [string, 'null'], format: date-time, description: Null = permanent (or instantaneous for warnings) }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        revokedBy: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    ModerationLogEntry:
+      type: object
+      required: [id, actorId, action, targetPlayerId, details, createdAt]
+      properties:
+        id: { type: integer }
+        actorId: { type: [string, 'null'], format: uuid }
+        action: { type: string }
+        targetPlayerId: { type: [string, 'null'], format: uuid }
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    CommunityStats:
+      type: object
+      required: [players, guilds, reports, sanctions, activityLast24h, mostReported, lowestReputation]
+      properties:
+        players:
+          type: object
+          required: [total, online]
+          properties:
+            total: { type: integer }
+            online: { type: integer }
+        guilds:
+          type: object
+          required: [total, top]
+          properties:
+            total: { type: integer }
+            top:
+              type: array
+              description: Top 5 by member count
+              items:
+                type: object
+                required: [id, name, tag, members]
+                properties:
+                  id: { type: string, format: uuid }
+                  name: { type: string }
+                  tag: { type: string }
+                  members: { type: integer }
+        reports:
+          type: object
+          description: Count per status (missing key = 0)
+          additionalProperties: { type: integer }
+          propertyNames: { $ref: '#/components/schemas/ReportStatus' }
+        sanctions:
+          type: object
+          required: [active]
+          properties:
+            active: { type: integer }
+        activityLast24h: { type: integer }
+        mostReported:
+          type: array
+          description: Top 5 players by open/reviewing reports
+          items:
+            type: object
+            required: [playerId, reports]
+            properties:
+              playerId: { type: string, format: uuid }
+              reports: { type: integer }
+        lowestReputation:
+          type: array
+          description: 5 lowest scores
+          items:
+            type: object
+            required: [playerId, displayName, reputation]
+            properties:
+              playerId: { type: string, format: uuid }
+              displayName: { type: string }
+              reputation: { type: integer }

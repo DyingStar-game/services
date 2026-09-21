@@ -38,6 +38,8 @@ curl localhost:3000/api/me -H "X-Player-Id: 11111111-1111-4111-8111-111111111111
 
 ## Endpoints
 
+Spécification complète (schémas, codes d'erreur) : [`openapi.yaml`](openapi.yaml) — importable dans Bruno, Postman, Swagger UI, etc.
+
 Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 
 ### Public
