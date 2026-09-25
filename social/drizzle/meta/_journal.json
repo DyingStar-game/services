@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1789943781022,
-      "tag": "0000_parallel_freak",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1789944723868,
-      "tag": "0001_uneven_mantis",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1789945356023,
-      "tag": "0002_stormy_demogoblin",
+      "when": 1790363428766,
+      "tag": "0000_nervous_typhoid_mary",
       "breakpoints": true
     }
   ]

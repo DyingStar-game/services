@@ -3,7 +3,7 @@
  */
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
-import { guilds } from './guilds.js';
+import { corporations } from './corporations.js';
 import { playerProfiles } from './profiles.js';
 
 /** Where a reputation change comes from. */
@@ -32,7 +32,7 @@ export const reputationEvents = pgTable(
 
 export type ReputationEvent = typeof reputationEvents.$inferSelect;
 
-export const REPORT_TARGET_TYPES = ['player', 'guild'] as const;
+export const REPORT_TARGET_TYPES = ['player', 'corporation'] as const;
 export type ReportTargetType = (typeof REPORT_TARGET_TYPES)[number];
 
 export const REPORT_REASONS = ['harassment', 'cheating', 'griefing', 'offensive_name', 'scam', 'other'] as const;
@@ -53,7 +53,7 @@ export const reports = pgTable(
     reporterId: uuid('reporter_id').references(() => playerProfiles.playerId, { onDelete: 'set null' }),
     targetType: text('target_type').$type<ReportTargetType>().notNull(),
     targetPlayerId: uuid('target_player_id').references(() => playerProfiles.playerId, { onDelete: 'cascade' }),
-    targetGuildId: uuid('target_guild_id').references(() => guilds.id, { onDelete: 'cascade' }),
+    targetCorporationId: uuid('target_corporation_id').references(() => corporations.id, { onDelete: 'cascade' }),
     reason: text('reason').$type<ReportReason | 'reputation_threshold'>().notNull(),
     message: text('message'),
     status: text('status').$type<ReportStatus>().notNull().default('open'),

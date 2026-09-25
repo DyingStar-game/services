@@ -7,8 +7,8 @@ import { internalAuth, playerAuth } from '../middleware/auth.js';
 import { enforceSanctions } from '../middleware/sanctions.js';
 import { adminRoutes } from './admin.routes.js';
 import { blocksRoutes } from './blocks.routes.js';
+import { corporationsRoutes } from './corporations.routes.js';
 import { friendsRoutes } from './friends.routes.js';
-import { guildsRoutes } from './guilds.routes.js';
 import { internalRoutes } from './internal.routes.js';
 import { meRoutes } from './me.routes.js';
 import { profilesRoutes } from './profiles.routes.js';
@@ -28,7 +28,7 @@ apiRouter.use('/me', playerAuth, exemptSanctioned, meRoutes);
 apiRouter.use('/profiles', playerAuth, enforceSanctions, profilesRoutes);
 apiRouter.use('/friends', playerAuth, enforceSanctions, friendsRoutes);
 apiRouter.use('/blocks', playerAuth, enforceSanctions, blocksRoutes);
-apiRouter.use('/guilds', playerAuth, enforceSanctions, guildsRoutes);
+apiRouter.use('/corporations', playerAuth, enforceSanctions, corporationsRoutes);
 apiRouter.use('/reports', playerAuth, enforceSanctions, reportsRoutes);
 apiRouter.use('/admin', playerAuth, adminRoutes);
 

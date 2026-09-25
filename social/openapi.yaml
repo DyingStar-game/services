@@ -3,7 +3,7 @@ info:
   title: DyingStar Social API
   version: 0.1.0
   description: >
-    Social API of DyingStar: player profiles, friends, presence, guilds,
+    Social API of DyingStar: player profiles, friends, presence, corporations,
     reputation and moderation.
 
     Three kinds of callers:
@@ -29,17 +29,17 @@ tags:
   - name: public
     description: Unauthenticated endpoints
   - name: me
-    description: The authenticated player's own profile, activity, guild and reputation
+    description: The authenticated player's own profile, activity, corporation and reputation
   - name: profiles
     description: Looking up other players
   - name: friends
     description: Friend list, requests and suggestions
   - name: blocks
     description: Block list
-  - name: guilds
-    description: Guild directory, pages, members, ranks and recruitment
+  - name: corporations
+    description: Corporation directory, pages, members, ranks and recruitment
   - name: reports
-    description: Reporting players or guilds
+    description: Reporting players or corporations
   - name: admin
     description: Moderation dashboard (`moderator` role at least)
   - name: internal
@@ -73,7 +73,7 @@ paths:
     get:
       tags: [me]
       operationId: getMe
-      summary: Own profile with presence and guild
+      summary: Own profile with presence and corporation
       description: The profile is created on first call from the token identity.
       responses:
         '200':
@@ -84,12 +84,12 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PlayerProfile'
                   - type: object
-                    required: [presence, guild]
+                    required: [presence, corporation]
                     properties:
                       presence: { $ref: '#/components/schemas/Presence' }
-                      guild:
+                      corporation:
                         oneOf:
-                          - $ref: '#/components/schemas/GuildRef'
+                          - $ref: '#/components/schemas/CorporationRef'
                           - type: 'null'
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -136,63 +136,63 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
-  /api/me/guild:
+  /api/me/corporation:
     get:
       tags: [me]
-      operationId: getMyGuild
-      summary: Own guild with rank
+      operationId: getMyCorporation
+      summary: Own corporation with rank
       responses:
         '200':
-          description: Guild membership, or `null` when guildless
+          description: Corporation membership, or `null` when corporationless
           content:
             application/json:
               schema:
                 oneOf:
                   - allOf:
-                      - $ref: '#/components/schemas/Guild'
+                      - $ref: '#/components/schemas/Corporation'
                       - type: object
                         required: [joinedAt, rank]
                         properties:
                           joinedAt: { type: string, format: date-time }
-                          rank: { $ref: '#/components/schemas/GuildRank' }
+                          rank: { $ref: '#/components/schemas/CorporationRank' }
                   - type: 'null'
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
-  /api/me/guild/requests:
+  /api/me/corporation/requests:
     get:
       tags: [me]
-      operationId: getMyGuildRequests
-      summary: My pending guild invitations and applications
+      operationId: getMyCorporationRequests
+      summary: My pending corporation invitations and applications
       responses:
         '200':
-          description: Pending requests with the guild reference
+          description: Pending requests with the corporation reference
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/PlayerGuildRequest' }
+                items: { $ref: '#/components/schemas/PlayerCorporationRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
-  /api/me/guild/requests/{id}/accept:
+  /api/me/corporation/requests/{id}/accept:
     post:
       tags: [me]
-      operationId: acceptGuildInvitation
-      summary: Accept a guild invitation
+      operationId: acceptCorporationInvitation
+      summary: Accept a corporation invitation
       parameters:
         - $ref: '#/components/parameters/requestId'
       responses:
-        '204': { description: Joined the guild }
+        '204': { description: Joined the corporation }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
-  /api/me/guild/requests/{id}/decline:
+  /api/me/corporation/requests/{id}/decline:
     post:
       tags: [me]
-      operationId: declineGuildRequest
+      operationId: declineCorporationRequest
       summary: Decline an invitation or withdraw an application
       parameters:
         - $ref: '#/components/parameters/requestId'
@@ -253,6 +253,14 @@ paths:
       parameters:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/limit'
+        - name: entityType
+          in: query
+          required: false
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ProfileKind'
+              - type: 'null'
+          description: Restrict to players or NPCs (default: both).
       responses:
         '200':
           description: Matching profiles, sorted by display name
@@ -282,12 +290,12 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PlayerProfile'
                   - type: object
-                    required: [status, guild]
+                    required: [status, corporation]
                     properties:
                       status: { $ref: '#/components/schemas/PresenceStatus' }
-                      guild:
+                      corporation:
                         oneOf:
-                          - $ref: '#/components/schemas/GuildRef'
+                          - $ref: '#/components/schemas/CorporationRef'
                           - type: 'null'
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -496,119 +504,119 @@ paths:
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  # ── Guilds ──────────────────────────────────────────────────────────────────
-  /api/guilds:
+  # ── Corporations ──────────────────────────────────────────────────────────────────
+  /api/corporations:
     get:
-      tags: [guilds]
-      operationId: listGuilds
-      summary: Guild directory
+      tags: [corporations]
+      operationId: listCorporations
+      summary: Corporation directory
       parameters:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/limit'
       responses:
         '200':
-          description: Guilds matching name or tag, with member counts
+          description: Corporations matching name or ticker, with member counts
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/GuildSummary' }
+                items: { $ref: '#/components/schemas/CorporationSummary' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
     post:
-      tags: [guilds]
-      operationId: createGuild
-      summary: Create a guild
+      tags: [corporations]
+      operationId: createCorporation
+      summary: Create a corporation
       description: >
-        The caller becomes owner with the leader rank. Default ranks are created:
-        Leader (100, all permissions), Officer (50: invite, recruit, manage_members),
-        Member (0, default rank). A player belongs to at most one guild.
+        The caller becomes the CEO and holds the CEO rank. Default ranks are created:
+        CEO (100, all permissions), Director (50: invite, recruit, manage_members),
+        Member (0, default rank). A player belongs to at most one corporation.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateGuild' }
+            schema: { $ref: '#/components/schemas/CreateCorporation' }
       responses:
         '201':
-          description: Guild created
+          description: Corporation created
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Guild' }
+              schema: { $ref: '#/components/schemas/Corporation' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '409':
-          description: Already in a guild, or name/tag already taken
+          description: Already in a corporation, or name/ticker already taken
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
-  /api/guilds/{guildId}:
+  /api/corporations/{corporationId}:
     parameters:
-      - $ref: '#/components/parameters/guildId'
+      - $ref: '#/components/parameters/corporationId'
     get:
-      tags: [guilds]
-      operationId: getGuild
-      summary: Public guild page
+      tags: [corporations]
+      operationId: getCorporation
+      summary: Public corporation page
       responses:
         '200':
-          description: Guild with ranks and members (with presence)
+          description: Corporation with ranks and members (with presence)
           content:
             application/json:
               schema:
                 allOf:
-                  - $ref: '#/components/schemas/GuildSummary'
+                  - $ref: '#/components/schemas/CorporationSummary'
                   - type: object
                     required: [ranks, members]
                     properties:
                       ranks:
                         type: array
-                        items: { $ref: '#/components/schemas/GuildRank' }
+                        items: { $ref: '#/components/schemas/CorporationRank' }
                       members:
                         type: array
-                        items: { $ref: '#/components/schemas/GuildMember' }
+                        items: { $ref: '#/components/schemas/CorporationMember' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
-      tags: [guilds]
-      operationId: updateGuild
-      summary: Edit a guild
-      description: Requires the `manage_guild` permission.
+      tags: [corporations]
+      operationId: updateCorporation
+      summary: Edit a corporation
+      description: Requires the `manage_corporation` permission.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/GuildPatch' }
+            schema: { $ref: '#/components/schemas/CorporationPatch' }
       responses:
         '200':
-          description: Updated guild
+          description: Updated corporation
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Guild' }
+              schema: { $ref: '#/components/schemas/Corporation' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
-      tags: [guilds]
-      operationId: disbandGuild
-      summary: Disband a guild (owner only)
+      tags: [corporations]
+      operationId: disbandCorporation
+      summary: Disband a corporation (CEO only)
       responses:
-        '204': { description: Guild disbanded }
+        '204': { description: Corporation disbanded }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /api/guilds/{guildId}/transfer:
+  /api/corporations/{corporationId}/transfer:
     post:
-      tags: [guilds]
-      operationId: transferGuildOwnership
-      summary: Transfer ownership to another member (owner only)
+      tags: [corporations]
+      operationId: transferCorporationOwnership
+      summary: Transfer leadership to another member (CEO only)
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
       requestBody:
         required: true
         content:
@@ -616,22 +624,22 @@ paths:
             schema: { $ref: '#/components/schemas/TargetPlayer' }
       responses:
         '200':
-          description: Updated guild
+          description: Updated corporation
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Guild' }
+              schema: { $ref: '#/components/schemas/Corporation' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /api/guilds/{guildId}/activity:
+  /api/corporations/{corporationId}/activity:
     get:
-      tags: [guilds]
-      operationId: getGuildActivity
-      summary: Internal guild journal (members only)
+      tags: [corporations]
+      operationId: getCorporationActivity
+      summary: Internal corporation journal (members only)
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/limit'
       responses:
         '200':
@@ -640,19 +648,19 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/GuildActivityEntry' }
+                items: { $ref: '#/components/schemas/CorporationActivityEntry' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /api/guilds/{guildId}/members:
+  /api/corporations/{corporationId}/members:
     get:
-      tags: [guilds]
-      operationId: listGuildMembers
+      tags: [corporations]
+      operationId: listCorporationMembers
       summary: Members with rank and presence
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
       responses:
         '200':
           description: Members
@@ -660,18 +668,18 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/GuildMember' }
+                items: { $ref: '#/components/schemas/CorporationMember' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /api/guilds/{guildId}/members/{playerId}:
+  /api/corporations/{corporationId}/members/{playerId}:
     parameters:
-      - $ref: '#/components/parameters/guildId'
+      - $ref: '#/components/parameters/corporationId'
       - $ref: '#/components/parameters/playerId'
     patch:
-      tags: [guilds]
-      operationId: setGuildMemberRank
+      tags: [corporations]
+      operationId: setCorporationMemberRank
       summary: Change a member's rank
       description: Requires `manage_members`; only ranks strictly below the actor's own may be given or taken.
       requestBody:
@@ -688,28 +696,28 @@ paths:
           description: Updated membership
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/GuildMembership' }
+              schema: { $ref: '#/components/schemas/CorporationMembership' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
-      tags: [guilds]
-      operationId: removeGuildMember
+      tags: [corporations]
+      operationId: removeCorporationMember
       summary: Leave (self) or kick (`manage_members`) a member
-      description: The owner cannot leave; transfer ownership or disband first.
+      description: The CEO cannot leave; transfer leadership or disband first.
       responses:
         '204': { description: Member removed }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /api/guilds/{guildId}/ranks:
+  /api/corporations/{corporationId}/ranks:
     parameters:
-      - $ref: '#/components/parameters/guildId'
+      - $ref: '#/components/parameters/corporationId'
     get:
-      tags: [guilds]
-      operationId: listGuildRanks
+      tags: [corporations]
+      operationId: listCorporationRanks
       summary: Ranks, highest priority first
       responses:
         '200':
@@ -718,13 +726,13 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/GuildRank' }
+                items: { $ref: '#/components/schemas/CorporationRank' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
     post:
-      tags: [guilds]
-      operationId: createGuildRank
+      tags: [corporations]
+      operationId: createCorporationRank
       summary: Create a rank (`manage_ranks`)
       requestBody:
         required: true
@@ -736,25 +744,25 @@ paths:
           description: Rank created
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/GuildRank' }
+              schema: { $ref: '#/components/schemas/CorporationRank' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
-  /api/guilds/{guildId}/ranks/{rankId}:
+  /api/corporations/{corporationId}/ranks/{rankId}:
     parameters:
-      - $ref: '#/components/parameters/guildId'
+      - $ref: '#/components/parameters/corporationId'
       - name: rankId
         in: path
         required: true
         schema: { type: integer, minimum: 1 }
     patch:
-      tags: [guilds]
-      operationId: updateGuildRank
+      tags: [corporations]
+      operationId: updateCorporationRank
       summary: Edit a rank (`manage_ranks`)
-      description: The leader rank only accepts a rename.
+      description: The CEO rank only accepts a rename.
       requestBody:
         required: true
         content:
@@ -765,17 +773,17 @@ paths:
           description: Updated rank
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/GuildRank' }
+              schema: { $ref: '#/components/schemas/CorporationRank' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
-      tags: [guilds]
-      operationId: deleteGuildRank
+      tags: [corporations]
+      operationId: deleteCorporationRank
       summary: Delete a rank (`manage_ranks`)
-      description: Members holding it are moved to the default rank. The leader and default ranks cannot be deleted.
+      description: Members holding it are moved to the default rank. The CEO and default ranks cannot be deleted.
       responses:
         '204': { description: Rank deleted }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -783,14 +791,14 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
-  /api/guilds/{guildId}/join:
+  /api/corporations/{corporationId}/join:
     post:
-      tags: [guilds]
-      operationId: joinGuild
+      tags: [corporations]
+      operationId: joinCorporation
       summary: Join directly (`open`) or apply (`apply`)
-      description: A pending invitation from that guild is accepted instead (`200`).
+      description: A pending invitation from that corporation is accepted instead (`200`).
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
       requestBody:
         required: false
         content:
@@ -801,7 +809,7 @@ paths:
                 message: { type: string, maxLength: 500 }
       responses:
         '200':
-          description: Joined the guild
+          description: Joined the corporation
           content:
             application/json:
               schema: { $ref: '#/components/schemas/JoinedResult' }
@@ -813,25 +821,25 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403':
-          description: Guild is `closed`, or caller is sanctioned
+          description: Corporation is `closed`, or caller is sanctioned
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Already in a guild, or application already pending
+          description: Already in a corporation, or application already pending
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
-  /api/guilds/{guildId}/invitations:
+  /api/corporations/{corporationId}/invitations:
     post:
-      tags: [guilds]
-      operationId: inviteToGuild
+      tags: [corporations]
+      operationId: inviteToCorporation
       summary: Invite a player (`invite`)
       description: A pending application from that player is accepted instead (`200`).
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
       requestBody:
         required: true
         content:
@@ -839,7 +847,7 @@ paths:
             schema: { $ref: '#/components/schemas/TargetPlayer' }
       responses:
         '200':
-          description: Player joined the guild
+          description: Player joined the corporation
           content:
             application/json:
               schema: { $ref: '#/components/schemas/JoinedResult' }
@@ -853,18 +861,18 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Player already in a guild, invitation already pending, or a block exists
+          description: Player already in a corporation, invitation already pending, or a block exists
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
-  /api/guilds/{guildId}/requests:
+  /api/corporations/{corporationId}/requests:
     get:
-      tags: [guilds]
-      operationId: listGuildRequests
+      tags: [corporations]
+      operationId: listCorporationRequests
       summary: Pending applications and invitations (`recruit` or `invite`)
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
       responses:
         '200':
           description: Requests with the player's profile
@@ -872,33 +880,33 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/GuildRequest' }
+                items: { $ref: '#/components/schemas/CorporationRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /api/guilds/{guildId}/requests/{id}/accept:
+  /api/corporations/{corporationId}/requests/{id}/accept:
     post:
-      tags: [guilds]
-      operationId: acceptGuildApplication
+      tags: [corporations]
+      operationId: acceptCorporationApplication
       summary: Accept an application (`recruit`)
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/requestId'
       responses:
-        '204': { description: Player added to the guild }
+        '204': { description: Player added to the corporation }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
-  /api/guilds/{guildId}/requests/{id}/decline:
+  /api/corporations/{corporationId}/requests/{id}/decline:
     post:
-      tags: [guilds]
-      operationId: declineGuildApplication
+      tags: [corporations]
+      operationId: declineCorporationApplication
       summary: Decline an application (`recruit`) or withdraw an invitation (`invite`)
       parameters:
-        - $ref: '#/components/parameters/guildId'
+        - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/requestId'
       responses:
         '204': { description: Request removed }
@@ -911,7 +919,7 @@ paths:
     post:
       tags: [reports]
       operationId: createReport
-      summary: Report a player or a guild
+      summary: Report a player or a corporation
       description: Reporting a player costs them `REPUTATION_REPORT_PENALTY` (refunded if the report is dismissed).
       requestBody:
         required: true
@@ -1263,6 +1271,43 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
 
+  /api/internal/players/{playerId}/npc:
+    put:
+      tags: [internal]
+      operationId: internalUpsertNpc
+      summary: Create or update a server-managed NPC profile
+      description: >
+        Unlike players, a taken display name is an error (409), never silently renamed:
+        the shared unique `display_name` prevents a player from impersonating an NPC.
+        The id must be a UUID assigned by the game server.
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                displayName: { type: string, minLength: 2, maxLength: 32 }
+                avatarUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+                faction: { type: [string, 'null'], maxLength: 64 }
+                biography: { type: [string, 'null'], maxLength: 2000 }
+                role: { type: [string, 'null'], maxLength: 64 }
+                level: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Existing or created NPC profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
   /api/internal/players/{playerId}/presence:
     put:
       tags: [internal]
@@ -1359,29 +1404,79 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
 
-  /api/internal/players/{playerId}/guild:
+  /api/internal/players/{playerId}/corporation:
     get:
       tags: [internal]
-      operationId: internalGetPlayerGuild
-      summary: Guild and rank of a player
+      operationId: internalGetPlayerCorporation
+      summary: Corporation and rank of a player
       security: [{ internalKey: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
       responses:
         '200':
-          description: Guild with the player's rank, or `null`
+          description: Corporation with the player's rank, or `null`
           content:
             application/json:
               schema:
                 oneOf:
                   - allOf:
-                      - $ref: '#/components/schemas/Guild'
+                      - $ref: '#/components/schemas/Corporation'
                       - type: object
                         required: [rank]
                         properties:
-                          rank: { $ref: '#/components/schemas/GuildRank' }
+                          rank: { $ref: '#/components/schemas/CorporationRank' }
                   - type: 'null'
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+    put:
+      tags: [internal]
+      operationId: internalAddNpcToCorporation
+      summary: Add an NPC to a corporation
+      description: >
+        NPC-only. Uses `rankId` when given, otherwise the corporation's default rank.
+        An NPC can never be the CEO or hold the CEO rank.
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [corporationId]
+              properties:
+                corporationId: { type: string, format: uuid }
+                rankId: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Created membership row
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corporationId, playerId, rankId, joinedAt]
+                properties:
+                  corporationId: { type: string, format: uuid }
+                  playerId: { type: string, format: uuid }
+                  rankId: { type: integer }
+                  joinedAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+    delete:
+      tags: [internal]
+      operationId: internalRemoveNpcFromCorporation
+      summary: Remove an NPC from its corporation
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Membership removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
 
   /api/internal/players/{playerId}/sanctions:
@@ -1471,8 +1566,8 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
-    guildId:
-      name: guildId
+    corporationId:
+      name: corporationId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -1508,7 +1603,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Forbidden:
-      description: Missing role or guild permission (`FORBIDDEN`), or caller is suspended/banned (`SANCTIONED`)
+      description: Missing role or corporation permission (`FORBIDDEN`), or caller is suspended/banned (`SANCTIONED`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -1549,13 +1644,13 @@ components:
     PresenceStatus:
       type: string
       enum: [online, mission, offline]
-    GuildRecruitmentMode:
+    CorporationRecruitmentMode:
       type: string
       enum: [open, apply, closed]
-    GuildPermission:
+    CorporationPermission:
       type: string
-      enum: [manage_guild, manage_ranks, manage_members, invite, recruit]
-    GuildRequestKind:
+      enum: [manage_corporation, manage_ranks, manage_members, invite, recruit]
+    CorporationRequestKind:
       type: string
       enum: [invitation, application]
     ReputationSource:
@@ -1563,7 +1658,7 @@ components:
       enum: [game, block, report, sanction, moderation, rehabilitation]
     ReportTargetType:
       type: string
-      enum: [player, guild]
+      enum: [player, corporation]
     ReportReason:
       type: string
       enum: [harassment, cheating, griefing, offensive_name, scam, other]
@@ -1585,11 +1680,17 @@ components:
         story: { type: string, maxLength: 4000 }
         alignment: { type: string, maxLength: 32 }
 
+    ProfileKind:
+      type: string
+      enum: [player, npc]
+      description: '`player` = Keycloak-authenticated; `npc` = server-managed, excluded from reputation, sanctions and reports'
+
     PlayerProfile:
       type: object
-      required: [playerId, displayName, avatarUrl, faction, biography, role, level, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
+      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, level, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
       properties:
-        playerId: { type: string, format: uuid, description: Keycloak subject }
+        playerId: { type: string, format: uuid, description: Keycloak subject (players) or server-assigned id (NPCs) }
+        entityType: { $ref: '#/components/schemas/ProfileKind' }
         displayName: { type: string }
         avatarUrl: { type: [string, 'null'], format: uri }
         faction: { type: [string, 'null'] }
@@ -1650,7 +1751,7 @@ components:
         playerId: { type: string, format: uuid }
         type:
           type: string
-          examples: [profile_created, profile_updated, friend_request_sent, friend_added, player_blocked, level_changed, guild_application_sent]
+          examples: [profile_created, profile_updated, friend_request_sent, friend_added, player_blocked, level_changed, corporation_application_sent]
         details: { type: [object, 'null'], additionalProperties: true }
         createdAt: { type: string, format: date-time }
 
@@ -1702,69 +1803,69 @@ components:
             lastMetAt: { type: string, format: date-time }
             encounters: { type: integer }
 
-    # ── Guilds ──
-    GuildRef:
+    # ── Corporations ──
+    CorporationRef:
       type: object
-      required: [id, name, tag]
+      required: [id, name, ticker]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        tag: { type: string }
+        ticker: { type: string }
 
-    Guild:
+    Corporation:
       type: object
-      required: [id, name, tag, logoUrl, description, recruitment, ownerId, createdAt, updatedAt]
+      required: [id, name, ticker, logoUrl, description, recruitment, ceoId, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        tag: { type: string, description: "Uppercase alphanumeric, 2–5 chars" }
+        ticker: { type: string, description: "Uppercase alphanumeric, 2–5 chars" }
         logoUrl: { type: [string, 'null'], format: uri }
         description: { type: [string, 'null'] }
-        recruitment: { $ref: '#/components/schemas/GuildRecruitmentMode' }
-        ownerId: { type: string, format: uuid }
+        recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode' }
+        ceoId: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 
-    GuildSummary:
+    CorporationSummary:
       allOf:
-        - $ref: '#/components/schemas/Guild'
+        - $ref: '#/components/schemas/Corporation'
         - type: object
           required: [memberCount]
           properties:
             memberCount: { type: integer }
 
-    CreateGuild:
+    CreateCorporation:
       type: object
-      required: [name, tag]
+      required: [name, ticker]
       properties:
         name: { type: string, minLength: 3, maxLength: 48 }
-        tag: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$', description: Stored uppercased }
+        ticker: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$', description: Stored uppercased }
         description: { type: [string, 'null'], maxLength: 2000 }
         logoUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
-        recruitment: { $ref: '#/components/schemas/GuildRecruitmentMode', default: apply }
+        recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode', default: apply }
 
-    GuildPatch:
+    CorporationPatch:
       type: object
       minProperties: 1
       properties:
         name: { type: string, minLength: 3, maxLength: 48 }
-        tag: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$' }
+        ticker: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$' }
         description: { type: [string, 'null'], maxLength: 2000 }
         logoUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
-        recruitment: { $ref: '#/components/schemas/GuildRecruitmentMode' }
+        recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode' }
 
-    GuildRank:
+    CorporationRank:
       type: object
-      required: [id, guildId, name, priority, permissions, isLeader, isDefault]
+      required: [id, corporationId, name, priority, permissions, isCeo, isDefault]
       properties:
         id: { type: integer }
-        guildId: { type: string, format: uuid }
+        corporationId: { type: string, format: uuid }
         name: { type: string }
         priority: { type: integer, description: Higher wins; a member may only act on ranks strictly below their own }
         permissions:
           type: array
-          items: { $ref: '#/components/schemas/GuildPermission' }
-        isLeader: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
+          items: { $ref: '#/components/schemas/CorporationPermission' }
+        isCeo: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
         isDefault: { type: boolean, description: Rank given to new members }
 
     CreateRank:
@@ -1776,7 +1877,7 @@ components:
         permissions:
           type: array
           default: []
-          items: { $ref: '#/components/schemas/GuildPermission' }
+          items: { $ref: '#/components/schemas/CorporationPermission' }
         isDefault: { type: boolean }
 
     RankPatch:
@@ -1787,67 +1888,67 @@ components:
         priority: { type: integer, minimum: 0, maximum: 99 }
         permissions:
           type: array
-          items: { $ref: '#/components/schemas/GuildPermission' }
+          items: { $ref: '#/components/schemas/CorporationPermission' }
         isDefault: { type: boolean }
 
-    GuildMembership:
+    CorporationMembership:
       type: object
-      required: [guildId, playerId, rankId, joinedAt]
+      required: [corporationId, playerId, rankId, joinedAt]
       properties:
-        guildId: { type: string, format: uuid }
+        corporationId: { type: string, format: uuid }
         playerId: { type: string, format: uuid }
         rankId: { type: integer }
         joinedAt: { type: string, format: date-time }
 
-    GuildMember:
+    CorporationMember:
       allOf:
         - $ref: '#/components/schemas/PlayerProfile'
         - type: object
           required: [joinedAt, rank, status, location]
           properties:
             joinedAt: { type: string, format: date-time }
-            rank: { $ref: '#/components/schemas/GuildRank' }
+            rank: { $ref: '#/components/schemas/CorporationRank' }
             status: { $ref: '#/components/schemas/PresenceStatus' }
             location:
               oneOf:
                 - $ref: '#/components/schemas/Location'
                 - type: 'null'
 
-    GuildJoinRequest:
+    CorporationJoinRequest:
       type: object
-      required: [id, guildId, playerId, kind, message, createdBy, createdAt]
+      required: [id, corporationId, playerId, kind, message, createdBy, createdAt]
       properties:
         id: { type: integer }
-        guildId: { type: string, format: uuid }
+        corporationId: { type: string, format: uuid }
         playerId: { type: string, format: uuid }
-        kind: { $ref: '#/components/schemas/GuildRequestKind' }
+        kind: { $ref: '#/components/schemas/CorporationRequestKind' }
         message: { type: [string, 'null'] }
         createdBy: { type: [string, 'null'], format: uuid, description: Inviting member for invitations; null for applications }
         createdAt: { type: string, format: date-time }
 
-    GuildRequest:
-      description: A guild-side view of a request, with the player's profile
+    CorporationRequest:
+      description: A corporation-side view of a request, with the player's profile
       allOf:
-        - $ref: '#/components/schemas/GuildJoinRequest'
+        - $ref: '#/components/schemas/CorporationJoinRequest'
         - type: object
           required: [player]
           properties:
             player: { $ref: '#/components/schemas/PlayerProfile' }
 
-    PlayerGuildRequest:
-      description: A player-side view of a request, with the guild reference
+    PlayerCorporationRequest:
+      description: A player-side view of a request, with the corporation reference
       allOf:
-        - $ref: '#/components/schemas/GuildJoinRequest'
+        - $ref: '#/components/schemas/CorporationJoinRequest'
         - type: object
-          required: [guild]
+          required: [corporation]
           properties:
-            guild:
+            corporation:
               type: object
-              required: [id, name, tag, logoUrl]
+              required: [id, name, ticker, logoUrl]
               properties:
                 id: { type: string, format: uuid }
                 name: { type: string }
-                tag: { type: string }
+                ticker: { type: string }
                 logoUrl: { type: [string, 'null'], format: uri }
 
     JoinedResult:
@@ -1861,18 +1962,18 @@ components:
       required: [joined, request]
       properties:
         joined: { type: boolean, const: false }
-        request: { $ref: '#/components/schemas/GuildJoinRequest' }
+        request: { $ref: '#/components/schemas/CorporationJoinRequest' }
 
-    GuildActivityEntry:
+    CorporationActivityEntry:
       type: object
-      required: [id, guildId, actorId, type, details, createdAt]
+      required: [id, corporationId, actorId, type, details, createdAt]
       properties:
         id: { type: integer }
-        guildId: { type: string, format: uuid }
+        corporationId: { type: string, format: uuid }
         actorId: { type: [string, 'null'], format: uuid }
         type:
           type: string
-          examples: [guild_created, member_joined, member_left, member_kicked, rank_changed, player_invited, ownership_transferred]
+          examples: [corporation_created, member_joined, member_left, member_kicked, rank_changed, player_invited, ceo_transferred]
         details: { type: [object, 'null'], additionalProperties: true }
         createdAt: { type: string, format: date-time }
 
@@ -1896,19 +1997,19 @@ components:
       required: [targetType, targetId, reason]
       properties:
         targetType: { $ref: '#/components/schemas/ReportTargetType' }
-        targetId: { type: string, format: uuid, description: Player id or guild id depending on `targetType` }
+        targetId: { type: string, format: uuid, description: Player id or corporation id depending on `targetType` }
         reason: { $ref: '#/components/schemas/ReportReason' }
         message: { type: string, maxLength: 1000 }
 
     Report:
       type: object
-      required: [id, reporterId, targetType, targetPlayerId, targetGuildId, reason, message, status, escalation, resolvedBy, resolutionNote, resolvedAt, createdAt]
+      required: [id, reporterId, targetType, targetPlayerId, targetCorporationId, reason, message, status, escalation, resolvedBy, resolutionNote, resolvedAt, createdAt]
       properties:
         id: { type: integer }
         reporterId: { type: [string, 'null'], format: uuid, description: Null for reports raised automatically by the system }
         targetType: { $ref: '#/components/schemas/ReportTargetType' }
         targetPlayerId: { type: [string, 'null'], format: uuid }
-        targetGuildId: { type: [string, 'null'], format: uuid }
+        targetCorporationId: { type: [string, 'null'], format: uuid }
         reason:
           type: string
           enum: [harassment, cheating, griefing, offensive_name, scam, other, reputation_threshold]
@@ -1958,7 +2059,7 @@ components:
 
     CommunityStats:
       type: object
-      required: [players, guilds, reports, sanctions, activityLast24h, mostReported, lowestReputation]
+      required: [players, corporations, reports, sanctions, activityLast24h, mostReported, lowestReputation]
       properties:
         players:
           type: object
@@ -1966,7 +2067,7 @@ components:
           properties:
             total: { type: integer }
             online: { type: integer }
-        guilds:
+        corporations:
           type: object
           required: [total, top]
           properties:
@@ -1976,11 +2077,11 @@ components:
               description: Top 5 by member count
               items:
                 type: object
-                required: [id, name, tag, members]
+                required: [id, name, ticker, members]
                 properties:
                   id: { type: string, format: uuid }
                   name: { type: string }
-                  tag: { type: string }
+                  ticker: { type: string }
                   members: { type: integer }
         reports:
           type: object

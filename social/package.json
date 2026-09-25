@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "DyingStar social API: player profiles, friends, presence (guilds, reputation and moderation to come).",
+  "description": "DyingStar social API: player profiles, friends, presence (corporations, reputation and moderation to come).",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -33,5 +33,8 @@
     "drizzle-kit": "^0.31.7",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }

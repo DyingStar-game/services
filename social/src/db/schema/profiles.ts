@@ -11,8 +11,13 @@ export interface RpSheet {
   alignment?: string;
 }
 
+/** Profile kinds: real players (authenticated via Keycloak) and server-managed NPCs. */
+export const ENTITY_TYPES = ['player', 'npc'] as const;
+export type EntityType = (typeof ENTITY_TYPES)[number];
+
 export const playerProfiles = pgTable('player_profiles', {
   playerId: uuid('player_id').primaryKey(),
+  entityType: text('entity_type').$type<EntityType>().notNull().default('player'),
   displayName: text('display_name').notNull().unique(),
   avatarUrl: text('avatar_url'),
   faction: text('faction'),

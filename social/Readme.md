@@ -1,6 +1,6 @@
 # Service social
 
-API sociale de DyingStar : profils joueurs, amis, présence, et à terme guildes, réputation et modération.
+API sociale de DyingStar : profils joueurs, amis, présence, et à terme corporations, réputation et modération.
 Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak validé via JWKS (`jose`).
 
 ## Lancer en local
@@ -53,7 +53,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | GET | `/api/me` | Mon profil + présence (créé au premier appel) |
 | PATCH | `/api/me` | `displayName, avatarUrl, faction, biography, rpSheet{characterName,story,alignment}` |
 | GET | `/api/me/activity?limit=` | Mon historique d'activité |
-| GET | `/api/profiles?search=&limit=` | Recherche par nom d'affichage |
+| GET | `/api/profiles?search=&limit=&entityType=` | Recherche par nom d'affichage (`entityType` ∈ `player\|npc`, défaut : les deux) |
 | GET | `/api/profiles/:playerId` | Profil public + statut en ligne |
 | GET | `/api/friends` | Amis + présence (statut, localisation) |
 | GET | `/api/friends/online` | Amis connectés / en mission |
@@ -66,46 +66,46 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | GET | `/api/blocks` | Joueurs bloqués |
 | POST | `/api/blocks` `{playerId}` | Bloquer (supprime amitié / demandes, empêche les nouvelles) |
 | DELETE | `/api/blocks/:playerId` | Débloquer |
-| GET | `/api/me/guild` | Ma guilde + mon grade (`null` si aucune) |
-| GET | `/api/me/guild/requests` | Mes invitations et candidatures en attente |
-| POST | `/api/me/guild/requests/:id/accept` | Accepter une invitation |
-| POST | `/api/me/guild/requests/:id/decline` | Refuser une invitation / retirer une candidature |
+| GET | `/api/me/corporation` | Ma corporation + mon grade (`null` si aucune) |
+| GET | `/api/me/corporation/requests` | Mes invitations et candidatures en attente |
+| POST | `/api/me/corporation/requests/:id/accept` | Accepter une invitation |
+| POST | `/api/me/corporation/requests/:id/decline` | Refuser une invitation / retirer une candidature |
 | GET | `/api/me/reputation?limit=` | Mon score, l'historique des variations et mes sanctions actives (accessible même suspendu) |
 | GET | `/api/me/sanctions` | Mes sanctions actives (accessible même suspendu) |
-| POST | `/api/reports` `{targetType: player\|guild, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
+| POST | `/api/reports` `{targetType: player\|corporation, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
 | GET | `/api/reports?limit=` | Mes signalements |
 
 Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 
-### Guildes (`Authorization: Bearer <JWT Keycloak>`) — un joueur appartient à une guilde max
+### Corporations (`Authorization: Bearer <JWT Keycloak>`) — un joueur appartient à une corporation max
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/guilds?search=&limit=` | Annuaire (nom/tag, nombre de membres) |
-| POST | `/api/guilds` `{name, tag, description?, logoUrl?, recruitment?}` | Créer ; le créateur devient propriétaire avec le grade leader |
-| GET | `/api/guilds/:guildId` | Page publique : guilde, grades, membres + présence |
-| PATCH | `/api/guilds/:guildId` | `manage_guild` — nom, tag, logo, description, `recruitment` ∈ `open\|apply\|closed` |
-| DELETE | `/api/guilds/:guildId` | Dissoudre (propriétaire) |
-| POST | `/api/guilds/:guildId/transfer` `{playerId}` | Transférer la propriété (propriétaire) |
-| GET | `/api/guilds/:guildId/activity?limit=` | Journal interne (membres) |
-| GET | `/api/guilds/:guildId/members` | Membres avec grade et présence |
-| PATCH | `/api/guilds/:guildId/members/:playerId` `{rankId}` | Changer le grade (`manage_members`, grades strictement inférieurs au sien) |
-| DELETE | `/api/guilds/:guildId/members/:playerId` | Quitter (soi-même) ou exclure (`manage_members`) |
-| GET | `/api/guilds/:guildId/ranks` | Grades (priorité décroissante) |
-| POST | `/api/guilds/:guildId/ranks` `{name, priority, permissions[], isDefault?}` | Créer un grade (`manage_ranks`) |
-| PATCH | `/api/guilds/:guildId/ranks/:rankId` | Modifier (`manage_ranks` ; le grade leader n'accepte qu'un renommage) |
-| DELETE | `/api/guilds/:guildId/ranks/:rankId` | Supprimer (membres déplacés vers le grade par défaut) |
-| POST | `/api/guilds/:guildId/join` `{message?}` | Rejoindre directement (`open`) ou candidater (`apply`) |
-| POST | `/api/guilds/:guildId/invitations` `{playerId}` | Inviter (`invite`) |
-| GET | `/api/guilds/:guildId/requests` | Candidatures et invitations en attente (`recruit` ou `invite`) |
-| POST | `/api/guilds/:guildId/requests/:id/accept` | Accepter une candidature (`recruit`) |
-| POST | `/api/guilds/:guildId/requests/:id/decline` | Refuser une candidature (`recruit`) ou retirer une invitation (`invite`) |
+| GET | `/api/corporations?search=&limit=` | Annuaire (nom/ticker, nombre de membres) |
+| POST | `/api/corporations` `{name, ticker, description?, logoUrl?, recruitment?}` | Créer ; le créateur devient le CEO avec le grade CEO |
+| GET | `/api/corporations/:corporationId` | Page publique : corporation, grades, membres + présence |
+| PATCH | `/api/corporations/:corporationId` | `manage_corporation` — nom, ticker, logo, description, `recruitment` ∈ `open\|apply\|closed` |
+| DELETE | `/api/corporations/:corporationId` | Dissoudre (CEO) |
+| POST | `/api/corporations/:corporationId/transfer` `{playerId}` | Transférer le rôle de CEO (CEO) |
+| GET | `/api/corporations/:corporationId/activity?limit=` | Journal interne (membres) |
+| GET | `/api/corporations/:corporationId/members` | Membres avec grade et présence |
+| PATCH | `/api/corporations/:corporationId/members/:playerId` `{rankId}` | Changer le grade (`manage_members`, grades strictement inférieurs au sien) |
+| DELETE | `/api/corporations/:corporationId/members/:playerId` | Quitter (soi-même) ou exclure (`manage_members`) |
+| GET | `/api/corporations/:corporationId/ranks` | Grades (priorité décroissante) |
+| POST | `/api/corporations/:corporationId/ranks` `{name, priority, permissions[], isDefault?}` | Créer un grade (`manage_ranks`) |
+| PATCH | `/api/corporations/:corporationId/ranks/:rankId` | Modifier (`manage_ranks` ; le grade CEO n'accepte qu'un renommage) |
+| DELETE | `/api/corporations/:corporationId/ranks/:rankId` | Supprimer (membres déplacés vers le grade par défaut) |
+| POST | `/api/corporations/:corporationId/join` `{message?}` | Rejoindre directement (`open`) ou candidater (`apply`) |
+| POST | `/api/corporations/:corporationId/invitations` `{playerId}` | Inviter (`invite`) |
+| GET | `/api/corporations/:corporationId/requests` | Candidatures et invitations en attente (`recruit` ou `invite`) |
+| POST | `/api/corporations/:corporationId/requests/:id/accept` | Accepter une candidature (`recruit`) |
+| POST | `/api/corporations/:corporationId/requests/:id/decline` | Refuser une candidature (`recruit`) ou retirer une invitation (`invite`) |
 
-Permissions de grade : `manage_guild`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade leader (unique, indélébile) les a toutes. Grades créés par défaut : Leader (100), Officer (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
+Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade CEO (unique, indélébile) les a toutes. Grades créés par défaut : CEO (100), Director (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
 
 ### Modération (`Authorization: Bearer` avec rôle Keycloak `moderator` < `admin` < `supervisor`)
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/admin/stats` | Analyse communautaire : joueurs/en ligne, guildes (top 5), signalements par statut, sanctions actives, activité 24h, plus signalés, réputations les plus basses |
+| GET | `/api/admin/stats` | Analyse communautaire : joueurs/en ligne, corporations (top 5), signalements par statut, sanctions actives, activité 24h, plus signalés, réputations les plus basses |
 | GET | `/api/admin/log?limit=` | Journal d'audit des actions de modération |
 | GET | `/api/admin/reports?status=&escalation=&targetPlayerId=&limit=` | File des signalements |
 | GET | `/api/admin/reports/:id` | Détail |
@@ -123,13 +123,18 @@ Permissions de grade : `manage_guild`, `manage_ranks`, `manage_members`, `invite
 | Méthode | Route | Description |
 |---|---|---|
 | PUT | `/api/internal/players/:playerId` `{displayName}` | Créer le profil au login (nom existant conservé) |
+| PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?, level?}` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
 | PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
 | POST | `/api/internal/players/:playerId/stats` | `playtimeSecondsDelta, level, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
 | GET | `/api/internal/players/:playerId/sanctions` | Sanctions actives (pour appliquer mute/ban côté jeu) |
 | POST | `/api/internal/reputation/rehabilitate` | Lancer une passe de réhabilitation |
 | POST | `/api/internal/players/:playerId/activity` `{type, details?}` | Ajouter une entrée d'activité |
-| GET | `/api/internal/players/:playerId/guild` | Guilde et grade d'un joueur (`null` si aucune) |
+| GET | `/api/internal/players/:playerId/corporation` | Corporation et grade d'un joueur (`null` si aucune) |
+| PUT | `/api/internal/players/:playerId/corporation` `{corporationId, rankId?}` | Ajouter un **PNJ** à une corporation (grade par défaut si omis) |
+| DELETE | `/api/internal/players/:playerId/corporation` | Retirer un **PNJ** de sa corporation |
 | POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | Enregistrer une rencontre (alimente les suggestions) |
+
+Les **PNJ** sont des profils `entityType: "npc"` (id UUID attribué par le serveur de jeu) : visibles dans la recherche (`?entityType=npc`), amiables et présents dans les corporations comme membres avec un grade, mais **exclus** de la réputation, des sanctions et des signalements (réponse `400 NPC_NOT_APPLICABLE`). Un PNJ ne peut jamais être le CEO d'une corporation.
 
 ## Structure
 
@@ -137,7 +142,7 @@ Permissions de grade : `manage_guild`, `manage_ranks`, `manage_members`, `invite
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, guilds, moderation)
+  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, moderation)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT / clé interne / rôles), sanctions, validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
@@ -152,6 +157,7 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 
 ### Profils Joueurs
 - [x] Création et gestion du profil (nom, avatar, faction, biographie)
+- [x] Profils NPC côté serveur (`entityType: npc`, gestion via l'API interne, visibles et amiables, exclus de la modération)
 - [x] Statistiques personnelles (temps de jeu, niveau, réputation (joueur), rôle, etc.)
 - [x] Historique d'activité
 - [x] Réputation (joueur) dynamique selon les interactions et signalements
@@ -161,22 +167,22 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [x] Liste d'amis et gestion des invitations
 - [x] Statut en ligne (connecté / mission / hors ligne)
 - [x] Localisation des amis dans l'univers persistant
-- [~] Invitations contextuelles (groupe, guilde, mission) — guilde faite, groupe/mission à venir
+- [~] Invitations contextuelles (groupe, corporation, mission) — corporation faite, groupe/mission à venir
 - [x] Système de recommandations ("joueurs rencontrés récemment")
 
-### Guildes
-- [x] Création et gestion de guilde (nom, logo, description, tag)
+### Corporations
+- [x] Création et gestion de corporation (nom, ticker, logo, description)
 - [x] Système de grades et permissions internes
-- [x] Page publique de guilde avec présentation et statistiques
+- [x] Page publique de corporation avec présentation et statistiques
 - [x] Recrutement et gestion des membres
 - [ ] Relations diplomatiques (alliances, trêves, guerres)
 - [x] Journal d'activité interne (actions, promotions, missions)
 - [ ] Système de territoires (stations, flottes, zones contrôlées)
-- [ ] Classements et influence inter-guildes
+- [ ] Classements et influence inter-corporations
 
 ### Réputation joueur & Modération
 - [x] Système de réputation global pour chaque joueur
-- [x] Signalement d'un joueur ou d'une guilde avec motif
+- [x] Signalement d'un joueur ou d'une corporation avec motif
 - [x] Impact des blocages/ignorances sur la réputation
 - [x] Sanctions automatiques selon le score de réputation
 - [x] Escalade automatique vers des instances supérieures
@@ -185,10 +191,10 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 ### API & Intégration
 - [x] API interne connectée au serveur du jeu (mise à jour régulière)
 - [~] API publique sécurisée (OAuth2, clés d'accès) — JWT Keycloak en place, clés d'accès tierces à venir
-- [ ] Webhooks d'événements (nouvelle guilde, changement de réputation, etc.)
+- [ ] Webhooks d'événements (nouvelle corporation, changement de réputation, etc.)
 - [ ] Support des outils externes (bots, extensions, overlays)
 
 ### Administration & Modération
 - [x] Rôles spécifiques de modération (modérateurs, administrateurs, superviseurs)
 - [x] Tableau de bord de gestion des signalements et réputations
-- [~] Outils d'analyse communautaire (activité, interactions, guildes influentes) — `GET /api/admin/stats` (base), à enrichir
+- [~] Outils d'analyse communautaire (activité, interactions, corporations influentes) — `GET /api/admin/stats` (base), à enrichir

@@ -1,11 +1,11 @@
 /**
  * Player profiles: creation on first contact, updates, search and game-server stats.
  */
-import { eq, ilike, sql } from 'drizzle-orm';
+import { and, eq, ilike, sql } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
-import { playerProfiles, type PlayerProfile, type RpSheet } from '../db/schema/index.js';
-import { conflict, notFound } from '../lib/httpError.js';
+import { playerProfiles, type EntityType, type PlayerProfile, type RpSheet } from '../db/schema/index.js';
+import { HttpError, conflict, notFound } from '../lib/httpError.js';
 import { recordActivity } from './activity.service.js';
 
 /** Fields a player may edit on their own profile. */
@@ -15,6 +15,16 @@ export interface ProfilePatch {
   faction?: string | null;
   biography?: string | null;
   rpSheet?: RpSheet | null;
+}
+
+/** Fields accepted when creating/updating an NPC profile via the internal API. */
+export interface NpcProfileInput {
+  displayName: string;
+  avatarUrl?: string | null;
+  faction?: string | null;
+  biography?: string | null;
+  role?: string | null;
+  level?: number;
 }
 
 /** Stat deltas / values reported by the game server (reputation goes through `reputation.service`). */
@@ -54,6 +64,26 @@ export async function requireProfile(playerId: string): Promise<PlayerProfile> {
 }
 
 /**
+ * Whether the profile is a server-managed NPC.
+ * @param playerId - Profile id.
+ * @returns True when the profile exists and is an NPC.
+ */
+export async function isNpc(playerId: string): Promise<boolean> {
+  const profile = await getProfile(playerId);
+  return profile !== null && profile.entityType === 'npc';
+}
+
+/**
+ * Rejects the call when the target profile is an NPC.
+ * @param playerId - Profile id.
+ */
+export async function requireNotNpc(playerId: string): Promise<void> {
+  if (await isNpc(playerId)) {
+    throw new HttpError(400, 'NPC_NOT_APPLICABLE', 'This action does not apply to NPC profiles');
+  }
+}
+
+/**
  * Returns the existing profile or creates one from the token identity.
  * On display-name collision a short suffix is appended.
  * @param playerId - Player id.
@@ -78,6 +108,51 @@ export async function ensureProfile(playerId: string, username: string): Promise
     }
   }
   throw conflict(`Could not allocate a unique display name for ${username}`);
+}
+
+/**
+ * Creates an NPC profile (idempotent). Unlike players, a taken NPC name is an error:
+ * a collision must not be silently renamed, since the shared unique `display_name`
+ * protects real players from impersonation.
+ * @param playerId - NPC id (UUID, assigned by the game server).
+ * @param input - NPC profile fields.
+ * @returns Existing or freshly created NPC profile.
+ */
+export async function ensureNpcProfile(playerId: string, input: NpcProfileInput): Promise<PlayerProfile> {
+  const existing = await getProfile(playerId);
+  if (existing) {
+    if (existing.entityType === 'player') throw conflict('This id already belongs to a player profile');
+    if (existing.displayName !== input.displayName) {
+      throw conflict(`NPC display name "${input.displayName}" conflicts with existing profile`);
+    }
+    const patch: Partial<Omit<NpcProfileInput, 'displayName'>> = {
+      ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}),
+      ...(input.faction !== undefined ? { faction: input.faction } : {}),
+      ...(input.biography !== undefined ? { biography: input.biography } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
+      ...(input.level !== undefined ? { level: input.level } : {}),
+    };
+    if (Object.keys(patch).length === 0) return existing;
+    const [updated] = await db
+      .update(playerProfiles)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(playerProfiles.playerId, playerId))
+      .returning();
+    return updated;
+  }
+  try {
+    const [created] = await db
+      .insert(playerProfiles)
+      .values({ playerId, entityType: 'npc', ...input })
+      .returning();
+    await recordActivity(playerId, 'npc_profile_created');
+    return created;
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const raced = await getProfile(playerId);
+    if (raced && raced.entityType === 'npc') return raced;
+    throw conflict(`Display name "${input.displayName}" is already taken`);
+  }
 }
 
 /**
@@ -106,11 +181,15 @@ export async function updateProfile(playerId: string, patch: ProfilePatch): Prom
  * Searches profiles by display name (case-insensitive substring).
  * @param search - Substring to match; empty lists the most recent profiles.
  * @param limit - Max results.
+ * @param entityType - Optional profile-kind filter (default: all).
  * @returns Matching profiles.
  */
-export async function searchProfiles(search: string, limit: number): Promise<PlayerProfile[]> {
+export async function searchProfiles(search: string, limit: number, entityType?: EntityType): Promise<PlayerProfile[]> {
+  const conditions = [];
+  if (search) conditions.push(ilike(playerProfiles.displayName, `%${search}%`));
+  if (entityType) conditions.push(eq(playerProfiles.entityType, entityType));
   const query = db.select().from(playerProfiles);
-  const filtered = search ? query.where(ilike(playerProfiles.displayName, `%${search}%`)) : query;
+  const filtered = conditions.length ? query.where(and(...conditions)) : query;
   return filtered.orderBy(playerProfiles.displayName).limit(limit);
 }
 

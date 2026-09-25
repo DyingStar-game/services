@@ -16,7 +16,7 @@ import {
 } from '../db/schema/index.js';
 import { recordActivity } from './activity.service.js';
 import { logModeration } from './moderationLog.service.js';
-import { requireProfile } from './profiles.service.js';
+import { requireNotNpc, requireProfile } from './profiles.service.js';
 import { hasActiveSanction, issueSanction } from './sanctions.service.js';
 
 /** Threshold rules, evaluated from the most severe. */
@@ -53,6 +53,7 @@ export async function adjustReputation(
 ): Promise<number> {
   const profile = await requireProfile(playerId);
   if (delta === 0) return profile.reputation;
+  await requireNotNpc(playerId);
 
   const balance = await db.transaction(async (tx) => {
     const [updated] = await tx

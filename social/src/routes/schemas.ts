@@ -4,9 +4,10 @@
 import { z } from 'zod';
 
 import {
+  CORPORATION_PERMISSIONS,
+  CORPORATION_RECRUITMENT_MODES,
+  ENTITY_TYPES,
   ESCALATION_LEVELS,
-  GUILD_PERMISSIONS,
-  GUILD_RECRUITMENT_MODES,
   PRESENCE_STATUSES,
   REPORT_REASONS,
   REPORT_STATUSES,
@@ -28,6 +29,11 @@ export const limitQuery = z.object({
 
 export const searchQuery = limitQuery.extend({
   search: z.string().trim().max(64).default(''),
+});
+
+/** Profile search with an optional profile-kind filter (`all` = both kinds). */
+export const profileSearchQuery = searchQuery.extend({
+  entityType: z.enum(ENTITY_TYPES).optional(),
 });
 
 const nullableText = (max: number) => z.string().trim().max(max).nullable().optional();
@@ -82,44 +88,60 @@ export const upsertPlayerBody = z.object({
   displayName: z.string().trim().min(2).max(32),
 });
 
-// ── Guilds ──────────────────────────────────────────────────────────────────
+// ── NPCs (internal API, game server) ────────────────────────────────────────
 
-export const guildIdParams = z.object({ guildId: uuidSchema });
-export const guildMemberParams = guildIdParams.extend({ playerId: uuidSchema });
-export const guildRankParams = guildIdParams.extend({ rankId: z.coerce.number().int().positive() });
-export const guildRequestParams = guildIdParams.extend({ id: z.coerce.number().int().positive() });
+export const npcProfileBody = z.object({
+  displayName: z.string().trim().min(2).max(32),
+  avatarUrl: z.string().trim().url().max(512).nullable().optional(),
+  faction: nullableText(64),
+  biography: nullableText(2000),
+  role: nullableText(64),
+  level: z.number().int().min(0).optional(),
+});
 
-const guildName = z.string().trim().min(3).max(48);
-const guildTag = z
+export const npcCorporationBody = z.object({
+  corporationId: uuidSchema,
+  rankId: z.number().int().positive().optional(),
+});
+
+// ── Corporations ────────────────────────────────────────────────────────────
+
+export const corporationIdParams = z.object({ corporationId: uuidSchema });
+export const corporationMemberParams = corporationIdParams.extend({ playerId: uuidSchema });
+export const corporationRankParams = corporationIdParams.extend({ rankId: z.coerce.number().int().positive() });
+export const corporationRequestParams = corporationIdParams.extend({ id: z.coerce.number().int().positive() });
+
+const corporationName = z.string().trim().min(3).max(48);
+const corporationTicker = z
   .string()
   .trim()
   .min(2)
   .max(5)
-  .regex(/^[A-Za-z0-9]+$/, 'Tag must be alphanumeric')
+  .regex(/^[A-Za-z0-9]+$/, 'Ticker must be alphanumeric')
   .transform((t) => t.toUpperCase());
 
-export const createGuildBody = z.object({
-  name: guildName,
-  tag: guildTag,
+export const createCorporationBody = z.object({
+  name: corporationName,
+  ticker: corporationTicker,
   description: nullableText(2000),
   logoUrl: z.string().trim().url().max(512).nullable().optional(),
-  recruitment: z.enum(GUILD_RECRUITMENT_MODES).optional(),
+  recruitment: z.enum(CORPORATION_RECRUITMENT_MODES).optional(),
 });
 
-export const guildPatchBody = z
+export const corporationPatchBody = z
   .object({
-    name: guildName.optional(),
-    tag: guildTag.optional(),
+    name: corporationName.optional(),
+    ticker: corporationTicker.optional(),
     description: nullableText(2000),
     logoUrl: z.string().trim().url().max(512).nullable().optional(),
-    recruitment: z.enum(GUILD_RECRUITMENT_MODES).optional(),
+    recruitment: z.enum(CORPORATION_RECRUITMENT_MODES).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
 export const rankBody = z.object({
   name: z.string().trim().min(1).max(32),
   priority: z.number().int().min(0).max(99),
-  permissions: z.array(z.enum(GUILD_PERMISSIONS)).default([]),
+  permissions: z.array(z.enum(CORPORATION_PERMISSIONS)).default([]),
   isDefault: z.boolean().optional(),
 });
 
@@ -128,14 +150,14 @@ export const rankPatchBody = z
   .object({
     name: z.string().trim().min(1).max(32).optional(),
     priority: z.number().int().min(0).max(99).optional(),
-    permissions: z.array(z.enum(GUILD_PERMISSIONS)).optional(),
+    permissions: z.array(z.enum(CORPORATION_PERMISSIONS)).optional(),
     isDefault: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
 export const memberRankBody = z.object({ rankId: z.number().int().positive() });
 
-export const joinGuildBody = z.object({ message: z.string().trim().max(500).optional() });
+export const joinCorporationBody = z.object({ message: z.string().trim().max(500).optional() });
 
 // ── Reputation & moderation ─────────────────────────────────────────────────
 

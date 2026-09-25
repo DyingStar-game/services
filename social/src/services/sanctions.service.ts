@@ -8,7 +8,7 @@ import { sanctions, type Sanction, type SanctionType } from '../db/schema/index.
 import { notFound } from '../lib/httpError.js';
 import { recordActivity } from './activity.service.js';
 import { logModeration } from './moderationLog.service.js';
-import { requireProfile } from './profiles.service.js';
+import { requireNotNpc, requireProfile } from './profiles.service.js';
 
 /** Sanction types that close the social API for the player. */
 const BLOCKING: SanctionType[] = ['suspension', 'ban'];
@@ -74,6 +74,7 @@ export async function issueSanction(
   issuedBy: string | null,
 ): Promise<Sanction> {
   await requireProfile(playerId);
+  await requireNotNpc(playerId);
   const expiresAt =
     input.type === 'warning'
       ? new Date()

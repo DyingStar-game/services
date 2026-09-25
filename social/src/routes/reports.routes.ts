@@ -12,7 +12,7 @@ import { createReportBody, limitQuery } from './schemas.js';
 /** Router for filing and listing one's own reports. */
 export const reportsRoutes: IRouter = Router();
 
-/** POST / — Report a player or a guild. */
+/** POST / — Report a player or a corporation. */
 reportsRoutes.post(
   '/',
   validate(createReportBody),

@@ -1,5 +1,5 @@
 /**
- * Player and guild reports, their moderation workflow and escalation.
+ * Player and corporation reports, their moderation workflow and escalation.
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
 
@@ -7,7 +7,7 @@ import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
 import {
   ESCALATION_LEVELS,
-  guilds,
+  corporations,
   playerProfiles,
   reports,
   type EscalationLevel,
@@ -18,9 +18,9 @@ import {
 } from '../db/schema/index.js';
 import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
 import { recordActivity } from './activity.service.js';
-import { requireGuild } from './guilds.service.js';
+import { requireCorporation } from './corporations.service.js';
 import { logModeration } from './moderationLog.service.js';
-import { requireProfile } from './profiles.service.js';
+import { requireNotNpc, requireProfile } from './profiles.service.js';
 import { adjustReputation } from './reputation.service.js';
 
 /** Report enriched with target labels for dashboards. */
@@ -32,7 +32,7 @@ export interface ReportView extends Report {
 const OPEN_STATUSES: ReportStatus[] = ['open', 'reviewing'];
 
 /**
- * Files a report against a player or a guild. The reported player loses `reportPenalty` points.
+ * Files a report against a player or a corporation. The reported player loses `reportPenalty` points.
  * @param reporterId - Reporting player.
  * @param input - Target and reason.
  * @returns Created report.
@@ -42,10 +42,13 @@ export async function createReport(
   input: { targetType: ReportTargetType; targetId: string; reason: ReportReason; message?: string },
 ): Promise<Report> {
   const targetPlayerId = input.targetType === 'player' ? input.targetId : null;
-  const targetGuildId = input.targetType === 'guild' ? input.targetId : null;
+  const targetCorporationId = input.targetType === 'corporation' ? input.targetId : null;
   if (targetPlayerId === reporterId) throw new HttpError(400, 'INVALID_TARGET', 'Cannot report yourself');
-  if (targetPlayerId) await requireProfile(targetPlayerId);
-  if (targetGuildId) await requireGuild(targetGuildId);
+  if (targetPlayerId) {
+    await requireProfile(targetPlayerId);
+    await requireNotNpc(targetPlayerId);
+  }
+  if (targetCorporationId) await requireCorporation(targetCorporationId);
 
   const duplicate = await db
     .select({ id: reports.id })
@@ -53,7 +56,7 @@ export async function createReport(
     .where(
       and(
         eq(reports.reporterId, reporterId),
-        targetPlayerId ? eq(reports.targetPlayerId, targetPlayerId) : eq(reports.targetGuildId, targetGuildId!),
+        targetPlayerId ? eq(reports.targetPlayerId, targetPlayerId) : eq(reports.targetCorporationId, targetCorporationId!),
         inArray(reports.status, OPEN_STATUSES),
       ),
     )
@@ -62,7 +65,14 @@ export async function createReport(
 
   const [report] = await db
     .insert(reports)
-    .values({ reporterId, targetType: input.targetType, targetPlayerId, targetGuildId, reason: input.reason, message: input.message ?? null })
+    .values({
+      reporterId,
+      targetType: input.targetType,
+      targetPlayerId,
+      targetCorporationId,
+      reason: input.reason,
+      message: input.message ?? null,
+    })
     .returning();
   await recordActivity(reporterId, 'report_filed', { reportId: report.id, targetType: input.targetType, targetId: input.targetId });
   if (targetPlayerId) {
@@ -86,18 +96,28 @@ export async function listMyReports(reporterId: string, limit: number): Promise<
 
 async function toViews(rows: Report[]): Promise<ReportView[]> {
   const playerIds = [...new Set(rows.flatMap((r) => [r.reporterId, r.targetPlayerId]).filter((id): id is string => !!id))];
-  const guildIds = [...new Set(rows.map((r) => r.targetGuildId).filter((id): id is string => !!id))];
-  const [players, guildRows] = await Promise.all([
+  const corporationIds = [
+    ...new Set(rows.map((r) => r.targetCorporationId).filter((id): id is string => !!id)),
+  ];
+  const [players, corporationRows] = await Promise.all([
     playerIds.length
-      ? db.select({ id: playerProfiles.playerId, name: playerProfiles.displayName }).from(playerProfiles).where(inArray(playerProfiles.playerId, playerIds))
+      ? db
+          .select({ id: playerProfiles.playerId, name: playerProfiles.displayName })
+          .from(playerProfiles)
+          .where(inArray(playerProfiles.playerId, playerIds))
       : [],
-    guildIds.length ? db.select({ id: guilds.id, name: guilds.name }).from(guilds).where(inArray(guilds.id, guildIds)) : [],
+    corporationIds.length
+      ? db
+          .select({ id: corporations.id, name: corporations.name })
+          .from(corporations)
+          .where(inArray(corporations.id, corporationIds))
+      : [],
   ]);
-  const names = new Map([...players, ...guildRows].map((r) => [r.id, r.name]));
+  const names = new Map([...players, ...corporationRows].map((r) => [r.id, r.name]));
   return rows.map((r) => ({
     ...r,
     reporterName: r.reporterId ? (names.get(r.reporterId) ?? null) : null,
-    targetName: names.get(r.targetPlayerId ?? r.targetGuildId ?? '') ?? null,
+    targetName: names.get(r.targetPlayerId ?? r.targetCorporationId ?? '') ?? null,
   }));
 }
 

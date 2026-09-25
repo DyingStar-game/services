@@ -7,8 +7,8 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listActivity } from '../services/activity.service.js';
-import { listPlayerRequests, resolvePlayerRequest } from '../services/guildRequests.service.js';
-import { getGuildRefMap, getMembership } from '../services/guilds.service.js';
+import { listPlayerRequests, resolvePlayerRequest } from '../services/corporationRequests.service.js';
+import { getCorporationMembership, getCorporationRefMap } from '../services/corporations.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { ensureProfile, updateProfile } from '../services/profiles.service.js';
 import { listReputationEvents } from '../services/reputation.service.js';
@@ -24,8 +24,11 @@ meRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const profile = await ensureProfile(player.id, player.username);
-    const [presence, guildRefs] = await Promise.all([getPresence(player.id), getGuildRefMap([player.id])]);
-    res.json({ ...profile, presence, guild: guildRefs.get(player.id) ?? null });
+    const [presence, corporationRefs] = await Promise.all([
+      getPresence(player.id),
+      getCorporationRefMap([player.id]),
+    ]);
+    res.json({ ...profile, presence, corporation: corporationRefs.get(player.id) ?? null });
   }),
 );
 
@@ -50,28 +53,32 @@ meRoutes.get(
   }),
 );
 
-// ── Guild ───────────────────────────────────────────────────────────────────
+// ── Corporation ─────────────────────────────────────────────────────────────
 
-/** GET /guild — Own guild with rank, or null. */
+/** GET /corporation — Own corporation with rank, or null. */
 meRoutes.get(
-  '/guild',
+  '/corporation',
   asyncHandler(async (req, res) => {
-    const membership = await getMembership(requirePlayer(req).id);
-    res.json(membership ? { ...membership.guild, joinedAt: membership.member.joinedAt, rank: membership.rank } : null);
+    const membership = await getCorporationMembership(requirePlayer(req).id);
+    res.json(
+      membership
+        ? { ...membership.corporation, joinedAt: membership.member.joinedAt, rank: membership.rank }
+        : null,
+    );
   }),
 );
 
-/** GET /guild/requests — My pending invitations and applications. */
+/** GET /corporation/requests — My pending invitations and applications. */
 meRoutes.get(
-  '/guild/requests',
+  '/corporation/requests',
   asyncHandler(async (req, res) => {
     res.json(await listPlayerRequests(requirePlayer(req).id));
   }),
 );
 
-/** POST /guild/requests/:id/accept — Accept an invitation. */
+/** POST /corporation/requests/:id/accept — Accept an invitation. */
 meRoutes.post(
-  '/guild/requests/:id/accept',
+  '/corporation/requests/:id/accept',
   validate(requestIdParams, 'params'),
   asyncHandler(async (req, res) => {
     await resolvePlayerRequest(requirePlayer(req).id, Number(req.params.id), true);
@@ -79,9 +86,9 @@ meRoutes.post(
   }),
 );
 
-/** POST /guild/requests/:id/decline — Decline an invitation or withdraw an application. */
+/** POST /corporation/requests/:id/decline — Decline an invitation or withdraw an application. */
 meRoutes.post(
-  '/guild/requests/:id/decline',
+  '/corporation/requests/:id/decline',
   validate(requestIdParams, 'params'),
   asyncHandler(async (req, res) => {
     await resolvePlayerRequest(requirePlayer(req).id, Number(req.params.id), false);

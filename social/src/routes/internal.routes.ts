@@ -7,14 +7,20 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { validate } from '../middleware/validate.js';
 import { recordActivity } from '../services/activity.service.js';
 import { recordEncounter } from '../services/encounters.service.js';
-import { getMembership } from '../services/guilds.service.js';
+import {
+  addNpcCorporationMember,
+  getCorporationMembership,
+  removeNpcCorporationMember,
+} from '../services/corporations.service.js';
 import { setPresence } from '../services/presence.service.js';
-import { applyStats, ensureProfile, getProfile } from '../services/profiles.service.js';
+import { applyStats, ensureNpcProfile, ensureProfile, getProfile } from '../services/profiles.service.js';
 import { adjustReputation, rehabilitate } from '../services/reputation.service.js';
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
   activityBody,
   encounterBody,
+  npcCorporationBody,
+  npcProfileBody,
   playerIdParams,
   presenceBody,
   statsBody,
@@ -41,6 +47,47 @@ internalRoutes.put(
   validate(presenceBody),
   asyncHandler(async (req, res) => {
     res.json(await setPresence(req.params.playerId, req.body.status, req.body.location));
+  }),
+);
+
+/** PUT /players/:playerId/npc — Create or update a server-managed NPC profile. */
+internalRoutes.put(
+  '/players/:playerId/npc',
+  validate(playerIdParams, 'params'),
+  validate(npcProfileBody),
+  asyncHandler(async (req, res) => {
+    res.json(await ensureNpcProfile(req.params.playerId, req.body));
+  }),
+);
+
+/** PUT /players/:playerId/corporation — Add an NPC to a corporation (rank optional, default when omitted). */
+internalRoutes.put(
+  '/players/:playerId/corporation',
+  validate(playerIdParams, 'params'),
+  validate(npcCorporationBody),
+  asyncHandler(async (req, res) => {
+    const member = await addNpcCorporationMember(req.body.corporationId, req.params.playerId, req.body.rankId);
+    res.json({
+      corporationId: member.corporationId,
+      playerId: member.playerId,
+      rankId: member.rankId,
+      joinedAt: member.joinedAt,
+    });
+  }),
+);
+
+/** DELETE /players/:playerId/corporation — Remove an NPC from its corporation. */
+internalRoutes.delete(
+  '/players/:playerId/corporation',
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const membership = await getCorporationMembership(req.params.playerId);
+    if (!membership) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'NPC is not a member of any corporation', status: 404 });
+      return;
+    }
+    await removeNpcCorporationMember(membership.corporation.id, req.params.playerId);
+    res.status(204).send();
   }),
 );
 
@@ -72,13 +119,13 @@ internalRoutes.post(
   }),
 );
 
-/** GET /players/:playerId/guild — Guild and rank of a player (null if guildless). */
+/** GET /players/:playerId/corporation — Corporation and rank of a player (null if corporationless). */
 internalRoutes.get(
-  '/players/:playerId/guild',
+  '/players/:playerId/corporation',
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
-    const membership = await getMembership(req.params.playerId);
-    res.json(membership ? { ...membership.guild, rank: membership.rank } : null);
+    const membership = await getCorporationMembership(req.params.playerId);
+    res.json(membership ? { ...membership.corporation, rank: membership.rank } : null);
   }),
 );
 
