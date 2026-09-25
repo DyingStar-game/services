@@ -1,0 +1,757 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Economie API
+  version: 0.1.0
+  description: >
+    Economy API of DyingStar: per-player and per-corporation wallet accounts, direct
+    transfers with automatic taxes, corporate treasuries and financial reports.
+
+    Three kinds of callers:
+
+    * **Players** send a Keycloak JWT (`Authorization: Bearer`). The player id is
+      the `sub` claim. With `AUTH_DEV_BYPASS=true` (never in production) the
+      `X-Player-Id` / `X-Player-Name` / `X-Player-Roles` headers are accepted instead.
+    * **The game server** and trusted services use the shared `X-Internal-Key`
+      header (`/api/internal/*`). Membership of corporations and their roles are
+      pushed through this channel (mirrors the Social service).
+
+    Amounts are integer minor units (crédits). A holder owns one account per currency
+    (`credits` is the universal currency). Every error is
+    `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: public
+    description: Unauthenticated endpoints
+  - name: me
+    description: The authenticated player's own wallet and ledger
+  - name: transfers
+    description: Direct player-to-player transfers (automatic tax)
+  - name: corporations
+    description: Corporate treasuries, members, donations and financial reports
+  - name: internal
+    description: Game-server integration (`X-Internal-Key`)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ── Public ─────────────────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [public]
+      summary: Liveness check
+      responses:
+        '200':
+          description: API is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: economie }
+                  version: { type: string, example: 0.1.0 }
+
+  # ── Me (own wallet) ────────────────────────────────────────────────────────
+  /api/me/wallet:
+    get:
+      tags: [me]
+      summary: All wallet accounts of the caller (one per currency, `credits` auto-created)
+      responses:
+        '200':
+          description: Wallet accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/me/wallet/transactions:
+    get:
+      tags: [me]
+      summary: Ledger of the caller across all currencies
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Transactions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Transaction' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Transfers ──────────────────────────────────────────────────────────────
+  /api/transfers:
+    post:
+      tags: [transfers]
+      summary: Direct credits transfer to another player (automatic tax, payer side)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferBody' }
+      responses:
+        '201':
+          description: Transfer recorded (a tax may have been collected)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Insufficient balance or already recorded `externalId` (`INSUFFICIENT_FUNDS` / `DUPLICATE_EXTERNAL_ID`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ── Corporations ───────────────────────────────────────────────────────────
+  /api/corporations/{corporationId}/wallet:
+    get:
+      tags: [corporations]
+      summary: Treasury accounts (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Corporation treasury accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corporationId, accounts]
+                properties:
+                  corporationId: { type: string, format: uuid }
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not a member of this corporation (`NOT_CORPORATION_MEMBER`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/wallet/transactions:
+    get:
+      tags: [corporations]
+      summary: Treasury ledger (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Corporation ledger across currencies
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Transaction' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/members:
+    get:
+      tags: [corporations]
+      summary: Treasury staff and roles (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Corporation treasury members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CorporationMember' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/report:
+    get:
+      tags: [corporations]
+      summary: Financial report (leader/treasurer only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+      responses:
+        '200':
+          description: Totals and breakdown by transaction type and currency
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationReport' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/donations:
+    post:
+      tags: [corporations]
+      summary: Donate credits from the member's wallet to the treasury
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DonationBody' }
+      responses:
+        '201':
+          description: Donation recorded (internal tax stays in the corporation)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not a member, or donations disabled (`DONATIONS_DISABLED`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Internal (game server) ─────────────────────────────────────────────────
+  /api/internal/players/{playerId}/wallet:
+    put:
+      tags: [internal]
+      summary: Ensure the player's `credits` account exists (login)
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: The `credits` account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+    get:
+      tags: [internal]
+      summary: List the player's accounts
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Player accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/wallet/transactions:
+    get:
+      tags: [internal]
+      summary: Player ledger
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Transactions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Transaction' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/wallet/credit:
+    post:
+      tags: [internal]
+      summary: Credit the player's wallet (mission reward, salary, etc.)
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/players/{playerId}/wallet/debit:
+    post:
+      tags: [internal]
+      summary: Debit the player's wallet (rejected when balance is insufficient)
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/corporations/{corporationId}/wallet:
+    put:
+      tags: [internal]
+      summary: Ensure the corporation's `credits` treasury account exists
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: The `credits` treasury account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+    get:
+      tags: [internal]
+      summary: List the corporation's treasury accounts
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Treasury accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/corporations/{corporationId}/wallet/transactions:
+    get:
+      tags: [internal]
+      summary: Treasury ledger
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Corporation ledger across currencies
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Transaction' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/corporations/{corporationId}/wallet/credit:
+    post:
+      tags: [internal]
+      summary: Credit the corporation treasury
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/corporations/{corporationId}/wallet/debit:
+    post:
+      tags: [internal]
+      summary: Debit the corporation treasury (rejected when balance is insufficient)
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/corporations/{corporationId}/members/{playerId}:
+    put:
+      tags: [internal]
+      summary: Set (add or update) a treasury member with a role
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberRoleBody' }
+      responses:
+        '200':
+          description: Upserted membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationMember' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+    delete:
+      tags: [internal]
+      summary: Remove a treasury member
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/corporations/{corporationId}/members:
+    get:
+      tags: [internal]
+      summary: Treasury staff
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Corporation treasury members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CorporationMember' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+  /api/internal/corporations/{corporationId}/settings:
+    get:
+      tags: [internal]
+      summary: Internal tax and donation policy
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Corporation settings (default row created on first access)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+    put:
+      tags: [internal]
+      summary: Update internal tax and donation policy
+      security: [{ internalKey: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CorporationSettingsBody' }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSettings' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak access token (RS256, validated against the realm JWKS). The player id
+        is the `sub` claim. Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id`,
+        `X-Player-Name`, `X-Player-Roles` headers may replace the token.
+    internalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: Shared secret (`INTERNAL_API_KEY`) for the game server and trusted services.
+
+  parameters:
+    playerId:
+      name: playerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    corporationId:
+      name: corporationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    from:
+      name: from
+      in: query
+      description: Start of the report period (ISO date/time, inclusive)
+      schema: { type: string, format: date-time }
+    to:
+      name: to
+      in: query
+      description: End of the report period (ISO date/time, inclusive)
+      schema: { type: string, format: date-time }
+
+  responses:
+    ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid token / internal key (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: >
+        Missing role / not a corporation member (`FORBIDDEN`, `NOT_CORPORATION_MEMBER`),
+        account is locked/frozen (`ACCOUNT_LOCKED`), or donations disabled (`DONATIONS_DISABLED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict (`CONFLICT`, `INSUFFICIENT_FUNDS`, `DUPLICATE_EXTERNAL_ID`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalAuthNotConfigured:
+      description: '`INTERNAL_API_KEY` is not set on the server (`INTERNAL_AUTH_NOT_CONFIGURED`)'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, status]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, ACCOUNT_LOCKED, INSUFFICIENT_FUNDS, DUPLICATE_EXTERNAL_ID, NOT_CORPORATION_MEMBER, NOT_FOUND, INTERNAL_ERROR]
+        message: { type: string }
+        status: { type: integer }
+
+    # ── Enums ──
+    AccountHolderType:
+      type: string
+      enum: [player, corporation, system]
+    AccountStatus:
+      type: string
+      enum: [active, locked, frozen]
+    TransactionType:
+      type: string
+      enum: [transfer, deposit, withdrawal, tax, fee, mission_reward, salary, donation, corporation_fund, system]
+    CorporationRole:
+      type: string
+      enum: [leader, treasurer, member]
+
+    # ── Accounts & movements ──
+    Account:
+      type: object
+      required: [id, holderType, holderId, currency, balance, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        holderType: { $ref: '#/components/schemas/AccountHolderType' }
+        holderId: { type: string, format: uuid, description: Keycloak subject for players, Social `corporationId` for corporations, reserved key for the system vault }
+        currency: { type: string, default: credits }
+        balance: { type: integer, description: Integer minor units, never negative }
+        status: { $ref: '#/components/schemas/AccountStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Transaction:
+      type: object
+      required: [id, type, currency, amount, taxAmount, feeAmount, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        fromAccountId: { type: [string, 'null'], format: uuid }
+        toAccountId: { type: [string, 'null'], format: uuid }
+        type: { $ref: '#/components/schemas/TransactionType' }
+        currency: { type: string }
+        amount: { type: integer, description: Amount credited to `toAccountId` }
+        taxAmount: { type: integer, description: Tax collected from the payer and routed to `details.taxTo` }
+        feeAmount: { type: integer }
+        externalId: { type: [string, 'null'], description: Idempotency key unique when present }
+        reference: { type: [string, 'null'] }
+        details:
+          oneOf:
+            - type: object
+              description: Free-form; `taxTo` records where the collected tax went (`system` or an account id)
+            - type: 'null'
+        createdAt: { type: string, format: date-time }
+
+    MovementResult:
+      type: object
+      required: [transaction, amount, taxAmount]
+      properties:
+        transaction: { $ref: '#/components/schemas/Transaction' }
+        amount: { type: integer }
+        taxAmount: { type: integer }
+        fromBalance: { type: integer, description: New payer balance after the movement }
+        toBalance: { type: integer, description: New receiver balance after the movement }
+
+    TransferBody:
+      type: object
+      required: [toPlayerId, amount]
+      properties:
+        toPlayerId: { type: string, format: uuid, description: Must differ from the caller }
+        amount: { type: integer, minimum: 1, description: Integer minor units — what the receiver gets; the payer also pays the tax }
+        memo: { type: string, maxLength: 256 }
+
+    MovementBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 1 }
+        currency: { type: string, maxLength: 16, default: credits }
+        reference: { type: string, maxLength: 128 }
+        externalId: { type: string, minLength: 1, maxLength: 128, description: Idempotency key; replaying a movement returns `409 DUPLICATE_EXTERNAL_ID` }
+        type:
+          description: Overrides the default type (default `deposit` on credit, `withdrawal` on debit)
+          oneOf:
+            - { type: string }
+            - { $ref: '#/components/schemas/TransactionType' }
+
+    DonationBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 1 }
+        memo: { type: string, maxLength: 256 }
+
+    # ── Corporations ──
+    CorporationMember:
+      type: object
+      required: [corporationId, playerId, role, joinedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        role: { $ref: '#/components/schemas/CorporationRole' }
+        joinedAt: { type: string, format: date-time }
+
+    MemberRoleBody:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: '#/components/schemas/CorporationRole' }
+
+    CorporationSettings:
+      type: object
+      required: [corporationId, taxRateBps, allowDonations, updatedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        taxRateBps: { type: integer, minimum: 0, maximum: 10000, description: Internal tax on donations, in basis points; stays in the corporation }
+        allowDonations: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    CorporationSettingsBody:
+      type: object
+      minProperties: 1
+      properties:
+        taxRateBps: { type: integer, minimum: 0, maximum: 10000 }
+        allowDonations: { type: boolean }
+
+    CorporationReport:
+      type: object
+      required: [corporationId, totals, byType]
+      properties:
+        corporationId: { type: string, format: uuid }
+        from: { type: [string, 'null'], format: date-time }
+        to: { type: [string, 'null'], format: date-time }
+        totals:
+          type: array
+          description: Inflow/outflow per currency (outflow includes taxes paid by the corporation)
+          items:
+            type: object
+            required: [currency, inflow, outflow]
+            properties:
+              currency: { type: string }
+              inflow: { type: integer }
+              outflow: { type: integer }
+        byType:
+          type: array
+          description: Breakdown of the same flows by transaction type and currency
+          items:
+            type: object
+            required: [type, currency, count, inflow, outflow]
+            properties:
+              type: { $ref: '#/components/schemas/TransactionType' }
+              currency: { type: string }
+              count: { type: integer }
+              inflow: { type: integer }
+              outflow: { type: integer }

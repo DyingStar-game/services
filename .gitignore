@@ -1,6 +1,11 @@
 /.vs
 /.vscode
 
+node_modules/
+dist/
+.env
+.pnpm-store/
+
 # will have compiled files and executables
 persistence/debug/
 persistence/target/
