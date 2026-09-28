@@ -1,11 +1,13 @@
 /**
- * Internal routes for the game server and trusted services (`/api/internal`, `X-Internal-Key`).
- * Wallets are lazily created (like profiles in Social); credits/debits carry an optional
- * `externalId` used as an idempotency key.
+ * Internal routes for the game server and trusted services (`/api/internal`). The caller is
+ * authenticated by `serviceAuth` (Keycloak service account) on the mount point, then each
+ * route requires its capability role. Wallets are lazily created (like profiles in Social);
+ * credits/debits carry an optional `externalId` used as an idempotency key.
  */
 import { Router, type IRouter } from 'express';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
+import { requireService, requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
   ensureCorporationAccount,
@@ -44,6 +46,7 @@ export const internalRoutes: IRouter = Router();
 /** PUT /players/:playerId/wallet — Ensure a `credits` account exists (login). */
 internalRoutes.put(
   '/players/:playerId/wallet',
+  requireServiceRole(SERVICE_ROLES.walletEnsure),
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json(await ensurePlayerAccount(req.params.playerId));
@@ -53,6 +56,7 @@ internalRoutes.put(
 /** GET /players/:playerId/wallet — Wallet accounts (one per currency). */
 internalRoutes.get(
   '/players/:playerId/wallet',
+  requireServiceRole(SERVICE_ROLES.walletRead),
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json({ accounts: await getPlayerAccounts(req.params.playerId) });
@@ -62,6 +66,7 @@ internalRoutes.get(
 /** GET /players/:playerId/wallet/transactions?limit= — Player ledger. */
 internalRoutes.get(
   '/players/:playerId/wallet/transactions',
+  requireServiceRole(SERVICE_ROLES.walletRead),
   validate(playerIdParams, 'params'),
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
@@ -72,12 +77,19 @@ internalRoutes.get(
 /** POST /players/:playerId/wallet/credit — Credit (mission reward, salary, etc.). */
 internalRoutes.post(
   '/players/:playerId/wallet/credit',
+  requireServiceRole(SERVICE_ROLES.walletCredit),
   validate(playerIdParams, 'params'),
   validate(movementBody),
   asyncHandler(async (req, res) => {
     const { amount, currency, reference, externalId, type } = req.body;
     const account = await ensurePlayerAccount(req.params.playerId, currency ?? 'credits');
-    const result = await creditAccount(account.id, amount, { currency, type, reference, externalId });
+    const result = await creditAccount(account.id, amount, {
+      currency,
+      type,
+      reference,
+      externalId,
+      caller: requireService(req).clientId,
+    });
     res.status(201).json(result);
   }),
 );
@@ -85,12 +97,19 @@ internalRoutes.post(
 /** POST /players/:playerId/wallet/debit — Debit (rejected when balance insufficient). */
 internalRoutes.post(
   '/players/:playerId/wallet/debit',
+  requireServiceRole(SERVICE_ROLES.walletDebit),
   validate(playerIdParams, 'params'),
   validate(movementBody),
   asyncHandler(async (req, res) => {
     const { amount, currency, reference, externalId, type } = req.body;
     const account = await ensurePlayerAccount(req.params.playerId, currency ?? 'credits');
-    const result = await debitAccount(account.id, amount, { currency, type, reference, externalId });
+    const result = await debitAccount(account.id, amount, {
+      currency,
+      type,
+      reference,
+      externalId,
+      caller: requireService(req).clientId,
+    });
     res.status(201).json(result);
   }),
 );
@@ -100,6 +119,7 @@ internalRoutes.post(
 /** PUT /corporations/:corporationId/wallet — Ensure a treasury `credits` account exists. */
 internalRoutes.put(
   '/corporations/:corporationId/wallet',
+  requireServiceRole(SERVICE_ROLES.walletEnsure),
   validate(corporationIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json(await ensureCorporationAccount(req.params.corporationId));
@@ -109,6 +129,7 @@ internalRoutes.put(
 /** GET /corporations/:corporationId/wallet — Treasury accounts (one per currency). */
 internalRoutes.get(
   '/corporations/:corporationId/wallet',
+  requireServiceRole(SERVICE_ROLES.walletRead),
   validate(corporationIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json({ accounts: await getCorporationAccounts(req.params.corporationId) });
@@ -118,6 +139,7 @@ internalRoutes.get(
 /** GET /corporations/:corporationId/wallet/transactions?limit= — Treasury ledger. */
 internalRoutes.get(
   '/corporations/:corporationId/wallet/transactions',
+  requireServiceRole(SERVICE_ROLES.walletRead),
   validate(corporationIdParams, 'params'),
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
@@ -128,12 +150,19 @@ internalRoutes.get(
 /** POST /corporations/:corporationId/wallet/credit — Treasury credit. */
 internalRoutes.post(
   '/corporations/:corporationId/wallet/credit',
+  requireServiceRole(SERVICE_ROLES.walletCredit),
   validate(corporationIdParams, 'params'),
   validate(movementBody),
   asyncHandler(async (req, res) => {
     const { amount, currency, reference, externalId, type } = req.body;
     const account = await ensureCorporationAccount(req.params.corporationId, currency ?? 'credits');
-    const result = await creditAccount(account.id, amount, { currency, type, reference, externalId });
+    const result = await creditAccount(account.id, amount, {
+      currency,
+      type,
+      reference,
+      externalId,
+      caller: requireService(req).clientId,
+    });
     res.status(201).json(result);
   }),
 );
@@ -141,12 +170,19 @@ internalRoutes.post(
 /** POST /corporations/:corporationId/wallet/debit — Treasury debit (e.g. payouts). */
 internalRoutes.post(
   '/corporations/:corporationId/wallet/debit',
+  requireServiceRole(SERVICE_ROLES.walletDebit),
   validate(corporationIdParams, 'params'),
   validate(movementBody),
   asyncHandler(async (req, res) => {
     const { amount, currency, reference, externalId, type } = req.body;
     const account = await ensureCorporationAccount(req.params.corporationId, currency ?? 'credits');
-    const result = await debitAccount(account.id, amount, { currency, type, reference, externalId });
+    const result = await debitAccount(account.id, amount, {
+      currency,
+      type,
+      reference,
+      externalId,
+      caller: requireService(req).clientId,
+    });
     res.status(201).json(result);
   }),
 );
@@ -156,6 +192,7 @@ internalRoutes.post(
 /** PUT /corporations/:corporationId/members/:playerId {role} — Set a member (and their role). */
 internalRoutes.put(
   '/corporations/:corporationId/members/:playerId',
+  requireServiceRole(SERVICE_ROLES.corporationManage),
   validate(corporationMemberParams, 'params'),
   validate(memberRoleBody),
   asyncHandler(async (req, res) => {
@@ -167,6 +204,7 @@ internalRoutes.put(
 /** DELETE /corporations/:corporationId/members/:playerId — Remove a member. */
 internalRoutes.delete(
   '/corporations/:corporationId/members/:playerId',
+  requireServiceRole(SERVICE_ROLES.corporationManage),
   validate(corporationMemberParams, 'params'),
   asyncHandler(async (req, res) => {
     await removeCorporationMember(req.params.corporationId, req.params.playerId);
@@ -177,6 +215,7 @@ internalRoutes.delete(
 /** GET /corporations/:corporationId/members — Treasury staff. */
 internalRoutes.get(
   '/corporations/:corporationId/members',
+  requireServiceRole(SERVICE_ROLES.corporationRead),
   validate(corporationIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json(await listCorporationMembers(req.params.corporationId));
@@ -186,6 +225,7 @@ internalRoutes.get(
 /** GET /corporations/:corporationId/settings — Internal tax and donation policy. */
 internalRoutes.get(
   '/corporations/:corporationId/settings',
+  requireServiceRole(SERVICE_ROLES.corporationRead),
   validate(corporationIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json(await getCorporationSettings(req.params.corporationId));
@@ -195,6 +235,7 @@ internalRoutes.get(
 /** PUT /corporations/:corporationId/settings — Update internal tax and donation policy. */
 internalRoutes.put(
   '/corporations/:corporationId/settings',
+  requireServiceRole(SERVICE_ROLES.corporationManage),
   validate(corporationIdParams, 'params'),
   validate(corporationSettingsBody),
   asyncHandler(async (req, res) => {

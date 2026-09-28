@@ -6,7 +6,7 @@ Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak v
 ## Lancer en local
 
 ```bash
-cp .env.example .env          # ajuster INTERNAL_API_KEY, DATABASE_URL, OIDC_ISSUER
+cp .env.example .env          # ajuster DATABASE_URL, OIDC_ISSUER, INTERNAL_SERVICE_CLIENTS
 docker compose -f docker/docker-compose.yml --env-file .env up   # API (watch) + postgres
 ```
 
@@ -25,14 +25,25 @@ Sans Keycloak, mettre `AUTH_DEV_BYPASS=true` (ignoré en production) et passer `
 curl localhost:3000/api/me/wallet -H "X-Player-Id: 11111111-1111-4111-8111-111111111111" -H "X-Player-Name: alice"
 ```
 
+Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en production, où le service refuse de démarrer si le flag est actif) et passer `X-Internal-Key: <INTERNAL_API_KEY>`. En production, `/api/internal/*` n'accepte **qu'un** token de service Keycloak :
+
+```bash
+TOKEN=$(curl -s -X POST "$OIDC_TOKEN_URL" -d grant_type=client_credentials \
+  -d client_id=svc-game -d client_secret="$SVC_GAME_CLIENT_SECRET" | jq -r .access_token)
+curl localhost:3000/api/internal/players/$ID/wallet -H "Authorization: Bearer $TOKEN"
+```
+
 ## Variables d'environnement
 
 | Variable | Rôle |
 |---|---|
 | `PORT`, `NODE_ENV`, `CORS_ORIGIN` | HTTP |
 | `DATABASE_URL` | PostgreSQL (obligatoire) |
-| `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE` | Validation des JWT Keycloak (`player_id` = claim `sub`) |
-| `INTERNAL_API_KEY` | Secret attendu dans `X-Internal-Key` sur `/api/internal/*` |
+| `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE` | Validation des JWT Keycloak joueurs (`player_id` = claim `sub`) |
+| `OIDC_SERVICE_AUDIENCE` | `aud` attendu des tokens de service sur `/api/internal/*` (défaut `economie-api`) |
+| `INTERNAL_SERVICE_CLIENTS` | Clients Keycloak de service autorisés (`azp`, CSV) sur `/api/internal/*` |
+| `INTERNAL_API_KEY` | Secret hérité de `X-Internal-Key` — **dev uniquement** (voir `INTERNAL_DEV_BYPASS`) |
+| `INTERNAL_DEV_BYPASS` | Accepter `X-Internal-Key` sur `/api/internal/*` (ignoré en production) |
 | `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` (+ `X-Player-Name`, `X-Player-Roles`) sans JWT (dev uniquement) |
 | `ECONOMY_TRANSFER_TAX_BPS` | Taxe automatique sur les transferts joueurs (basis points ; 500 = 5 %), prélevée côté payeur |
 | `ECONOMY_TRANSFER_TAX_CEILING` | Plafond absolu de la taxe par transfert (0 = aucun) |
@@ -70,23 +81,25 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 
 Rôles de trésorerie : `leader` > `treasurer` > `member`.
 
-### Interne — serveur de jeu (`X-Internal-Key`)
-| Méthode | Route | Description |
-|---|---|---|
-| PUT | `/api/internal/players/:playerId/wallet` | Créer le compte `credits` au login (idempotent) |
-| GET | `/api/internal/players/:playerId/wallet` | Comptes du joueur |
-| GET | `/api/internal/players/:playerId/wallet/transactions?limit=` | Historique du joueur |
-| POST | `/api/internal/players/:playerId/wallet/credit` `{amount, currency?, reference?, externalId?, type?}` | Créditer (prime de mission, salaire…) |
-| POST | `/api/internal/players/:playerId/wallet/debit` | Débiter (refusé si solde insuffisant) |
-| PUT | `/api/internal/corporations/:corporationId/wallet` | Créer le compte `credits` de la corporation |
-| GET | `/api/internal/corporations/:corporationId/wallet` | Comptes de la trésorerie |
-| GET | `/api/internal/corporations/:corporationId/wallet/transactions?limit=` | Journal de trésorerie |
-| POST | `/api/internal/corporations/:corporationId/wallet/credit` `/debit` | Mouvements de trésorerie |
-| PUT | `/api/internal/corporations/:corporationId/members/:playerId` `{role}` | Ajouter/mettre à jour un membre (leader/trésorier/member) |
-| DELETE | `/api/internal/corporations/:corporationId/members/:playerId` | Retirer un membre |
-| GET | `/api/internal/corporations/:corporationId/members` | Membres de la trésorerie |
-| GET | `/api/internal/corporations/:corporationId/settings` | Taxe interne et politique de dons |
-| PUT | `/api/internal/corporations/:corporationId/settings` `{taxRateBps?, allowDonations?}` | Régler la taxe interne / les dons |
+### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
+| Méthode | Route | Rôle requis | Description |
+|---|---|---|---|
+| PUT | `/api/internal/players/:playerId/wallet` | `economie:wallet:ensure` | Créer le compte `credits` au login (idempotent) |
+| GET | `/api/internal/players/:playerId/wallet` | `economie:wallet:read` | Comptes du joueur |
+| GET | `/api/internal/players/:playerId/wallet/transactions?limit=` | `economie:wallet:read` | Historique du joueur |
+| POST | `/api/internal/players/:playerId/wallet/credit` `{amount, currency?, reference?, externalId?, type?}` | `economie:wallet:credit` | Créditer (prime de mission, salaire…) |
+| POST | `/api/internal/players/:playerId/wallet/debit` | `economie:wallet:debit` | Débiter (refusé si solde insuffisant) |
+| PUT | `/api/internal/corporations/:corporationId/wallet` | `economie:wallet:ensure` | Créer le compte `credits` de la corporation |
+| GET | `/api/internal/corporations/:corporationId/wallet` | `economie:wallet:read` | Comptes de la trésorerie |
+| GET | `/api/internal/corporations/:corporationId/wallet/transactions?limit=` | `economie:wallet:read` | Journal de trésorerie |
+| POST | `/api/internal/corporations/:corporationId/wallet/credit` `/debit` | `economie:wallet:credit` / `:debit` | Mouvements de trésorerie |
+| PUT | `/api/internal/corporations/:corporationId/members/:playerId` `{role}` | `economie:corporation:manage` | Ajouter/mettre à jour un membre (leader/trésorier/member) |
+| DELETE | `/api/internal/corporations/:corporationId/members/:playerId` | `economie:corporation:manage` | Retirer un membre |
+| GET | `/api/internal/corporations/:corporationId/members` | `economie:corporation:read` | Membres de la trésorerie |
+| GET | `/api/internal/corporations/:corporationId/settings` | `economie:corporation:read` | Taxe interne et politique de dons |
+| PUT | `/api/internal/corporations/:corporationId/settings` `{taxRateBps?, allowDonations?}` | `economie:corporation:manage` | Régler la taxe interne / les dons |
+
+**Auth de service** : le garde est monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`), donc toute route ajoutée ici reste protégée. Le token doit venir d'un des clients `INTERNAL_SERVICE_CLIENTS` (`azp`), viser `OIDC_SERVICE_AUDIENCE`, puis détenir le rôle de capacité de la route — sinon `403 SERVICE_FORBIDDEN`/`FORBIDDEN`. Un token joueur ne peut jamais avoir un `azp` de service (seul son `client_secret` permet de le frapper), c'est la garantie de non-contournement. Révocation : désactiver le client dans Keycloak (TTL de 300 s côté token). Un crédit/débit de service est tracé dans `transactions.caller` (client Keycloak appelant).
 
 **Idempotence** : les crédits/débits et transferts acceptent `externalId` (clé unique) — le serveur de jeu peut rejouer une écriture sans double comptabilisation (`409 DUPLICATE_EXTERNAL_ID` si déjà enregistrée).
 
@@ -100,7 +113,7 @@ src/
   config/env.ts     variables d'environnement
   db/schema/        tables drizzle (accounts, transactions, corporation_members, corporation_settings)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
-  middleware/       auth (JWT / clé interne / rôles), validate (zod), errorHandler
+  middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
   services/         logique métier (une fonction exportée par cas d'usage)
 ```
@@ -139,6 +152,7 @@ Ce service est dédié à la partie économique du jeu ; les features ci-dessous
 
 ### API & Intégrations
 - [x] API interne synchronisée avec les serveurs du jeu (transactions, gains, marchés)
+- [x] Auth service-à-service par comptes de service Keycloak et rôles de capacité (fin des secrets partagés)
 - [~] API publique sécurisée (JWT Keycloak en place ; clés tierces à venir)
 - [ ] Conversion de devises et marché (prix, historique, commissions dynamiques)
 - [ ] Webhooks sur les variations économiques

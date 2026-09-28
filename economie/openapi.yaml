@@ -11,9 +11,13 @@ info:
     * **Players** send a Keycloak JWT (`Authorization: Bearer`). The player id is
       the `sub` claim. With `AUTH_DEV_BYPASS=true` (never in production) the
       `X-Player-Id` / `X-Player-Name` / `X-Player-Roles` headers are accepted instead.
-    * **The game server** and trusted services use the shared `X-Internal-Key`
-      header (`/api/internal/*`). Membership of corporations and their roles are
-      pushed through this channel (mirrors the Social service).
+    * **The game server** and trusted services authenticate with a Keycloak
+      service-account token (`client_credentials`, `Authorization: Bearer`) whose
+      `azp` is an allowed client and whose `aud` targets `economie-api`. Each
+      `/api/internal/*` route requires a capability role (e.g.
+      `economie:wallet:credit`). Membership of corporations and their roles are
+      pushed through this channel (mirrors the Social service). Dev only
+      (`INTERNAL_DEV_BYPASS=true`): the legacy `X-Internal-Key` header is accepted.
 
     Amounts are integer minor units (crédits). A holder owns one account per currency
     (`credits` is the universal currency). Every error is
@@ -33,7 +37,7 @@ tags:
   - name: corporations
     description: Corporate treasuries, members, donations and financial reports
   - name: internal
-    description: Game-server integration (`X-Internal-Key`)
+    description: Game-server integration (Keycloak service accounts, capability roles)
 
 security:
   - bearerAuth: []
@@ -231,7 +235,7 @@ paths:
     put:
       tags: [internal]
       summary: Ensure the player's `credits` account exists (login)
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
       responses:
@@ -241,11 +245,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Account' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     get:
       tags: [internal]
       summary: List the player's accounts
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
       responses:
@@ -260,13 +264,13 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Account' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/players/{playerId}/wallet/transactions:
     get:
       tags: [internal]
       summary: Player ledger
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
         - $ref: '#/components/parameters/limit'
@@ -280,13 +284,13 @@ paths:
                 items: { $ref: '#/components/schemas/Transaction' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/players/{playerId}/wallet/credit:
     post:
       tags: [internal]
       summary: Credit the player's wallet (mission reward, salary, etc.)
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
       requestBody:
@@ -303,13 +307,13 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/players/{playerId}/wallet/debit:
     post:
       tags: [internal]
       summary: Debit the player's wallet (rejected when balance is insufficient)
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
       requestBody:
@@ -325,15 +329,14 @@ paths:
               schema: { $ref: '#/components/schemas/MovementResult' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/corporations/{corporationId}/wallet:
     put:
       tags: [internal]
       summary: Ensure the corporation's `credits` treasury account exists
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
       responses:
@@ -343,11 +346,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Account' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     get:
       tags: [internal]
       summary: List the corporation's treasury accounts
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
       responses:
@@ -362,13 +365,13 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Account' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/corporations/{corporationId}/wallet/transactions:
     get:
       tags: [internal]
       summary: Treasury ledger
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/limit'
@@ -382,13 +385,13 @@ paths:
                 items: { $ref: '#/components/schemas/Transaction' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/corporations/{corporationId}/wallet/credit:
     post:
       tags: [internal]
       summary: Credit the corporation treasury
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
       requestBody:
@@ -405,13 +408,13 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/corporations/{corporationId}/wallet/debit:
     post:
       tags: [internal]
       summary: Debit the corporation treasury (rejected when balance is insufficient)
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
       requestBody:
@@ -428,13 +431,13 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/corporations/{corporationId}/members/{playerId}:
     put:
       tags: [internal]
       summary: Set (add or update) a treasury member with a role
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/playerId'
@@ -451,24 +454,24 @@ paths:
               schema: { $ref: '#/components/schemas/CorporationMember' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     delete:
       tags: [internal]
       summary: Remove a treasury member
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/playerId'
       responses:
         '204': { description: Member removed }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/corporations/{corporationId}/members:
     get:
       tags: [internal]
       summary: Treasury staff
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
       responses:
@@ -480,13 +483,13 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/CorporationMember' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/corporations/{corporationId}/settings:
     get:
       tags: [internal]
       summary: Internal tax and donation policy
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
       responses:
@@ -496,11 +499,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CorporationSettings' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     put:
       tags: [internal]
       summary: Update internal tax and donation policy
-      security: [{ internalKey: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
       requestBody:
@@ -516,7 +519,7 @@ paths:
               schema: { $ref: '#/components/schemas/CorporationSettings' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '503': { $ref: '#/components/responses/InternalAuthNotConfigured' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
 
 components:
   securitySchemes:
@@ -528,11 +531,16 @@ components:
         Keycloak access token (RS256, validated against the realm JWKS). The player id
         is the `sub` claim. Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id`,
         `X-Player-Name`, `X-Player-Roles` headers may replace the token.
-    internalKey:
-      type: apiKey
-      in: header
-      name: X-Internal-Key
-      description: Shared secret (`INTERNAL_API_KEY`) for the game server and trusted services.
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak service-account access token (client_credentials, RS256, validated
+        against the realm JWKS). `azp` must be an allowed client
+        (`INTERNAL_SERVICE_CLIENTS`) and `aud` must contain `economie-api`; each route
+        then needs its capability role. Dev only (`INTERNAL_DEV_BYPASS=true`): the
+        legacy `X-Internal-Key` header is accepted instead.
 
   parameters:
     playerId:
@@ -567,7 +575,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Unauthorized:
-      description: Missing or invalid token / internal key (`UNAUTHORIZED`)
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -588,8 +596,10 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
-    InternalAuthNotConfigured:
-      description: '`INTERNAL_API_KEY` is not set on the server (`INTERNAL_AUTH_NOT_CONFIGURED`)'
+    ServiceForbidden:
+      description: >
+        The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or the
+        service account lacks the route's capability role (`FORBIDDEN`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -602,7 +612,7 @@ components:
         error:
           type: string
           description: Machine-readable code
-          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, ACCOUNT_LOCKED, INSUFFICIENT_FUNDS, DUPLICATE_EXTERNAL_ID, NOT_CORPORATION_MEMBER, NOT_FOUND, INTERNAL_ERROR]
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, ACCOUNT_LOCKED, INSUFFICIENT_FUNDS, DUPLICATE_EXTERNAL_ID, NOT_CORPORATION_MEMBER, NOT_FOUND, INTERNAL_ERROR]
         message: { type: string }
         status: { type: integer }
 
@@ -648,6 +658,7 @@ components:
         feeAmount: { type: integer }
         externalId: { type: [string, 'null'], description: Idempotency key unique when present }
         reference: { type: [string, 'null'] }
+        caller: { type: [string, 'null'], description: Keycloak client id of the calling service; null for player-driven movements }
         details:
           oneOf:
             - type: object

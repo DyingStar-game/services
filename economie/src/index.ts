@@ -8,8 +8,10 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { testConnection } from './db/connection.js';
 import { runMigrations } from './db/migrate.js';
+import { serviceAuth } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { apiRouter } from './routes/index.js';
+import { internalRoutes } from './routes/internal.routes.js';
 
 const app = express();
 
@@ -22,6 +24,10 @@ app.get('/', (_req, res) => {
   res.json({ name: 'DyingStar Economie API', health: '/api/health' });
 });
 
+// The service guard sits on the mount point, not on the inner route list: any route
+// added later under /api/internal is protected without touching the router.
+app.use('/api/internal', serviceAuth, internalRoutes);
+
 app.use('/api', apiRouter);
 
 app.use((_req, res) => {
@@ -30,6 +36,11 @@ app.use((_req, res) => {
 app.use(errorHandler);
 
 async function start(): Promise<void> {
+  if (env.nodeEnv === 'production' && process.env.INTERNAL_DEV_BYPASS === 'true') {
+    console.error('INTERNAL_DEV_BYPASS must never be enabled in production. Exiting...');
+    process.exit(1);
+  }
+
   if (!(await testConnection())) {
     console.error('Failed to connect to database. Exiting...');
     process.exit(1);
@@ -40,8 +51,13 @@ async function start(): Promise<void> {
   if (env.authDevBypass) {
     console.warn('AUTH_DEV_BYPASS is enabled: X-Player-Id headers are trusted without a JWT');
   }
-  if (!env.internalApiKey) {
-    console.warn('INTERNAL_API_KEY is empty: /api/internal/* will answer 503');
+  if (env.internalDevBypass) {
+    console.warn('INTERNAL_DEV_BYPASS is enabled: X-Internal-Key is accepted on /api/internal/*');
+  } else if (env.internalApiKey) {
+    console.warn('INTERNAL_API_KEY is set but ignored: only service-account JWTs are accepted');
+  }
+  if (env.internal.serviceClients.length === 0) {
+    console.warn('INTERNAL_SERVICE_CLIENTS is empty: every service-account token is rejected with 403');
   }
 
   app.listen(env.port, () => {

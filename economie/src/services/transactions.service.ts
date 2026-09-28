@@ -34,6 +34,8 @@ interface MovementContext {
   reference?: string;
   details?: Record<string, unknown>;
   externalId?: string;
+  /** Keycloak client id of the calling service, when the movement is service-driven. */
+  caller?: string;
 }
 
 /** Outcome of a movement: the ledger row and the new balances involved. */
@@ -156,6 +158,7 @@ export async function transfer(opts: {
   reference?: string;
   details?: Record<string, unknown>;
   externalId?: string;
+  caller?: string;
 }): Promise<MovementResult> {
   const { fromAccountId, toAccountId, amount, currency = 'credits', type = 'transfer' } = opts;
   if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', 'Amount must be positive');
@@ -201,6 +204,7 @@ export async function transfer(opts: {
               ? { taxTo: opts.taxToAccountId ?? 'system' }
               : undefined,
           externalId: opts.externalId ?? null,
+          caller: opts.caller ?? null,
         })
         .returning();
       return { transaction, amount, taxAmount, fromBalance, toBalance };
@@ -225,7 +229,7 @@ async function movement(
   direction: 'credit' | 'debit',
   opts: MovementContext,
 ): Promise<MovementResult> {
-  const { accountId, amount, currency, type, reference, details, externalId } = opts;
+  const { accountId, amount, currency, type, reference, details, externalId, caller } = opts;
   if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', 'Amount must be positive');
   if (externalId && (await findByIdempotencyKey(externalId))) {
     throw new HttpError(409, 'DUPLICATE_EXTERNAL_ID', 'Transaction already recorded');
@@ -247,6 +251,7 @@ async function movement(
           reference,
           details,
           externalId: externalId ?? null,
+          caller: caller ?? null,
         })
         .returning();
       if (direction === 'credit') {
@@ -277,6 +282,7 @@ export function creditAccount(
     reference: opts.reference,
     details: opts.details,
     externalId: opts.externalId,
+    caller: opts.caller,
   });
 }
 
@@ -294,6 +300,7 @@ export function debitAccount(
     reference: opts.reference,
     details: opts.details,
     externalId: opts.externalId,
+    caller: opts.caller,
   });
 }
 

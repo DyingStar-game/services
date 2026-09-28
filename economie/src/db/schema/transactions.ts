@@ -51,6 +51,8 @@ export const transactions = pgTable(
     externalId: text('external_id'),
     /** Business reference, e.g. a mission id. */
     reference: text('reference'),
+    /** Keycloak client id of the calling service; null for player-driven movements. */
+    caller: text('caller'),
     details: jsonb('details').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

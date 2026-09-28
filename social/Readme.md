@@ -6,7 +6,7 @@ Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak v
 ## Lancer en local
 
 ```bash
-cp .env.example .env          # ajuster INTERNAL_API_KEY, DATABASE_URL, OIDC_ISSUER
+cp .env.example .env          # ajuster DATABASE_URL, OIDC_ISSUER, INTERNAL_SERVICE_CLIENTS
 docker compose -f docker/docker-compose.yml --env-file .env up   # API (watch) + postgres
 ```
 
@@ -25,14 +25,19 @@ Sans Keycloak, mettre `AUTH_DEV_BYPASS=true` (ignoré en production) et passer `
 curl localhost:3000/api/me -H "X-Player-Id: 11111111-1111-4111-8111-111111111111" -H "X-Player-Name: alice"
 ```
 
+Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en production, où le service refuse de démarrer si le flag est actif) et passer `X-Internal-Key: <INTERNAL_API_KEY>`. En production, `/api/internal/*` n'accepte **qu'un** token de service Keycloak (`client_credentials`, `azp` autorisé, `aud` = `social-api`, rôle de capacité requis) : la création des clients de service, de leurs secrets et de leurs rôles de capacité est gérée côté Keycloak (realm `dyingstar`, clients `svc-*`).
+
 ## Variables d'environnement
 
 | Variable | Rôle |
 |---|---|
 | `PORT`, `NODE_ENV`, `CORS_ORIGIN` | HTTP |
 | `DATABASE_URL` | PostgreSQL (obligatoire) |
-| `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE` | Validation des JWT Keycloak (`player_id` = claim `sub`) |
-| `INTERNAL_API_KEY` | Secret attendu dans `X-Internal-Key` sur `/api/internal/*` |
+| `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE` | Validation des JWT Keycloak joueurs (`player_id` = claim `sub`) |
+| `OIDC_SERVICE_AUDIENCE` | `aud` attendu des tokens de service sur `/api/internal/*` (défaut `social-api`) |
+| `INTERNAL_SERVICE_CLIENTS` | Clients Keycloak de service autorisés (`azp`, CSV) sur `/api/internal/*` |
+| `INTERNAL_API_KEY` | Secret hérité de `X-Internal-Key` — **dev uniquement** (voir `INTERNAL_DEV_BYPASS`) |
+| `INTERNAL_DEV_BYPASS` | Accepter `X-Internal-Key` sur `/api/internal/*` (ignoré en production) |
 | `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` (+ `X-Player-Name`, `X-Player-Roles`) sans JWT (dev uniquement) |
 | `REPUTATION_*` | Pénalités (blocage, signalement, signalement confirmé), seuils de sanctions automatiques (`WARN_AT`, `MUTE_AT`, `SUSPEND_AT`, `ESCALATE_AT`), durées, réhabilitation (`REHAB_AFTER_DAYS`, `REHAB_STEP`, `REHAB_INTERVAL_MINUTES`) — voir `.env.example` |
 
@@ -119,20 +124,22 @@ Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `
 
 **Réputation** : chaque variation est un événement (`source` ∈ `game, block, report, sanction, moderation, rehabilitation`). Blocage = −`BLOCK_PENALTY` (rendu au déblocage), signalement = −`REPORT_PENALTY`, signalement confirmé = −`UPHELD_REPORT_PENALTY`. Sous les seuils, sanction automatique si aucune du même type n'est active : avertissement (`WARN_AT`), mute `MUTE_HOURS` (`MUTE_AT`), suspension `SUSPEND_HOURS` (`SUSPEND_AT`) ; sous `ESCALATE_AT` un signalement système est ouvert au niveau `admin`. **Réhabilitation** : les joueurs sous 0 sans événement depuis `REHAB_AFTER_DAYS` jours regagnent `REHAB_STEP` point(s) à chaque passe (planifiée en process toutes les `REHAB_INTERVAL_MINUTES` minutes, ou déclenchée via l'API interne).
 
-### Interne — serveur de jeu (`X-Internal-Key`)
-| Méthode | Route | Description |
-|---|---|---|
-| PUT | `/api/internal/players/:playerId` `{displayName}` | Créer le profil au login (nom existant conservé) |
-| PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?, level?}` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
-| PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
-| POST | `/api/internal/players/:playerId/stats` | `playtimeSecondsDelta, level, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
-| GET | `/api/internal/players/:playerId/sanctions` | Sanctions actives (pour appliquer mute/ban côté jeu) |
-| POST | `/api/internal/reputation/rehabilitate` | Lancer une passe de réhabilitation |
-| POST | `/api/internal/players/:playerId/activity` `{type, details?}` | Ajouter une entrée d'activité |
-| GET | `/api/internal/players/:playerId/corporation` | Corporation et grade d'un joueur (`null` si aucune) |
-| PUT | `/api/internal/players/:playerId/corporation` `{corporationId, rankId?}` | Ajouter un **PNJ** à une corporation (grade par défaut si omis) |
-| DELETE | `/api/internal/players/:playerId/corporation` | Retirer un **PNJ** de sa corporation |
-| POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | Enregistrer une rencontre (alimente les suggestions) |
+### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
+| Méthode | Route | Rôle requis | Description |
+|---|---|---|---|
+| PUT | `/api/internal/players/:playerId` `{displayName}` | `social:profile:write` | Créer le profil au login (nom existant conservé) |
+| PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?, level?}` | `social:profile:write` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
+| PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
+| POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, level, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
+| GET | `/api/internal/players/:playerId/sanctions` | `social:sanctions:read` | Sanctions actives (pour appliquer mute/ban côté jeu) |
+| POST | `/api/internal/reputation/rehabilitate` | `social:reputation:write` | Lancer une passe de réhabilitation |
+| POST | `/api/internal/players/:playerId/activity` `{type, details?}` | `social:player:write` | Ajouter une entrée d'activité |
+| GET | `/api/internal/players/:playerId/corporation` | `social:corporation:read` | Corporation et grade d'un joueur (`null` si aucune) |
+| PUT | `/api/internal/players/:playerId/corporation` `{corporationId, rankId?}` | `social:corporation:write` | Ajouter un **PNJ** à une corporation (grade par défaut si omis) |
+| DELETE | `/api/internal/players/:playerId/corporation` | `social:corporation:write` | Retirer un **PNJ** de sa corporation |
+| POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | `social:reputation:write` | Enregistrer une rencontre (alimente les suggestions) |
+
+**Auth de service** : garde monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`) ; `azp` ∈ `INTERNAL_SERVICE_CLIENTS`, `aud` = `social-api`, puis rôle de capacité sinon `403 SERVICE_FORBIDDEN`/`FORBIDDEN`. Un token joueur ne peut pas porter un `azp` de service : c'est la garantie de non-contournement.
 
 Les **PNJ** sont des profils `entityType: "npc"` (id UUID attribué par le serveur de jeu) : visibles dans la recherche (`?entityType=npc`), amiables et présents dans les corporations comme membres avec un grade, mais **exclus** de la réputation, des sanctions et des signalements (réponse `400 NPC_NOT_APPLICABLE`). Un PNJ ne peut jamais être le CEO d'une corporation.
 
@@ -144,7 +151,7 @@ src/
   config/env.ts     variables d'environnement
   db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, moderation)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
-  middleware/       auth (JWT / clé interne / rôles), sanctions, validate (zod), errorHandler
+  middleware/       auth (JWT joueur / service-account + rôles de capacité), sanctions, validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
   services/         logique métier (une fonction exportée par cas d'usage)
 ```
@@ -190,6 +197,7 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 
 ### API & Intégration
 - [x] API interne connectée au serveur du jeu (mise à jour régulière)
+- [x] Auth service-à-service par comptes de service Keycloak et rôles de capacité (fin des secrets partagés)
 - [~] API publique sécurisée (OAuth2, clés d'accès) — JWT Keycloak en place, clés d'accès tierces à venir
 - [ ] Webhooks d'événements (nouvelle corporation, changement de réputation, etc.)
 - [ ] Support des outils externes (bots, extensions, overlays)

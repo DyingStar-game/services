@@ -1,15 +1,15 @@
 /**
- * API router: public routes, player routes (JWT) and internal routes (shared key).
+ * API router: public routes and player routes (JWT). Internal routes are mounted directly
+ * on the app in `index.ts` so their service guard lives on the mount point.
  */
 import { Router, type IRouter, type NextFunction, type Request, type Response } from 'express';
 
-import { internalAuth, playerAuth } from '../middleware/auth.js';
+import { playerAuth } from '../middleware/auth.js';
 import { enforceSanctions } from '../middleware/sanctions.js';
 import { adminRoutes } from './admin.routes.js';
 import { blocksRoutes } from './blocks.routes.js';
 import { corporationsRoutes } from './corporations.routes.js';
 import { friendsRoutes } from './friends.routes.js';
-import { internalRoutes } from './internal.routes.js';
 import { meRoutes } from './me.routes.js';
 import { profilesRoutes } from './profiles.routes.js';
 import { publicRoutes } from './public.routes.js';
@@ -19,8 +19,6 @@ import { reportsRoutes } from './reports.routes.js';
 export const apiRouter: IRouter = Router();
 
 apiRouter.use(publicRoutes);
-
-apiRouter.use('/internal', internalAuth, internalRoutes);
 
 // Auth is attached per prefix so unknown paths fall through to the 404 handler.
 // Sanctioned (suspended/banned) players keep read access to /me/reputation and /me/sanctions only.

@@ -10,6 +10,11 @@
  *   BASE=http://host.docker.internal:3000 KEY=test-internal-key \
  *   DATABASE_URL=postgresql://user:password@host.docker.internal:5432/economie node scripts/smoke.mjs
  *
+ * Against production-style auth (Keycloak service accounts), provide:
+ *   KC_BASE=http://keycloak:8080 KC_CLIENT_ID=svc-game KC_CLIENT_SECRET=... \
+ *   KC_MARKET_CLIENT_ID=svc-market KC_MARKET_CLIENT_SECRET=... node scripts/smoke.mjs
+ * and drop KEY; without Keycloak the legacy X-Internal-Key is used (INTERNAL_DEV_BYPASS=true).
+ *
  * Exits with code 1 as soon as one assertion failed.
  */
 import pg from 'pg';
@@ -18,6 +23,13 @@ const BASE = process.env.BASE ?? 'http://localhost:3000';
 const KEY = process.env.KEY ?? 'test-internal-key';
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
 const TAX_VAULT = process.env.ECONOMY_TAX_VAULT_UUID ?? '00000000-0000-0000-0000-000000000001';
+
+const KC_BASE = process.env.KC_BASE ?? '';
+const KC_REALM = process.env.KC_REALM ?? 'dyingstar';
+const KC_CLIENT_ID = process.env.KC_CLIENT_ID ?? '';
+const KC_CLIENT_SECRET = process.env.KC_CLIENT_SECRET ?? '';
+const KC_MARKET_CLIENT_ID = process.env.KC_MARKET_CLIENT_ID ?? '';
+const KC_MARKET_CLIENT_SECRET = process.env.KC_MARKET_CLIENT_SECRET ?? '';
 
 /** Test fixtures. `D` is not a member of the corporation, `E` is a treasurer. */
 const A = '11111111-1111-4111-8111-111111111111';
@@ -32,8 +44,32 @@ const START_BALANCE = 10_000;
 const IDEMPOTENT_CREDIT = 7;
 /** Makes idempotency keys unique per run so the script can be replayed. */
 const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-const internal = { 'X-Internal-Key': KEY };
 const asPlayer = (id, name = 'alice') => ({ 'X-Player-Id': id, 'X-Player-Name': name });
+
+/** Fetches a Keycloak service-account token (client_credentials grant). */
+async function serviceToken(clientId, clientSecret) {
+  const res = await fetch(`${KC_BASE}/realms/${KC_REALM}/protocol/openid-connect/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+    }),
+  });
+  if (!res.ok) throw new Error(`token request for ${clientId} failed: ${res.status} ${await res.text()}`);
+  return (await res.json()).access_token;
+}
+
+/** Real service token when Keycloak is configured, else the dev-only shared key. */
+const serviceTokenValue =
+  KC_BASE && KC_CLIENT_ID && KC_CLIENT_SECRET ? await serviceToken(KC_CLIENT_ID, KC_CLIENT_SECRET) : null;
+if (serviceTokenValue) {
+  console.log(`# internal auth: Keycloak service account ${KC_CLIENT_ID}`);
+} else {
+  console.log('# internal auth: legacy X-Internal-Key (INTERNAL_DEV_BYPASS=true)');
+}
+const internal = serviceTokenValue ? { Authorization: `Bearer ${serviceTokenValue}` } : { 'X-Internal-Key': KEY };
 
 let passed = 0;
 const failures = [];
@@ -114,9 +150,14 @@ console.log('\n# setup');
 // Baseline: the database may already hold credits from earlier runs, so the money
 // supply invariant is asserted as a delta rather than an absolute total.
 const supplyBaseline = sql ? await sql.totalSupply() : 0;
+let firstCredit = null;
 for (const id of [A, B, D, E]) {
-  const { status } = await req('POST', `/api/internal/players/${id}/wallet/credit`, { amount: START_BALANCE }, internal);
-  check(`credit ${START_BALANCE} to ${id.slice(0, 4)}`, status, 201);
+  const res = await req('POST', `/api/internal/players/${id}/wallet/credit`, { amount: START_BALANCE }, internal);
+  check(`credit ${START_BALANCE} to ${id.slice(0, 4)}`, res.status, 201);
+  if (id === A) firstCredit = res;
+}
+if (serviceTokenValue) {
+  check('service caller recorded in the ledger', firstCredit.json.transaction.caller, KC_CLIENT_ID);
 }
 await req('PUT', `/api/internal/corporations/${C}/members/${A}`, { role: 'member' }, internal);
 await req('PUT', `/api/internal/corporations/${C}/members/${E}`, { role: 'treasurer' }, internal);
@@ -133,11 +174,38 @@ console.log('\n# health and auth');
   const noAuth = await req('GET', '/api/me/wallet');
   check('wallet without credentials', [noAuth.status, noAuth.json.error], [401, 'UNAUTHORIZED']);
 
-  const noKey = await req('GET', `/api/internal/players/${A}/wallet`);
-  check('internal route without X-Internal-Key', [noKey.status, noKey.json.error], [401, 'UNAUTHORIZED']);
+  const noCreds = await req('GET', `/api/internal/players/${A}/wallet`);
+  check('internal route without credentials', [noCreds.status, noCreds.json.error], [401, 'UNAUTHORIZED']);
 
-  const badKey = await req('GET', `/api/internal/players/${A}/wallet`, undefined, { 'X-Internal-Key': 'wrong' });
-  check('internal route with wrong X-Internal-Key', [badKey.status, badKey.json.error], [401, 'UNAUTHORIZED']);
+  if (serviceTokenValue) {
+    const bogus = await req('GET', `/api/internal/players/${A}/wallet`, undefined, {
+      Authorization: 'Bearer not-a-jwt',
+    });
+    check('internal route with a bogus bearer', [bogus.status, bogus.json.error], [401, 'UNAUTHORIZED']);
+
+    const other = await req('GET', `/api/internal/players/${A}/wallet`, undefined, {
+      Authorization: `Bearer ${serviceTokenValue}.tampered`,
+    });
+    check('internal route with a tampered bearer', [other.status, other.json.error], [401, 'UNAUTHORIZED']);
+
+    if (KC_MARKET_CLIENT_ID && KC_MARKET_CLIENT_SECRET) {
+      const marketToken = await serviceToken(KC_MARKET_CLIENT_ID, KC_MARKET_CLIENT_SECRET);
+      const allowed = await req('GET', `/api/internal/players/${A}/wallet`, undefined, {
+        Authorization: `Bearer ${marketToken}`,
+      });
+      check('svc-market can read wallets (has the role)', allowed.status, 200);
+
+      const denied = await req('PUT', `/api/internal/corporations/${C}/settings`, { taxRateBps: 500 }, {
+        Authorization: `Bearer ${marketToken}`,
+      });
+      check('svc-market cannot manage corporations (missing role)', [denied.status, denied.json.error], [403, 'FORBIDDEN']);
+    } else {
+      console.log('  skip capability-role split (set KC_MARKET_CLIENT_ID/KC_MARKET_CLIENT_SECRET)');
+    }
+  } else {
+    const wrongKey = await req('GET', `/api/internal/players/${A}/wallet`, undefined, { 'X-Internal-Key': 'wrong' });
+    check('internal route with wrong X-Internal-Key', [wrongKey.status, wrongKey.json.error], [401, 'UNAUTHORIZED']);
+  }
 }
 
 // ── Wallets, idempotency, overdraft ──────────────────────────────────────────

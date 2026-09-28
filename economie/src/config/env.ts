@@ -22,13 +22,24 @@ export const env = {
   oidc: {
     issuer,
     jwksUrl: process.env.OIDC_JWKS_URL || `${issuer}/protocol/openid-connect/certs`,
-    /** Optional expected `aud` claim; empty disables the audience check. */
+    /** Optional expected `aud` claim for player tokens; empty disables the audience check. */
     audience: process.env.OIDC_AUDIENCE || undefined,
+    /** Expected `aud` of service-account tokens (client_credentials) on `/api/internal/*`. */
+    serviceAudience: process.env.OIDC_SERVICE_AUDIENCE || 'economie-api',
   },
-  /** Shared secret expected in `X-Internal-Key` on `/api/internal/*`. */
+  /** Legacy shared secret; only honoured when `internalDevBypass` is on. */
   internalApiKey: process.env.INTERNAL_API_KEY ?? '',
+  /** Accept the legacy `X-Internal-Key` on `/api/internal/*` (never honoured in production). */
+  internalDevBypass: process.env.INTERNAL_DEV_BYPASS === 'true' && nodeEnv !== 'production',
   /** Accept `X-Player-Id` instead of a JWT (never honoured in production). */
   authDevBypass: process.env.AUTH_DEV_BYPASS === 'true' && nodeEnv !== 'production',
+  /** Trusted Keycloak service clients (`azp`) allowed on `/api/internal/*`. */
+  internal: {
+    serviceClients: (process.env.INTERNAL_SERVICE_CLIENTS ?? 'svc-game')
+      .split(',')
+      .map((client) => client.trim())
+      .filter(Boolean),
+  },
   /** Economy rules (amounts are integer minor units, rates in basis points). */
   economy: {
     /** Automatic tax on player-to-player transfers (basis points, 500 = 5%). */

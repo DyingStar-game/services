@@ -1,5 +1,7 @@
 /**
- * Authentication middlewares: Keycloak JWT for players, shared key for internal callers.
+ * Authentication middlewares: Keycloak JWT for players, Keycloak service-account JWT for
+ * internal callers (per-capability realm roles). The shared `X-Internal-Key` is only
+ * honoured in non-production when `INTERNAL_DEV_BYPASS=true` (see `serviceAuth`).
  */
 import { timingSafeEqual } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
@@ -15,6 +17,26 @@ export interface AuthenticatedPlayer {
   username: string;
   roles: string[];
 }
+
+/** Identity of a trusted calling service, extracted from a Keycloak service-account token. */
+export interface AuthenticatedService {
+  /** Keycloak client id that requested the token (`azp` / `client_id`). */
+  clientId: string;
+  /** Service-account subject (`sub`, a UUID). */
+  subject: string;
+  /** Realm and client roles granted to that service account. */
+  roles: string[];
+}
+
+/** Service-account capability roles, checked per route by `requireServiceRole`. */
+export const SERVICE_ROLES = {
+  walletRead: 'economie:wallet:read',
+  walletEnsure: 'economie:wallet:ensure',
+  walletCredit: 'economie:wallet:credit',
+  walletDebit: 'economie:wallet:debit',
+  corporationRead: 'economie:corporation:read',
+  corporationManage: 'economie:corporation:manage',
+} as const;
 
 /** Moderation roles, lowest to highest; each level implies the ones below. */
 export const MODERATION_ROLES = ['moderator', 'admin', 'supervisor'] as const;
@@ -120,23 +142,91 @@ export function requireRole(role: ModerationRole) {
   };
 }
 
+/** Roles carried by a token: realm roles plus the roles of this API's client. */
+function serviceRolesFromClaims(payload: JWTPayload): string[] {
+  const realmAccess = payload.realm_access as { roles?: string[] } | undefined;
+  const resourceAccess = payload.resource_access as Record<string, { roles?: string[] }> | undefined;
+  const clientRoles = resourceAccess?.[env.oidc.serviceAudience]?.roles ?? [];
+  return [...new Set([...(realmAccess?.roles ?? []), ...clientRoles])];
+}
+
 /**
- * Requires `X-Internal-Key` to match `INTERNAL_API_KEY` (game server / trusted services).
+ * Requires a Keycloak service-account token (client_credentials grant) whose `azp` is an
+ * allowed service client and whose audience targets this API, then sets `req.service`.
+ *
+ * This is the *only* production path: a player token can never carry an allowed `azp`,
+ * because `azp` is the client that requested the token and only the service's own
+ * `client_secret` can mint one. In non-production, `INTERNAL_DEV_BYPASS=true` additionally
+ * accepts the legacy `X-Internal-Key` (grants every service role) for local tests.
  */
-export function internalAuth(req: Request, _res: Response, next: NextFunction): void {
-  if (!env.internalApiKey) {
-    next(new HttpError(503, 'INTERNAL_AUTH_NOT_CONFIGURED', 'INTERNAL_API_KEY is not set'));
+export async function serviceAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  if (env.internalDevBypass) {
+    const given = req.header('x-internal-key') ?? '';
+    const expected = env.internalApiKey;
+    if (expected && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))) {
+      req.service = {
+        clientId: 'dev-internal-key',
+        subject: '00000000-0000-0000-0000-000000000000',
+        roles: Object.values(SERVICE_ROLES),
+      };
+      next();
+      return;
+    }
+  }
+
+  const token = extractBearer(req);
+  if (!token) {
+    next(new HttpError(401, 'UNAUTHORIZED', 'Missing service token'));
     return;
   }
-  const given = req.header('x-internal-key') ?? '';
-  const expected = env.internalApiKey;
-  const ok =
-    given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
-  if (!ok) {
-    next(new HttpError(401, 'UNAUTHORIZED', 'Invalid internal key'));
+  let payload: JWTPayload;
+  try {
+    ({ payload } = await jwtVerify(token, getJwks(), {
+      issuer: env.oidc.issuer,
+      audience: env.oidc.serviceAudience,
+    }));
+  } catch {
+    next(new HttpError(401, 'UNAUTHORIZED', 'Invalid service token'));
     return;
   }
+
+  const clientId = (payload.azp as string | undefined) ?? (payload.client_id as string | undefined);
+  if (!clientId || !env.internal.serviceClients.includes(clientId)) {
+    next(new HttpError(403, 'SERVICE_FORBIDDEN', `Client ${clientId ?? '(none)'} is not an allowed service`));
+    return;
+  }
+  if (typeof payload.sub !== 'string' || !UUID_RE.test(payload.sub)) {
+    next(new HttpError(403, 'SERVICE_FORBIDDEN', 'Service token has no usable subject'));
+    return;
+  }
+  const username = payload.preferred_username as string | undefined;
+  if (username && !username.startsWith('service-account-')) {
+    next(new HttpError(403, 'SERVICE_FORBIDDEN', 'Token is not issued to a service account'));
+    return;
+  }
+  req.service = { clientId, subject: payload.sub, roles: serviceRolesFromClaims(payload) };
   next();
+}
+
+/**
+ * Middleware requiring a service capability (after `serviceAuth`).
+ * @param role - Realm role the calling service must hold.
+ * @returns Middleware responding 403 otherwise.
+ */
+export function requireServiceRole(role: string) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.service || !req.service.roles.includes(role)) {
+      next(new HttpError(403, 'FORBIDDEN', `Requires service role ${role}`));
+      return;
+    }
+    next();
+  };
+}
+
+/** Returns the service bound on the request; throws if `serviceAuth` did not run. */
+export function requireService(req: Request): AuthenticatedService {
+  if (!req.service) throw new HttpError(401, 'UNAUTHORIZED', 'Not authenticated as a service');
+  return req.service;
 }
 
 /**
