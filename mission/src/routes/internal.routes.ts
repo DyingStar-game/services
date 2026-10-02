@@ -1,0 +1,175 @@
+/**
+ * Internal routes for the game server and trusted services (`/api/internal`). The caller is
+ * authenticated by `serviceAuth` (Keycloak service account) on the mount point, then each
+ * route requires its capability role. This is the authoritative channel: the game server
+ * creates missions, reports verified objective progress and completes them.
+ */
+import { Router, type IRouter } from 'express';
+
+import { asyncHandler } from '../lib/asyncHandler.js';
+import { HttpError } from '../lib/httpError.js';
+import { requireService, requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
+import { validate } from '../middleware/validate.js';
+import {
+  completeMission,
+  getAssignment,
+  listAssignmentsForPlayer,
+  listMissionsByIds,
+  reportProgress,
+} from '../services/assignments.service.js';
+import {
+  cancelMission,
+  createMission,
+  expireDueMissions,
+  getMissionById,
+  listMissions,
+  updateMission,
+} from '../services/missions.service.js';
+import { settleMissionRewards } from '../services/rewards.service.js';
+import {
+  createMissionBody,
+  internalCompleteBody,
+  internalProgressBody,
+  missionIdParams,
+  missionListQuery,
+  objectiveParams,
+  playerIdParams,
+  settleBody,
+  updateMissionBody,
+} from './schemas.js';
+
+/** Router for game-server driven mission updates. */
+export const internalRoutes: IRouter = Router();
+
+// ── Mission catalogue ────────────────────────────────────────────────────────
+
+/** POST /missions — Create a mission (system, IA corporation/city or scenario). */
+internalRoutes.post(
+  '/missions',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(createMissionBody),
+  asyncHandler(async (req, res) => {
+    const created = await createMission(req.body, requireService(req).clientId);
+    res.status(201).json(created);
+  }),
+);
+
+/** GET /missions — Full mission catalogue with filters (any status). */
+internalRoutes.get(
+  '/missions',
+  requireServiceRole(SERVICE_ROLES.missionRead),
+  validate(missionListQuery, 'query'),
+  asyncHandler(async (req, res) => {
+    const missions = await listMissions(
+      {
+        status: req.query.status as never,
+        kind: req.query.kind as never,
+        category: req.query.category as never,
+        issuerType: req.query.issuerType as never,
+        issuerId: req.query.issuerId as string | undefined,
+        visibility: req.query.visibility as never,
+      },
+      Number(req.query.limit),
+    );
+    res.json({ missions });
+  }),
+);
+
+/** POST /missions/expire — Expire every mission past its deadline (scheduled job). */
+internalRoutes.post(
+  '/missions/expire',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  asyncHandler(async (_req, res) => {
+    res.json({ expired: await expireDueMissions() });
+  }),
+);
+
+/** PATCH /missions/:missionId — Update a mission's mutable fields. */
+internalRoutes.patch(
+  '/missions/:missionId',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(missionIdParams, 'params'),
+  validate(updateMissionBody),
+  asyncHandler(async (req, res) => {
+    res.json(await updateMission(req.params.missionId, req.body));
+  }),
+);
+
+/** POST /missions/:missionId/cancel — Cancel a mission and its active assignments. */
+internalRoutes.post(
+  '/missions/:missionId/cancel',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(missionIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await cancelMission(req.params.missionId));
+  }),
+);
+
+// ── Objective progress ───────────────────────────────────────────────────────
+
+/** POST /missions/:missionId/objectives/:objectiveId/progress — Verified progress report. */
+internalRoutes.post(
+  '/missions/:missionId/objectives/:objectiveId/progress',
+  requireServiceRole(SERVICE_ROLES.missionProgress),
+  validate(objectiveParams, 'params'),
+  validate(internalProgressBody),
+  asyncHandler(async (req, res) => {
+    const { playerId, quantity } = req.body;
+    res.json(await reportProgress(req.params.missionId, playerId, req.params.objectiveId, quantity));
+  }),
+);
+
+// ── Completion & rewards ─────────────────────────────────────────────────────
+
+/** POST /missions/:missionId/complete — Complete a player's mission and settle its reward. */
+internalRoutes.post(
+  '/missions/:missionId/complete',
+  requireServiceRole(SERVICE_ROLES.missionComplete),
+  validate(missionIdParams, 'params'),
+  validate(internalCompleteBody),
+  asyncHandler(async (req, res) => {
+    const { playerId, force, settle } = req.body;
+    res.json(
+      await completeMission(req.params.missionId, playerId, {
+        force,
+        settle,
+      }),
+    );
+  }),
+);
+
+/** POST /missions/:missionId/settle — Replay unsettled reward shares (idempotent). */
+internalRoutes.post(
+  '/missions/:missionId/settle',
+  requireServiceRole(SERVICE_ROLES.missionComplete),
+  validate(missionIdParams, 'params'),
+  validate(settleBody),
+  asyncHandler(async (req, res) => {
+    const mission = await getMissionById(req.params.missionId);
+    if (!mission) throw new HttpError(404, 'NOT_FOUND', 'Mission not found');
+    const assignment = await getAssignment(req.params.missionId, req.body.playerId);
+    if (!assignment) throw new HttpError(404, 'NOT_FOUND', 'Assignment not found');
+    if (assignment.status !== 'completed') {
+      throw new HttpError(409, 'ASSIGNMENT_NOT_COMPLETED', `Assignment is ${assignment.status}`);
+    }
+    res.json({ settlements: await settleMissionRewards(mission, { force: true }) });
+  }),
+);
+
+/** GET /players/:playerId/missions — All of a player's assignments (with their missions). */
+internalRoutes.get(
+  '/players/:playerId/missions',
+  requireServiceRole(SERVICE_ROLES.missionRead),
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const assignments = await listAssignmentsForPlayer(req.params.playerId);
+    const referenced = await listMissionsByIds(assignments.map((a) => a.missionId));
+    const byId = new Map(referenced.map((m) => [m.id, m]));
+    res.json({
+      missions: assignments.map((assignment) => ({
+        assignment,
+        mission: byId.get(assignment.missionId) ?? null,
+      })),
+    });
+  }),
+);

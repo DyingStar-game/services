@@ -1,0 +1,854 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Mission API
+  version: 0.1.0
+  description: >
+    Mission API of DyingStar: dynamic and scripted missions with verifiable objectives
+    (material delivery, A→B transport, visits), player lifecycle (accept, progress,
+    complete, abandon) and economic or item rewards.
+
+    Three kinds of callers:
+
+    * **Players** send a Keycloak JWT (`Authorization: Bearer`). The player id is the
+      `sub` claim. With `AUTH_DEV_BYPASS=true` (never in production) the `X-Player-Id` /
+      `X-Player-Name` / `X-Player-Roles` headers are accepted instead.
+    * **The game server** and trusted services authenticate with a Keycloak
+      service-account token (`client_credentials`, `Authorization: Bearer`) whose `azp`
+      is an allowed client and whose `aud` targets `mission-api`. Each `/api/internal/*`
+      route requires a capability role (e.g. `mission:write`). Dev only
+      (`INTERNAL_DEV_BYPASS=true`): the legacy `X-Internal-Key` header is accepted.
+    * Economic rewards are paid to the Economy service internal API
+      (`POST /api/internal/players/{playerId}/wallet/credit`) with an idempotency key, so
+      a reward is never credited twice.
+
+    Every error is `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: public
+    description: Unauthenticated endpoints
+  - name: me
+    description: The authenticated player's own missions
+  - name: missions
+    description: Browse, accept, progress and complete missions
+  - name: internal
+    description: Game-server integration (Keycloak service accounts, capability roles)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ── Public ─────────────────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [public]
+      summary: Liveness check
+      security: []
+      responses:
+        '200':
+          description: API is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: mission }
+                  version: { type: string, example: 0.1.0 }
+
+  # ── Me ─────────────────────────────────────────────────────────────────────
+  /api/me/missions:
+    get:
+      tags: [me]
+      summary: The caller's missions (assignments joined with their mission)
+      parameters:
+        - $ref: '#/components/parameters/AssignmentStatus'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Player missions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [missions]
+                properties:
+                  missions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PlayerMission' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Missions ───────────────────────────────────────────────────────────────
+  /api/missions:
+    get:
+      tags: [missions]
+      summary: Browse missions (defaults to the `available` ones)
+      parameters:
+        - $ref: '#/components/parameters/MissionStatus'
+        - $ref: '#/components/parameters/MissionKind'
+        - $ref: '#/components/parameters/MissionCategory'
+        - $ref: '#/components/parameters/IssuerType'
+        - $ref: '#/components/parameters/IssuerId'
+        - $ref: '#/components/parameters/Visibility'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Missions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [missions]
+                properties:
+                  missions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Mission' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [missions]
+      summary: Create a player-sponsored mission (economic reward escrowed from the caller)
+      description: >
+        The economic reward is debited from the caller's wallet through Economy and held
+        until settlement or refund. Corporation missions require membership (checked in
+        Social). Item rewards are not supported here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePlayerMission' }
+      responses:
+        '201':
+          description: Created mission and objectives (escrow held)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mission: { $ref: '#/components/schemas/Mission' }
+                  objectives:
+                    type: array
+                    items: { $ref: '#/components/schemas/Objective' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Caller is not a member of the target corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Escrow refused (insufficient funds)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                broke:
+                  value: { error: INSUFFICIENT_FUNDS, message: Insufficient balance for the mission escrow, status: 409 }
+        '502':
+          description: Economy or Social is unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/missions/{missionId}:
+    get:
+      tags: [missions]
+      summary: Mission detail with its objectives and the caller's assignment
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      responses:
+        '200':
+          description: Mission, objectives and assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mission, objectives]
+                properties:
+                  mission: { $ref: '#/components/schemas/Mission' }
+                  objectives:
+                    type: array
+                    items: { $ref: '#/components/schemas/Objective' }
+                  assignment:
+                    oneOf:
+                      - { $ref: '#/components/schemas/Assignment' }
+                      - { type: 'null' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/missions/{missionId}/accept:
+    post:
+      tags: [missions]
+      summary: Accept a mission (creates the caller's assignment)
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      responses:
+        '201':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assignment, mission, objectives]
+                properties:
+                  assignment: { $ref: '#/components/schemas/Assignment' }
+                  mission: { $ref: '#/components/schemas/Mission' }
+                  objectives:
+                    type: array
+                    items: { $ref: '#/components/schemas/Objective' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Mission not open, already assigned/completed, or full
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                full:
+                  value: { error: MISSION_FULL, message: Mission has no free slot, status: 409 }
+
+  /api/missions/{missionId}/abandon:
+    post:
+      tags: [missions]
+      summary: Abandon the caller's active assignment
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      responses:
+        '200':
+          description: Updated assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assignment: { $ref: '#/components/schemas/Assignment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Assignment is not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/missions/{missionId}/objectives/{objectiveId}/progress:
+    post:
+      tags: [missions]
+      summary: Report progress on one objective (quantity delivered/transported)
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+        - $ref: '#/components/parameters/ObjectiveId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity]
+              properties:
+                quantity: { type: integer, minimum: 1, example: 5 }
+      responses:
+        '200':
+          description: Updated objective and mission progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [objective, objectives, allComplete]
+                properties:
+                  objective: { $ref: '#/components/schemas/Objective' }
+                  objectives:
+                    type: array
+                    items: { $ref: '#/components/schemas/Objective' }
+                  allComplete: { type: boolean }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Objective locked, mission closed or assignment not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                locked:
+                  value: { error: OBJECTIVE_LOCKED, message: Previous objectives must be completed first, status: 409 }
+
+  /api/missions/{missionId}/complete:
+    post:
+      tags: [missions]
+      summary: Complete the mission and settle its economic reward
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      responses:
+        '200':
+          description: Completed assignment, mission and settlement outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assignment, mission]
+                properties:
+                  assignment: { $ref: '#/components/schemas/Assignment' }
+                  mission: { $ref: '#/components/schemas/Mission' }
+                  settlement: { $ref: '#/components/schemas/Settlement' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Objectives incomplete or assignment not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: Economy rejected the reward credit (assignment completed, reward unsettled)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ── Internal ───────────────────────────────────────────────────────────────
+  /api/internal/missions:
+    post:
+      tags: [internal]
+      summary: Create a mission (system, IA corporation/city or scenario)
+      description: Requires the `mission:write` service role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateMission' }
+      responses:
+        '201':
+          description: Created mission and objectives
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mission: { $ref: '#/components/schemas/Mission' }
+                  objectives:
+                    type: array
+                    items: { $ref: '#/components/schemas/Objective' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: A mission with this `scriptId` already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                duplicate:
+                  value: { error: DUPLICATE_SCRIPT_ID, message: A mission with this scriptId already exists, status: 409 }
+    get:
+      tags: [internal]
+      summary: Full mission catalogue (all statuses)
+      description: Requires the `mission:read` service role.
+      parameters:
+        - $ref: '#/components/parameters/MissionStatus'
+        - $ref: '#/components/parameters/MissionKind'
+        - $ref: '#/components/parameters/MissionCategory'
+        - $ref: '#/components/parameters/IssuerType'
+        - $ref: '#/components/parameters/IssuerId'
+        - $ref: '#/components/parameters/Visibility'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Missions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  missions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Mission' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/internal/missions/expire:
+    post:
+      tags: [internal]
+      summary: Expire every mission past its deadline
+      description: Requires the `mission:write` service role. Intended for a scheduled job.
+      responses:
+        '200':
+          description: Number of expired missions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  expired: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/internal/missions/{missionId}:
+    patch:
+      tags: [internal]
+      summary: Update a mission's mutable fields
+      description: Requires the `mission:write` service role.
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateMission' }
+      responses:
+        '200':
+          description: Updated mission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mission' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/internal/missions/{missionId}/cancel:
+    post:
+      tags: [internal]
+      summary: Cancel a mission and its active assignments
+      description: Requires the `mission:write` service role.
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      responses:
+        '200':
+          description: Cancelled mission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mission' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Mission already completed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/internal/missions/{missionId}/objectives/{objectiveId}/progress:
+    post:
+      tags: [internal]
+      summary: Report verified objective progress on behalf of a player
+      description: Requires the `mission:progress` service role.
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+        - $ref: '#/components/parameters/ObjectiveId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId, quantity]
+              properties:
+                playerId: { type: string, format: uuid }
+                quantity: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Updated objective and mission progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  objective: { $ref: '#/components/schemas/Objective' }
+                  objectives:
+                    type: array
+                    items: { $ref: '#/components/schemas/Objective' }
+                  allComplete: { type: boolean }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Objective locked, mission closed or assignment not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/internal/missions/{missionId}/complete:
+    post:
+      tags: [internal]
+      summary: Complete a player's mission and settle its reward
+      description: Requires the `mission:complete` service role.
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+                force: { type: boolean, description: Skip the objective verification }
+                settle: { type: boolean, description: Settle the reward now (default true) }
+      responses:
+        '200':
+          description: Completed assignments, mission and settlements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assignment: { $ref: '#/components/schemas/Assignment' }
+                  assignments:
+                    type: array
+                    items: { $ref: '#/components/schemas/Assignment' }
+                  mission: { $ref: '#/components/schemas/Mission' }
+                  settlement: { $ref: '#/components/schemas/Settlement' }
+                  settlements:
+                    type: array
+                    items: { $ref: '#/components/schemas/Settlement' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Objectives incomplete or assignment not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/internal/missions/{missionId}/settle:
+    post:
+      tags: [internal]
+      summary: Replay unsettled reward shares (idempotent)
+      description: Requires the `mission:complete` service role.
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: One settlement outcome per completed assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settlements:
+                    type: array
+                    items: { $ref: '#/components/schemas/Settlement' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Assignment is not completed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/internal/players/{playerId}/missions:
+    get:
+      tags: [internal]
+      summary: All of a player's assignments (with their missions)
+      description: Requires the `mission:read` service role.
+      parameters:
+        - $ref: '#/components/parameters/PlayerId'
+      responses:
+        '200':
+          description: Assignments and their missions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  missions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PlayerMission' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    MissionId:
+      name: missionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ObjectiveId:
+      name: objectiveId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PlayerId:
+      name: playerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    MissionStatus:
+      name: status
+      in: query
+      schema: { $ref: '#/components/schemas/MissionStatus' }
+    MissionKind:
+      name: kind
+      in: query
+      schema: { $ref: '#/components/schemas/MissionKind' }
+    MissionCategory:
+      name: category
+      in: query
+      schema: { $ref: '#/components/schemas/MissionCategory' }
+    IssuerType:
+      name: issuerType
+      in: query
+      schema: { $ref: '#/components/schemas/IssuerType' }
+    IssuerId:
+      name: issuerId
+      in: query
+      schema: { type: string, format: uuid }
+    Visibility:
+      name: visibility
+      in: query
+      schema: { $ref: '#/components/schemas/MissionVisibility' }
+    AssignmentStatus:
+      name: status
+      in: query
+      schema: { $ref: '#/components/schemas/AssignmentStatus' }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated but missing the required role
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            invalid:
+              value: { error: VALIDATION_ERROR, message: 'objectives: Array must contain at least 1 element(s)', status: 400 }
+
+  schemas:
+    MissionStatus:
+      type: string
+      enum: [available, active, completed, cancelled, expired]
+    MissionKind:
+      type: string
+      enum: [dynamic, scenario, player]
+    MissionCategory:
+      type: string
+      enum: [delivery, transport, generic]
+    MissionVisibility:
+      type: string
+      enum: [public, corporation]
+    EscrowStatus:
+      type: string
+      enum: [none, pending, held, refunded, claimed]
+    IssuerType:
+      type: string
+      enum: [system, corporation, city, player]
+    ObjectiveType:
+      type: string
+      enum: [deliver_material, transport, visit, custom]
+    ObjectiveStatus:
+      type: string
+      enum: [pending, in_progress, completed, failed]
+    AssignmentStatus:
+      type: string
+      enum: [active, completed, abandoned, expired]
+
+    Reward:
+      type: object
+      description: At least one of `economic` or `item` is required.
+      properties:
+        economic:
+          type: object
+          required: [currency, amount]
+          properties:
+            currency: { type: string, default: credits }
+            amount: { type: integer, minimum: 1 }
+        item:
+          type: object
+          required: [itemId, quantity]
+          properties:
+            itemId: { type: string }
+            quantity: { type: integer, minimum: 1 }
+
+    Mission:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        kind: { $ref: '#/components/schemas/MissionKind' }
+        category: { $ref: '#/components/schemas/MissionCategory' }
+        issuerType: { $ref: '#/components/schemas/IssuerType' }
+        issuerId: { type: string, format: uuid, nullable: true }
+        status: { $ref: '#/components/schemas/MissionStatus' }
+        reward: { $ref: '#/components/schemas/Reward' }
+        visibility: { $ref: '#/components/schemas/MissionVisibility' }
+        maxAssignees: { type: integer }
+        escrowStatus: { $ref: '#/components/schemas/EscrowStatus' }
+        escrowAmount: { type: integer, nullable: true }
+        escrowCurrency: { type: string, nullable: true }
+        escrowPayerId: { type: string, format: uuid, nullable: true }
+        scriptId: { type: string, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        createdBy: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Objective:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        missionId: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/ObjectiveType' }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        targetQuantity: { type: integer }
+        unit: { type: string, nullable: true }
+        locationFrom: { type: object, additionalProperties: true, nullable: true }
+        locationTo: { type: object, additionalProperties: true, nullable: true }
+        order: { type: integer }
+        status: { $ref: '#/components/schemas/ObjectiveStatus' }
+        currentProgress: { type: integer }
+        payload: { type: object, additionalProperties: true, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Assignment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        missionId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/AssignmentStatus' }
+        acceptedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        rewardAmount: { type: integer, nullable: true, description: Frozen reward share at completion }
+        rewardSettled: { type: boolean }
+        rewardExternalId: { type: string }
+        rewardSettledAt: { type: string, format: date-time, nullable: true }
+        rewardDetails: { type: object, additionalProperties: true, nullable: true }
+
+    PlayerMission:
+      type: object
+      properties:
+        assignment: { $ref: '#/components/schemas/Assignment' }
+        mission:
+          oneOf:
+            - { $ref: '#/components/schemas/Mission' }
+            - { type: 'null' }
+
+    Settlement:
+      type: object
+      properties:
+        settled: { type: boolean }
+        skipped: { type: boolean }
+        reason: { type: string, example: credited }
+        assignment: { $ref: '#/components/schemas/Assignment' }
+
+    CreateMission:
+      type: object
+      required: [title, objectives]
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        kind: { $ref: '#/components/schemas/MissionKind' }
+        category: { $ref: '#/components/schemas/MissionCategory' }
+        issuerType: { $ref: '#/components/schemas/IssuerType' }
+        issuerId: { type: string, format: uuid, nullable: true }
+        reward: { $ref: '#/components/schemas/Reward' }
+        maxAssignees: { type: integer, minimum: 1, maximum: 1000, default: 1 }
+        scriptId: { type: string, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        objectives:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CreateObjective' }
+
+    CreateObjective:
+      type: object
+      required: [type, title]
+      properties:
+        type: { $ref: '#/components/schemas/ObjectiveType' }
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        targetQuantity: { type: integer, minimum: 1 }
+        unit: { type: string }
+        locationFrom: { type: object, additionalProperties: true }
+        locationTo: { type: object, additionalProperties: true }
+        order: { type: integer, minimum: 0 }
+        payload: { type: object, additionalProperties: true }
+
+    UpdateMission:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000, nullable: true }
+        reward: { $ref: '#/components/schemas/Reward' }
+        maxAssignees: { type: integer, minimum: 1, maximum: 1000 }
+        expiresAt: { type: string, format: date-time, nullable: true }
+
+    PlayerReward:
+      type: object
+      required: [economic]
+      properties:
+        economic:
+          type: object
+          required: [amount]
+          properties:
+            currency: { type: string, default: credits }
+            amount: { type: integer, minimum: 1 }
+
+    CreatePlayerMission:
+      type: object
+      required: [title, reward, objectives]
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        category: { $ref: '#/components/schemas/MissionCategory' }
+        visibility: { $ref: '#/components/schemas/MissionVisibility' }
+        corporationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Required when `visibility` is `corporation`
+        reward: { $ref: '#/components/schemas/PlayerReward' }
+        maxAssignees: { type: integer, minimum: 1, maximum: 100, default: 1 }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        objectives:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CreateObjective' }
+
+    Error:
+      type: object
+      required: [error, message, status]
+      properties:
+        error: { type: string, example: VALIDATION_ERROR }
+        message: { type: string }
+        status: { type: integer, example: 400 }
