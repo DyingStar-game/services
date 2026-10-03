@@ -29,6 +29,7 @@ export const TRANSACTION_TYPES = [
   'prime',
   'donation',
   'corporation_fund',
+  'issuance',
   'system',
 ] as const;
 export type TransactionType = (typeof TRANSACTION_TYPES)[number];

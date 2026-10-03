@@ -15,6 +15,7 @@ import {
   corporationMemberParams,
   corporationParentBody,
   corporationPatchBody,
+  corporationPoliticalBody,
   corporationRankParams,
   corporationRequestParams,
   createCorporationBody,
@@ -98,6 +99,22 @@ corporationsRoutes.put(
         req.params.corporationId,
         requirePlayer(req).id,
         req.body.parentId ?? null,
+      ),
+    );
+  }),
+);
+
+/** PUT /:corporationId/politics — Attach to a political entity (fiscal home), or detach (manage_corporation). */
+corporationsRoutes.put(
+  '/:corporationId/politics',
+  validate(corporationIdParams, 'params'),
+  validate(corporationPoliticalBody),
+  asyncHandler(async (req, res) => {
+    res.json(
+      await corporations.setCorporationPoliticalEntity(
+        req.params.corporationId,
+        requirePlayer(req).id,
+        req.body.politicalEntityId ?? null,
       ),
     );
   }),

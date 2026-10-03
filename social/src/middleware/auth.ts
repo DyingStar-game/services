@@ -35,6 +35,8 @@ export const SERVICE_ROLES = {
   playerWrite: 'social:player:write',
   corporationRead: 'social:corporation:read',
   corporationWrite: 'social:corporation:write',
+  politicsRead: 'social:politics:read',
+  politicsWrite: 'social:politics:write',
   sanctionsRead: 'social:sanctions:read',
   reputationWrite: 'social:reputation:write',
 } as const;

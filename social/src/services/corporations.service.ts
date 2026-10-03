@@ -23,6 +23,7 @@ import {
 import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
 import { recordActivity } from './activity.service.js';
 import { recordCorporationActivity } from './corporationActivity.service.js';
+import { requirePoliticalEntity } from './politics.service.js';
 import { getPresenceMap } from './presence.service.js';
 import { isNpc, requireProfile } from './profiles.service.js';
 
@@ -400,6 +401,32 @@ export async function setCorporationParent(
 }
 
 /**
+ * Attaches a corporation to a political entity (its fiscal home), or detaches it.
+ * Requires `manage_corporation`.
+ * @param corporationId - Corporation id.
+ * @param actorId - Acting member.
+ * @param politicalEntityId - Political entity id, or null to detach.
+ * @returns Updated corporation.
+ */
+export async function setCorporationPoliticalEntity(
+  corporationId: string,
+  actorId: string,
+  politicalEntityId: string | null,
+): Promise<Corporation> {
+  await requireCorporationPermission(corporationId, actorId, 'manage_corporation');
+  if (politicalEntityId) await requirePoliticalEntity(politicalEntityId);
+  const [updated] = await db
+    .update(corporations)
+    .set({ politicalEntityId, updatedAt: new Date() })
+    .where(eq(corporations.id, corporationId))
+    .returning();
+  await recordCorporationActivity(corporationId, actorId, politicalEntityId ? 'political_entity_set' : 'political_entity_cleared', {
+    politicalEntityId,
+  });
+  return updated;
+}
+
+/**
  * Ranks of a corporation, highest priority first.
  * @param corporationId - Corporation id.
  * @returns Ranks.
@@ -491,7 +518,6 @@ export async function addNpcCorporationMember(corporationId: string, playerId: s
   const corporation = await requireCorporation(corporationId);
   await requireProfile(playerId);
   if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', 'Only NPC profiles can be added this way');
-  if (playerId === corporation.ceoId) throw forbidden('An NPC cannot be the corporation CEO');
   if (await getCorporationMembership(corporationId, playerId)) {
     throw conflict('NPC is already a member of this corporation');
   }
@@ -504,7 +530,7 @@ export async function addNpcCorporationMember(corporationId: string, playerId: s
       .where(and(eq(corporationRanks.id, rankId), eq(corporationRanks.corporationId, corporationId)))
       .limit(1);
     if (!rank) throw notFound(`Rank ${rankId} not found`);
-    if (rank.isCeo) throw forbidden('Cannot assign the CEO rank to an NPC');
+    if (rank.isCeo) throw forbidden('Use the CEO transfer to assign the CEO rank');
     chosenRank = rank;
   } else {
     const [defaultRank] = await db

@@ -92,8 +92,15 @@ l'appelant est membre (vérifié via `social`).
 | GET | `/api/internal/orders` | `market:read` | Carnet (tous détenteurs) |
 | GET | `/api/internal/demands` | `market:read` | Demandes (tous détenteurs) |
 | GET | `/api/internal/trades` | `market:read` | Trades (tous détenteurs) |
+| POST | `/api/internal/orders` `{side, goodType, kind, quantity, price, instanceId?, currency?, holderType, holderId, corporationId?}` | `market:manage` | Passer un ordre pour un détenteur explicite (joueur, PNJ, corporation) |
+| POST | `/api/internal/orders/:id/cancel` `{holderType, holderId, corporationId?}` | `market:manage` | Annuler un ordre d'un détenteur |
+| POST | `/api/internal/demands` `{goodType, kind, quantity, maxPrice, instanceId?, message?, holderType, holderId, corporationId?}` | `market:manage` | Créer une demande pour un détenteur explicite |
+| POST | `/api/internal/demands/:id/fulfill` `{holderType, holderId, unitPrice, corporationId?}` | `market:manage` | Satisfaire une demande en tant que détenteur (règle le trade) |
+| POST | `/api/internal/demands/:id/cancel` `{holderType, holderId, corporationId?}` | `market:manage` | Annuler une demande d'un détenteur |
 | GET | `/api/internal/trades/:id` | `market:read` | Un trade |
 | POST | `/api/internal/trades/:id/settle` | `market:settle` | Rejouer le règlement d'un trade `pending` |
+
+Détenteurs réglables par `economie` : `player`, `npc`, `corporation` (les PNJ ont des portefeuilles à parité avec les joueurs). Les transferts de biens passent par `inventory`, qui accepte aussi `npc`. `system` reste lisible/poussé par le serveur de jeu mais n'est pas réglé en argent par le marché.
 
 ## Structure
 

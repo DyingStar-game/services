@@ -4,13 +4,18 @@
 import { z } from 'zod';
 
 import {
+  CORPORATION_MEMBER_HOLDER_TYPES,
   CORPORATION_ROLES,
+  POLITICAL_MEMBER_HOLDER_TYPES,
+  POLITICAL_MEMBER_ROLES,
   TRANSACTION_TYPES,
 } from '../db/schema/index.js';
 
 export const uuidSchema = z.string().uuid();
 
 export const playerIdParams = z.object({ playerId: uuidSchema });
+
+export const npcIdParams = z.object({ npcId: uuidSchema });
 
 export const corporationIdParams = z.object({ corporationId: uuidSchema });
 
@@ -26,8 +31,8 @@ const amount = z.number().int().min(1).max(10_000_000_000_000);
 /** Optional currency code; defaults to `credits` in the services. */
 const currency = z.string().trim().min(1).max(16).optional();
 
-/** Types trusted callers may report on credits/debits. */
-const INTERNAL_TYPES = TRANSACTION_TYPES.filter((t) => !['transfer', 'donation', 'tax'].includes(t));
+/** Types trusted callers may report on credits/debits (`issuance` is mint-only). */
+const INTERNAL_TYPES = TRANSACTION_TYPES.filter((t) => !['transfer', 'donation', 'tax', 'issuance'].includes(t));
 
 export const transferBody = z.object({
   toPlayerId: uuidSchema,
@@ -51,6 +56,7 @@ export const donationBody = z.object({
 
 export const memberRoleBody = z.object({
   role: z.enum(CORPORATION_ROLES),
+  holderType: z.enum(CORPORATION_MEMBER_HOLDER_TYPES).optional(),
 });
 
 /** Salary amount: integer minor units, zero allowed (disables the payout). */
@@ -102,3 +108,42 @@ export const playerSearchQuery = z.object({
   search: z.string().trim().min(1).max(64),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
+
+// ── Politics, taxes & minting ───────────────────────────────────────────────
+
+export const politicalEntityIdParams = z.object({ entityId: uuidSchema });
+
+export const politicalMemberParams = politicalEntityIdParams.extend({ playerId: uuidSchema });
+
+export const politicalMemberRoleBody = z.object({
+  role: z.enum(POLITICAL_MEMBER_ROLES),
+  holderType: z.enum(POLITICAL_MEMBER_HOLDER_TYPES).optional(),
+});
+
+export const politicalSettingsBody = z
+  .object({
+    corporateTaxBps: z.number().int().min(0).max(10_000).optional(),
+    incomeTaxBps: z.number().int().min(0).max(10_000).optional(),
+    allowMinting: z.boolean().optional(),
+    mintCeiling: z.number().int().min(0).max(10_000_000_000_000).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
+/** Trigger a tax assessment (books debts). */
+export const assessBody = z.object({ currency });
+
+/** Create currency and credit it to a political treasury. */
+export const mintBody = z.object({
+  amount,
+  currency,
+  reason: z.string().trim().max(128).optional(),
+});
+
+/** Pay a debtor's outstanding tax debts (all due by default). */
+export const payTaxesBody = z.object({
+  currency,
+  entityId: uuidSchema.optional(),
+});
+
+/** Attach/detach a corporation to/from a political entity (fiscal home). */
+export const affiliationBody = z.object({ politicalEntityId: uuidSchema.nullable() });

@@ -7,9 +7,13 @@ import { boolean, index, integer, jsonb, pgTable, text, timestamp, unique, uuid 
 
 import { missions } from './missions.js';
 
-/** Lifecycle of a player's participation in a mission. */
+/** Lifecycle of an assignee's participation in a mission. */
 export const ASSIGNMENT_STATUSES = ['active', 'completed', 'abandoned', 'expired'] as const;
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
+
+/** Kinds of assignee (players and NPCs both have Economy wallets and Inventory holdings). */
+export const ASSIGNEE_HOLDER_TYPES = ['player', 'npc'] as const;
+export type AssigneeHolderType = (typeof ASSIGNEE_HOLDER_TYPES)[number];
 
 export const missionAssignments = pgTable(
   'mission_assignments',
@@ -19,6 +23,8 @@ export const missionAssignments = pgTable(
       .notNull()
       .references(() => missions.id, { onDelete: 'cascade' }),
     playerId: uuid('player_id').notNull(),
+    /** Whether the assignee is a player or an NPC (drives reward routing). */
+    holderType: text('holder_type').$type<AssigneeHolderType>().notNull().default('player'),
     status: text('status').$type<AssignmentStatus>().notNull().default('active'),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),

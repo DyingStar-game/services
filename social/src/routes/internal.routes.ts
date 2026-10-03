@@ -6,16 +6,35 @@
 import { Router, type IRouter } from 'express';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
+import { HttpError } from '../lib/httpError.js';
 import { requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { recordActivity } from '../services/activity.service.js';
 import { recordEncounter } from '../services/encounters.service.js';
 import {
   addNpcCorporationMember,
+  createCorporation,
+  disbandCorporation,
   getCorporationMembership,
   listCorporationMemberships,
+  removeCorporationMember,
   removeNpcCorporationMember,
+  requireCorporation,
+  setCorporationMemberRank,
+  transferCorporationCeo,
+  updateCorporation,
 } from '../services/corporations.service.js';
+import {
+  addNpcPoliticalMember,
+  createPoliticalEntity,
+  disbandPoliticalEntity,
+  getPoliticalMembership,
+  listPoliticalMemberships,
+  removeNpcPoliticalMember,
+  requirePoliticalEntity,
+  transferPoliticalHead,
+  updatePoliticalEntity,
+} from '../services/politics.service.js';
 import { setPresence } from '../services/presence.service.js';
 import {
   applyStats,
@@ -29,15 +48,27 @@ import { adjustReputation, rehabilitate } from '../services/reputation.service.j
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
   activityBody,
+  corporationIdParams,
+  corporationMemberParams,
+  corporationPatchBody,
   corporationQueryOptional,
   corporationQueryRequired,
   encounterBody,
+  internalCreateCorporationBody,
+  internalCreatePoliticalEntityBody,
   internalProfileQuery,
+  memberRankBody,
   npcCorporationBody,
+  npcPoliticalBody,
   npcProfileBody,
   playerIdParams,
+  politicalEntityIdParams,
+  politicalEntityPatchBody,
+  politicalQueryOptional,
+  politicalQueryRequired,
   presenceBody,
   statsBody,
+  targetPlayerBody,
   upsertPlayerBody,
 } from './schemas.js';
 
@@ -103,6 +134,200 @@ internalRoutes.delete(
   asyncHandler(async (req, res) => {
     await removeNpcCorporationMember(req.query.corporationId as string, req.params.playerId);
     res.status(204).send();
+  }),
+);
+
+/**
+ * POST /corporations — Create a corporation with an explicit CEO (player or NPC).
+ * Lets the game server seed fully-NPC corporations.
+ */
+internalRoutes.post(
+  '/corporations',
+  requireServiceRole(SERVICE_ROLES.corporationWrite),
+  validate(internalCreateCorporationBody),
+  asyncHandler(async (req, res) => {
+    const { ceoId, ...data } = req.body;
+    res.status(201).json(await createCorporation(ceoId, data));
+  }),
+);
+
+/** PATCH /corporations/:corporationId — Edit a corporation, acting as its current CEO. */
+internalRoutes.patch(
+  '/corporations/:corporationId',
+  requireServiceRole(SERVICE_ROLES.corporationWrite),
+  validate(corporationIdParams, 'params'),
+  validate(corporationPatchBody),
+  asyncHandler(async (req, res) => {
+    const corporation = await requireCorporation(req.params.corporationId);
+    res.json(await updateCorporation(req.params.corporationId, corporation.ceoId, req.body));
+  }),
+);
+
+/** DELETE /corporations/:corporationId — Disband a corporation, acting as its current CEO. */
+internalRoutes.delete(
+  '/corporations/:corporationId',
+  requireServiceRole(SERVICE_ROLES.corporationWrite),
+  validate(corporationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const corporation = await requireCorporation(req.params.corporationId);
+    await disbandCorporation(req.params.corporationId, corporation.ceoId);
+    res.status(204).send();
+  }),
+);
+
+/** POST /corporations/:corporationId/transfer — Transfer the CEO, acting as the current CEO. */
+internalRoutes.post(
+  '/corporations/:corporationId/transfer',
+  requireServiceRole(SERVICE_ROLES.corporationWrite),
+  validate(corporationIdParams, 'params'),
+  validate(targetPlayerBody),
+  asyncHandler(async (req, res) => {
+    const corporation = await requireCorporation(req.params.corporationId);
+    res.json(await transferCorporationCeo(req.params.corporationId, corporation.ceoId, req.body.playerId));
+  }),
+);
+
+/** PATCH /corporations/:corporationId/members/:playerId — Assign a member's rank, acting as the CEO. */
+internalRoutes.patch(
+  '/corporations/:corporationId/members/:playerId',
+  requireServiceRole(SERVICE_ROLES.corporationWrite),
+  validate(corporationMemberParams, 'params'),
+  validate(memberRankBody),
+  asyncHandler(async (req, res) => {
+    const corporation = await requireCorporation(req.params.corporationId);
+    res.json(
+      await setCorporationMemberRank(
+        req.params.corporationId,
+        corporation.ceoId,
+        req.params.playerId,
+        req.body.rankId,
+      ),
+    );
+  }),
+);
+
+/** DELETE /corporations/:corporationId/members/:playerId — Remove a member, acting as the CEO. */
+internalRoutes.delete(
+  '/corporations/:corporationId/members/:playerId',
+  requireServiceRole(SERVICE_ROLES.corporationWrite),
+  validate(corporationMemberParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const corporation = await requireCorporation(req.params.corporationId);
+    await removeCorporationMember(req.params.corporationId, corporation.ceoId, req.params.playerId);
+    res.status(204).send();
+  }),
+);
+
+/** GET /corporations/:corporationId/politics — Corporation's political (fiscal) attachment. */
+internalRoutes.get(
+  '/corporations/:corporationId/politics',
+  requireServiceRole(SERVICE_ROLES.corporationRead),
+  validate(corporationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const corporation = await requireCorporation(req.params.corporationId);
+    res.json({ corporationId: corporation.id, politicalEntityId: corporation.politicalEntityId });
+  }),
+);
+
+// ── Politics (game server) ──────────────────────────────────────────────────
+
+/** POST /politics — Create a political entity with an explicit head (player or NPC). */
+internalRoutes.post(
+  '/politics',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(internalCreatePoliticalEntityBody),
+  asyncHandler(async (req, res) => {
+    const { headId, ...data } = req.body;
+    res.status(201).json(await createPoliticalEntity(headId, data));
+  }),
+);
+
+/** PATCH /politics/:entityId — Edit a political entity, acting as its current head. */
+internalRoutes.patch(
+  '/politics/:entityId',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(politicalEntityIdParams, 'params'),
+  validate(politicalEntityPatchBody),
+  asyncHandler(async (req, res) => {
+    const entity = await requirePoliticalEntity(req.params.entityId);
+    if (!entity.headId) throw new HttpError(409, 'NO_HEAD', 'Political entity has no head');
+    res.json(await updatePoliticalEntity(req.params.entityId, entity.headId, req.body));
+  }),
+);
+
+/** DELETE /politics/:entityId — Disband a political entity, acting as its current head. */
+internalRoutes.delete(
+  '/politics/:entityId',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(politicalEntityIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const entity = await requirePoliticalEntity(req.params.entityId);
+    if (!entity.headId) throw new HttpError(409, 'NO_HEAD', 'Political entity has no head');
+    await disbandPoliticalEntity(req.params.entityId, entity.headId);
+    res.status(204).send();
+  }),
+);
+
+/** POST /politics/:entityId/transfer — Transfer the head office, acting as the current head. */
+internalRoutes.post(
+  '/politics/:entityId/transfer',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(politicalEntityIdParams, 'params'),
+  validate(targetPlayerBody),
+  asyncHandler(async (req, res) => {
+    const entity = await requirePoliticalEntity(req.params.entityId);
+    if (!entity.headId) throw new HttpError(409, 'NO_HEAD', 'Political entity has no head');
+    res.json(await transferPoliticalHead(req.params.entityId, entity.headId, req.body.playerId));
+  }),
+);
+
+/** PUT /players/:playerId/politics — Add an NPC to a political entity (office optional). */
+internalRoutes.put(
+  '/players/:playerId/politics',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(playerIdParams, 'params'),
+  validate(npcPoliticalBody),
+  asyncHandler(async (req, res) => {
+    const member = await addNpcPoliticalMember(req.body.entityId, req.params.playerId, req.body.officeId);
+    res.json({
+      entityId: member.entityId,
+      playerId: member.playerId,
+      officeId: member.officeId,
+      joinedAt: member.joinedAt,
+    });
+  }),
+);
+
+/** DELETE /players/:playerId/politics?entityId= — Remove an NPC from a political entity. */
+internalRoutes.delete(
+  '/players/:playerId/politics',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(playerIdParams, 'params'),
+  validate(politicalQueryRequired, 'query'),
+  asyncHandler(async (req, res) => {
+    await removeNpcPoliticalMember(req.query.entityId as string, req.params.playerId);
+    res.status(204).send();
+  }),
+);
+
+/**
+ * GET /players/:playerId/politics[?entityId=] — Political membership(s) and office of a profile.
+ * With `entityId`, returns that membership or null; without, the list of memberships.
+ */
+internalRoutes.get(
+  '/players/:playerId/politics',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(playerIdParams, 'params'),
+  validate(politicalQueryOptional, 'query'),
+  asyncHandler(async (req, res) => {
+    const entityId = req.query.entityId as string | undefined;
+    if (entityId) {
+      const membership = await getPoliticalMembership(entityId, req.params.playerId);
+      res.json(membership ? { ...membership.entity, office: membership.office } : null);
+      return;
+    }
+    const memberships = await listPoliticalMemberships(req.params.playerId);
+    res.json(memberships.map((m) => ({ ...m.entity, office: m.office })));
   }),
 );
 

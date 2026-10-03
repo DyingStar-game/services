@@ -1,0 +1,1 @@
+ALTER TABLE "mission_assignments" ADD COLUMN "holder_type" text DEFAULT 'player' NOT NULL;

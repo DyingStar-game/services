@@ -6,6 +6,7 @@ import { Router, type IRouter } from 'express';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { validate } from '../middleware/validate.js';
 import { getCorporationRefMap } from '../services/corporations.service.js';
+import { getPoliticalRefMap } from '../services/politics.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { requireProfile, searchProfiles } from '../services/profiles.service.js';
 import { playerIdParams, profileSearchQuery } from './schemas.js';
@@ -34,10 +35,16 @@ profilesRoutes.get(
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     const profile = await requireProfile(req.params.playerId);
-    const [presence, corporationRefs] = await Promise.all([
+    const [presence, corporationRefs, politicsRefs] = await Promise.all([
       getPresence(profile.playerId),
       getCorporationRefMap([profile.playerId]),
+      getPoliticalRefMap([profile.playerId]),
     ]);
-    res.json({ ...profile, status: presence.status, corporations: corporationRefs.get(profile.playerId) ?? [] });
+    res.json({
+      ...profile,
+      status: presence.status,
+      corporations: corporationRefs.get(profile.playerId) ?? [],
+      politics: politicsRefs.get(profile.playerId) ?? [],
+    });
   }),
 );

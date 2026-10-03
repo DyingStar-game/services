@@ -1,0 +1,1 @@
+ALTER TABLE "corporation_members" ADD COLUMN "holder_type" text DEFAULT 'player' NOT NULL;

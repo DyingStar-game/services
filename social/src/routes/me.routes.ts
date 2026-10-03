@@ -9,6 +9,7 @@ import { validate } from '../middleware/validate.js';
 import { listActivity } from '../services/activity.service.js';
 import { listPlayerRequests, resolvePlayerRequest } from '../services/corporationRequests.service.js';
 import { getCorporationRefMap, listCorporationMemberships } from '../services/corporations.service.js';
+import { getPoliticalRefMap, listPoliticalMemberships } from '../services/politics.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { ensureProfile, updateProfile } from '../services/profiles.service.js';
 import { listReputationEvents } from '../services/reputation.service.js';
@@ -24,11 +25,17 @@ meRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const profile = await ensureProfile(player.id, player.username);
-    const [presence, corporationRefs] = await Promise.all([
+    const [presence, corporationRefs, politicsRefs] = await Promise.all([
       getPresence(player.id),
       getCorporationRefMap([player.id]),
+      getPoliticalRefMap([player.id]),
     ]);
-    res.json({ ...profile, presence, corporations: corporationRefs.get(player.id) ?? [] });
+    res.json({
+      ...profile,
+      presence,
+      corporations: corporationRefs.get(player.id) ?? [],
+      politics: politicsRefs.get(player.id) ?? [],
+    });
   }),
 );
 
@@ -62,6 +69,19 @@ meRoutes.get(
     const memberships = await listCorporationMemberships(requirePlayer(req).id);
     res.json(
       memberships.map((m) => ({ ...m.corporation, joinedAt: m.member.joinedAt, rank: m.rank })),
+    );
+  }),
+);
+
+// ── Politics ────────────────────────────────────────────────────────────────
+
+/** GET /politics — Every political entity (commune, country, federation, …) the player belongs to, with office. */
+meRoutes.get(
+  '/politics',
+  asyncHandler(async (req, res) => {
+    const memberships = await listPoliticalMemberships(requirePlayer(req).id);
+    res.json(
+      memberships.map((m) => ({ ...m.entity, joinedAt: m.member.joinedAt, office: m.office })),
     );
   }),
 );

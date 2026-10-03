@@ -36,6 +36,9 @@ export const SERVICE_ROLES = {
   walletDebit: 'economie:wallet:debit',
   corporationRead: 'economie:corporation:read',
   corporationManage: 'economie:corporation:manage',
+  politicsRead: 'economie:politics:read',
+  politicsManage: 'economie:politics:manage',
+  moneyIssue: 'economie:money:issue',
 } as const;
 
 /** Moderation roles, lowest to highest; each level implies the ones below. */

@@ -106,3 +106,29 @@ export const internalTradesQuery = tradesQuery.extend({
   holderType: z.enum(HOLDER_TYPES).optional(),
   holderId: uuidSchema.optional(),
 });
+
+/** Holder a game-server-driven action trades on behalf of (typically a player or an NPC). */
+const internalHolder = {
+  holderType: z.enum(HOLDER_TYPES),
+  holderId: uuidSchema,
+};
+
+/** Internal order body: the player body plus an explicit holder. */
+export const internalOrderBody = orderBody
+  .and(z.object(internalHolder))
+  .refine((v) => !(v.holderType === 'corporation' && !v.corporationId), {
+    message: 'corporationId is required when trading as a corporation',
+  });
+
+/** Internal demand body: the player body plus an explicit holder. */
+export const internalDemandBody = demandBody
+  .and(z.object(internalHolder))
+  .refine((v) => !(v.holderType === 'corporation' && !v.corporationId), {
+    message: 'corporationId is required when trading as a corporation',
+  });
+
+/** Internal fulfil/cancel body: explicit holder the action belongs to. */
+export const internalHolderBody = z.object({ ...internalHolder, corporationId });
+
+/** Internal fulfil body: explicit holder plus the agreed unit price. */
+export const internalFulfillBody = internalHolderBody.extend({ unitPrice: price });

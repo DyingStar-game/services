@@ -490,6 +490,45 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /api/internal/missions/{missionId}/assign:
+    post:
+      tags: [internal]
+      summary: Assign a mission to a holder (player or NPC)
+      description: Requires the `mission:write` service role.
+      parameters:
+        - $ref: '#/components/parameters/MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid, description: Assignee id (player id or NPC id) }
+                holderType: { $ref: '#/components/schemas/AssigneeHolderType' }
+      responses:
+        '201':
+          description: The assignment, mission and objectives
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assignment: { $ref: '#/components/schemas/Assignment' }
+                  mission: { $ref: '#/components/schemas/Mission' }
+                  objectives:
+                    type: array
+                    items: { $ref: '#/components/schemas/Objective' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Mission closed, full or already accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /api/internal/missions/{missionId}/complete:
     post:
       tags: [internal]
@@ -689,7 +728,7 @@ components:
       enum: [none, pending, held, refunded, claimed]
     IssuerType:
       type: string
-      enum: [system, corporation, city, player]
+      enum: [system, corporation, city, player, npc]
     ObjectiveType:
       type: string
       enum: [deliver_material, transport, visit, custom]
@@ -699,6 +738,11 @@ components:
     AssignmentStatus:
       type: string
       enum: [active, completed, abandoned, expired]
+    AssigneeHolderType:
+      type: string
+      enum: [player, npc]
+      default: player
+      description: Whether the assignee is a player or an NPC (drives reward routing)
 
     Reward:
       type: object
@@ -767,6 +811,7 @@ components:
         id: { type: string, format: uuid }
         missionId: { type: string, format: uuid }
         playerId: { type: string, format: uuid }
+        holderType: { $ref: '#/components/schemas/AssigneeHolderType' }
         status: { $ref: '#/components/schemas/AssignmentStatus' }
         acceptedAt: { type: string, format: date-time }
         completedAt: { type: string, format: date-time, nullable: true }

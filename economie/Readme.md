@@ -1,6 +1,6 @@
 # Service economie
 
-API économique de DyingStar : comptes joueurs et corporations, portefeuilles multi-devises, transactions et trésorerie de corporation (à terme : marché, conversion, régulation et analytique).
+API économique de DyingStar : comptes joueurs, corporations et entités politiques, portefeuilles multi-devises, transactions, trésoreries (corporation & politique), fiscalité « en dette » et création monétaire (à terme : marché, conversion, régulation et analytique).
 Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak validé via JWKS (`jose`). Structure et conventions calquées sur le service [`social`](../social/).
 
 ## Lancer en local
@@ -53,7 +53,7 @@ curl localhost:3000/api/internal/players/$ID/wallet -H "Authorization: Bearer $T
 | `SOCIAL_SERVICE_CLIENT_ID` / `SOCIAL_SERVICE_CLIENT_SECRET` | Compte de service Keycloak pour appeler social (`client_credentials`) |
 | `SOCIAL_INTERNAL_API_KEY` | Repli dev : clé partagée envoyée en `X-Internal-Key` si aucun secret n'est défini |
 
-Montants en **unités entières** (crédits). Une devise est une simple chaîne (`credits` = monnaie universelle) ; un porteur possède un compte par devise (`unique(holder_type, holder_id, currency)`).
+Montants en **unités entières** (crédits). Une devise est une simple chaîne (`credits` = monnaie universelle) ; un porteur possède un compte par devise (`unique(holder_type, holder_id, currency)`). Types de porteur : `player`, `npc`, `corporation`, `system` — les PNJ disposent donc de portefeuilles à parité avec les joueurs.
 
 ## Endpoints
 
@@ -89,7 +89,21 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | POST | `/api/corporations/:corporationId/payroll?currency=` | Verser les salaires à tous les membres éligibles (leader/trésorier, atomique) |
 | POST | `/api/corporations/:corporationId/members/:playerId/prime` `{amount, currency?, memo?}` | Verser une prime ponctuelle à un membre (leader/trésorier) |
 
-Rôles de trésorerie : `leader` > `treasurer` > `member`.
+Rôles de trésorerie : `leader` > `treasurer` > `member`. Un membre peut être un joueur ou un PNJ (`holderType`) ; les salaires et primes sont versés sur le portefeuille correspondant.
+
+### Politique — trésorerie, taxes & émission (`Authorization: Bearer`)
+Chaque entité politique (commune, agglomération, département, région, pays, fédération — possédée par le service [`social`](../social/Readme.md)) dispose d'une **trésorerie** (compte `political`). La fiscalité fonctionne **comme un loyer** : une **assiette** calcule et **inscrit une dette**, puis le **redevable** déclenche le paiement. La **création monétaire** est réservée aux pays/fédérations via le serveur de jeu.
+
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/me/taxes` | Mes dettes fiscales (joueur) |
+| POST | `/api/me/taxes/pay` `{currency?, entityId?}` | Régler mes dettes échues payables (partiel toléré) |
+| GET | `/api/corporations/:corporationId/taxes` | Dettes fiscales de la corporation (membre) |
+| POST | `/api/corporations/:corporationId/taxes/pay` `{currency?, entityId?}` | Régler les dettes de la corporation (trésorier+) |
+
+**Assiette** (`POST /api/internal/politics/:entityId/taxes/assess`) : taxe corporative = `corporateTaxBps` × solde de trésorerie des corporations **rattachées** (`politicalEntityId`) ; impôt citoyen = `incomeTaxBps` × revenus (`salary`, `prime`, `mission_reward`) reçus par les membres depuis la dernière assiette. Le paiement débite le portefeuille du redevable et crédite la trésorerie politique (`type: tax`). Solde insuffisant → les dettes payables sont réglées, les autres restent dues (`409 INSUFFICIENT_FUNDS` si aucune ne l'est).
+
+**Émission** (`POST /api/internal/politics/:entityId/mint`, rôle `economie:money:issue`) : crée de la monnaie et la crédite à la trésorerie de l'entité (`type: issuance`), sous réserve de `allowMinting` et du plafond `mintCeiling`. L'émission augmente la **masse monétaire** (`/api/admin/stats`).
 
 ### Admin — tableau de bord (`Authorization: Bearer <JWT>, rôle moderator+`)
 | Méthode | Route | Description |
@@ -105,15 +119,32 @@ Rôles de trésorerie : `leader` > `treasurer` > `member`.
 | GET | `/api/internal/players/:playerId/wallet/transactions?limit=` | `economie:wallet:read` | Historique du joueur |
 | POST | `/api/internal/players/:playerId/wallet/credit` `{amount, currency?, reference?, externalId?, type?}` | `economie:wallet:credit` | Créditer (prime de mission, salaire…) |
 | POST | `/api/internal/players/:playerId/wallet/debit` | `economie:wallet:debit` | Débiter (refusé si solde insuffisant) |
+| PUT | `/api/internal/npcs/:npcId/wallet` | `economie:wallet:ensure` | Créer le compte `credits` d'un PNJ (idempotent) |
+| GET | `/api/internal/npcs/:npcId/wallet` | `economie:wallet:read` | Comptes du PNJ |
+| GET | `/api/internal/npcs/:npcId/wallet/transactions?limit=` | `economie:wallet:read` | Historique du PNJ |
+| POST | `/api/internal/npcs/:npcId/wallet/credit` `{amount, currency?, reference?, externalId?, type?}` | `economie:wallet:credit` | Créditer un PNJ (salaire, prime, vente…) |
+| POST | `/api/internal/npcs/:npcId/wallet/debit` | `economie:wallet:debit` | Débiter un PNJ (refusé si solde insuffisant) |
 | PUT | `/api/internal/corporations/:corporationId/wallet` | `economie:wallet:ensure` | Créer le compte `credits` de la corporation |
 | GET | `/api/internal/corporations/:corporationId/wallet` | `economie:wallet:read` | Comptes de la trésorerie |
 | GET | `/api/internal/corporations/:corporationId/wallet/transactions?limit=` | `economie:wallet:read` | Journal de trésorerie |
 | POST | `/api/internal/corporations/:corporationId/wallet/credit` `/debit` | `economie:wallet:credit` / `:debit` | Mouvements de trésorerie |
-| PUT | `/api/internal/corporations/:corporationId/members/:playerId` `{role}` | `economie:corporation:manage` | Ajouter/mettre à jour un membre (leader/trésorier/member) |
+| PUT | `/api/internal/corporations/:corporationId/members/:playerId` `{role, holderType?}` | `economie:corporation:manage` | Ajouter/mettre à jour un membre (leader/trésorier/member ; `holderType` = `player`\|`npc`) |
 | DELETE | `/api/internal/corporations/:corporationId/members/:playerId` | `economie:corporation:manage` | Retirer un membre |
 | GET | `/api/internal/corporations/:corporationId/members` | `economie:corporation:read` | Membres de la trésorerie |
 | GET | `/api/internal/corporations/:corporationId/settings` | `economie:corporation:read` | Taxe interne et politique de dons |
 | PUT | `/api/internal/corporations/:corporationId/settings` `{taxRateBps?, allowDonations?}` | `economie:corporation:manage` | Régler la taxe interne / les dons |
+| PUT | `/api/internal/corporations/:corporationId/affiliation` `{politicalEntityId: uuid\|null}` | `economie:corporation:manage` | Définir le **siège fiscal** (entité politique) d'une corporation |
+| PUT/GET | `/api/internal/politics/:entityId/wallet` | `economie:wallet:ensure` / `economie:politics:read` | Créer / lire la trésorerie politique |
+| GET | `/api/internal/politics/:entityId/wallet/transactions?limit=` | `economie:politics:read` | Journal de la trésorerie politique |
+| POST | `/api/internal/politics/:entityId/wallet/credit` `/debit` | `economie:politics:manage` | Mouvements de trésorerie politique |
+| POST | `/api/internal/politics/:entityId/taxes/assess` `{currency?}` | `economie:politics:manage` | Calculer et inscrire les dettes fiscales |
+| GET | `/api/internal/politics/:entityId/settings` | `economie:politics:read` | Taux (`corporateTaxBps`, `incomeTaxBps`) et politique d'émission |
+| PUT | `/api/internal/politics/:entityId/settings` `{corporateTaxBps?, incomeTaxBps?, allowMinting?, mintCeiling?}` | `economie:politics:manage` | Régler les taux / l'émission |
+| PUT/DELETE | `/api/internal/politics/:entityId/members/:playerId` `{role, holderType?}` | `economie:politics:manage` | Miroir des membres (head/treasurer/member) |
+| GET | `/api/internal/politics/:entityId/members` | `economie:politics:read` | Membres de la trésorerie politique |
+| POST | `/api/internal/politics/:entityId/mint` `{amount, currency?, reason?}` | `economie:money:issue` | **Créer de la monnaie** (pays/fédération) et créditer la trésorerie |
+| GET | `/api/internal/npcs/:npcId/taxes` | `economie:politics:read` | Dettes fiscales du PNJ |
+| POST | `/api/internal/npcs/:npcId/taxes/pay` `{currency?, entityId?}` | `economie:politics:manage` | Régler les dettes fiscales du PNJ |
 
 **Auth de service** : le garde est monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`), donc toute route ajoutée ici reste protégée. Le token doit venir d'un des clients `INTERNAL_SERVICE_CLIENTS` (`azp`), viser `OIDC_SERVICE_AUDIENCE`, puis détenir le rôle de capacité de la route — sinon `403 SERVICE_FORBIDDEN`/`FORBIDDEN`. Un token joueur ne peut jamais avoir un `azp` de service (seul son `client_secret` permet de le frapper), c'est la garantie de non-contournement. Révocation : désactiver le client dans Keycloak (TTL de 300 s côté token). Un crédit/débit de service est tracé dans `transactions.caller` (client Keycloak appelant).
 
@@ -127,7 +158,7 @@ Rôles de trésorerie : `leader` > `treasurer` > `member`.
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (accounts, transactions, corporation_members, corporation_settings, salaires)
+  db/schema/        tables drizzle (accounts, transactions, corporation_*, political_*, salaires)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
@@ -142,6 +173,7 @@ Ce service est dédié à la partie économique du jeu ; les features ci-dessous
 
 ### Monnaie & Comptes
 - [x] Comptes joueurs et corporations distincts (un compte par devise)
+- [x] Comptes PNJ (`npc`) à parité avec les joueurs (portefeuilles, crédits/débits internes)
 - [x] Transferts directs entre joueurs avec taxe automatique
 - [x] Historique détaillé des transactions (ledger, taxe/frais, `externalId`)
 - [x] Coffre système encaissant les taxes automatiques
@@ -156,6 +188,14 @@ Ce service est dédié à la partie économique du jeu ; les features ci-dessous
 - [x] Primes ponctuelles versées par la trésorerie à un membre
 - [ ] Classement économique des corporations (richesse, stabilité, influence)
 - [ ] Système de sponsoring ou mécénat entre corporations
+
+### Trésorerie & Fiscalité politique
+- [x] Trésorerie politique (compte `political`) et miroir des membres (head/trésorier/membre)
+- [x] Configuration fiscale par entité (`corporateTaxBps`, `incomeTaxBps`) et siège fiscal des corporations
+- [x] Assiette manuelle « en dette » (taxe corporative sur la richesse, impôt sur les revenus)
+- [x] Paiement volontaire par le redevable (corporation, joueur, PNJ), partiel toléré
+- [x] Création monétaire (émission) réservée aux pays/fédérations (`allowMinting`, `mintCeiling`), tracée `issuance`
+- [ ] Relances/pénalités de retard, annulation de dette, taxe foncière sur les revenus, injection ciblée (stimulus)
 
 ### Régulation & Sécurité (à venir)
 - [ ] Détection de fraude / farming abusif

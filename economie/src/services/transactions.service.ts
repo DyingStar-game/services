@@ -14,7 +14,13 @@ import {
   type TransactionType,
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
-import { getCorporationAccounts, getPlayerAccounts, requireActiveAccount } from './accounts.service.js';
+import {
+  getCorporationAccounts,
+  getNpcAccounts,
+  getPlayerAccounts,
+  getPoliticalAccounts,
+  requireActiveAccount,
+} from './accounts.service.js';
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -331,8 +337,20 @@ export async function listPlayerTransactions(playerId: string, limit: number): P
   return listTransactionsFor(playerAccounts.map((a) => a.id), limit);
 }
 
+/** Ledger of all of an NPC's accounts (one per currency). */
+export async function listNpcTransactions(npcId: string, limit: number): Promise<Transaction[]> {
+  const npcAccounts = await getNpcAccounts(npcId);
+  return listTransactionsFor(npcAccounts.map((a) => a.id), limit);
+}
+
 /** Ledger of all of a corporation's accounts. */
 export async function listCorporationTransactions(corporationId: string, limit: number): Promise<Transaction[]> {
   const corporationAccounts = await getCorporationAccounts(corporationId);
   return listTransactionsFor(corporationAccounts.map((a) => a.id), limit);
+}
+
+/** Ledger of all of a political entity's accounts. */
+export async function listPoliticalTransactions(entityId: string, limit: number): Promise<Transaction[]> {
+  const politicalAccounts = await getPoliticalAccounts(entityId);
+  return listTransactionsFor(politicalAccounts.map((a) => a.id), limit);
 }

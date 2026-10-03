@@ -68,13 +68,18 @@ export interface PlayerMovement {
   externalId: string;
 }
 
+/** Holder kinds whose wallets Economy exposes on its internal API. */
+export type WalletHolderType = 'player' | 'npc' | 'corporation';
+
 /** Shared credit/debit call to the Economy internal API. */
-async function playerMovement(
+async function holderMovement(
   direction: 'credit' | 'debit',
-  playerId: string,
+  holderType: WalletHolderType,
+  holderId: string,
   opts: PlayerMovement,
 ): Promise<EconomyMovement | null> {
-  const res = await fetch(`${env.economy.apiUrl}/api/internal/players/${playerId}/wallet/${direction}`, {
+  const segment = holderType === 'player' ? 'players' : holderType === 'npc' ? 'npcs' : 'corporations';
+  const res = await fetch(`${env.economy.apiUrl}/api/internal/${segment}/${holderId}/wallet/${direction}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
     body: JSON.stringify({
@@ -107,13 +112,44 @@ async function playerMovement(
 }
 
 /**
+ * Credits a wallet through the Economy internal API.
+ * @param holderType - Player or NPC.
+ * @param holderId - Holder id.
+ * @param opts - Amount, currency, reference and idempotency key.
+ * @returns The Economy movement, or `null` when it was already recorded (idempotent replay).
+ */
+export function creditHolder(
+  holderType: WalletHolderType,
+  holderId: string,
+  opts: PlayerMovement,
+): Promise<EconomyMovement | null> {
+  return holderMovement('credit', holderType, holderId, opts);
+}
+
+/**
+ * Debits a wallet through the Economy internal API (mission escrow).
+ * @param holderType - Player or NPC.
+ * @param holderId - Holder id.
+ * @param opts - Amount, currency, reference and idempotency key.
+ * @returns The Economy movement, or `null` when already recorded.
+ * @throws 409 `INSUFFICIENT_FUNDS` when the holder cannot fund the escrow.
+ */
+export function debitHolder(
+  holderType: WalletHolderType,
+  holderId: string,
+  opts: PlayerMovement,
+): Promise<EconomyMovement | null> {
+  return holderMovement('debit', holderType, holderId, opts);
+}
+
+/**
  * Credits a player wallet through the Economy internal API.
  * @param playerId - Player id.
  * @param opts - Amount, currency, reference and idempotency key.
  * @returns The Economy movement, or `null` when it was already recorded (idempotent replay).
  */
 export function creditPlayer(playerId: string, opts: PlayerMovement): Promise<EconomyMovement | null> {
-  return playerMovement('credit', playerId, opts);
+  return holderMovement('credit', 'player', playerId, opts);
 }
 
 /**
@@ -124,5 +160,5 @@ export function creditPlayer(playerId: string, opts: PlayerMovement): Promise<Ec
  * @throws 409 `INSUFFICIENT_FUNDS` when the player cannot fund the escrow.
  */
 export function debitPlayer(playerId: string, opts: PlayerMovement): Promise<EconomyMovement | null> {
-  return playerMovement('debit', playerId, opts);
+  return holderMovement('debit', 'player', playerId, opts);
 }

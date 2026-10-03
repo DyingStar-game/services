@@ -1,16 +1,21 @@
 /**
- * Wallet accounts: a player or corporation (or the system tax vault) owns zero or more
- * accounts, one per currency. Balances are stored as integer minor units and never go
- * below zero (debt is handled later by economic reputation).
+ * Wallet accounts: a player, an NPC or a corporation (or the system tax vault) owns zero
+ * or more accounts, one per currency. Balances are stored as integer minor units and never
+ * go below zero (debt is handled later by economic reputation).
  *
- * `holderId` is an opaque UUID: the Keycloak subject for players, or the `corporationId`
- * of the Social service for corporations (economy has no local copy of those tables).
+ * `holderId` is an opaque UUID: the Keycloak subject for players, the server-assigned id of
+ * an NPC, or the `corporationId` of the Social service (economy has no local copy of those
+ * tables).
  */
 import { sql } from 'drizzle-orm';
 import { bigint, check, index, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 
-/** Account owners. `system` is reserved for the tax vault (see `ECONOMY_TAX_VAULT_UUID`). */
-export const ACCOUNT_HOLDER_TYPES = ['player', 'corporation', 'system'] as const;
+/**
+ * Account owners. `system` is reserved for the tax vault (see `ECONOMY_TAX_VAULT_UUID`);
+ * `political` is a political entity treasury (commune, country, federation, …) owned by the
+ * Social service, keyed on the opaque `entityId`.
+ */
+export const ACCOUNT_HOLDER_TYPES = ['player', 'npc', 'corporation', 'political', 'system'] as const;
 export type AccountHolderType = (typeof ACCOUNT_HOLDER_TYPES)[number];
 
 export const ACCOUNT_STATUSES = ['active', 'locked', 'frozen'] as const;

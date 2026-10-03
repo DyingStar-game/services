@@ -96,6 +96,15 @@ function toHolder(party: Party): Holder {
   return { holderType: party.holderType, holderId: party.holderId };
 }
 
+/** Holder types whose wallets Economy exposes for settlement (buyer/seller money moves). */
+const SETTLEABLE_HOLDER_TYPES = ['player', 'npc', 'corporation'] as const;
+type SettleableHolderType = (typeof SETTLEABLE_HOLDER_TYPES)[number];
+
+/** Whether a holder type can be settled through the Economy internal wallet API. */
+function isSettleableHolder(holderType: HolderType): holderType is SettleableHolderType {
+  return (SETTLEABLE_HOLDER_TYPES as readonly string[]).includes(holderType);
+}
+
 /** Resolves the expiration date from the configured default TTL. */
 function defaultExpiry(): Date | undefined {
   const hours = env.market.orderTtlHours;
@@ -172,11 +181,11 @@ export async function settleTrade(tradeId: string): Promise<MarketTrade> {
 
     if (!trade.moneyMoved) {
       if (!isEconomyConfigured()) throw new HttpError(503, 'ECONOMY_NOT_CONFIGURED', 'Economy is not configured');
-      if (trade.buyerType !== 'player' && trade.buyerType !== 'corporation') {
-        throw new HttpError(400, 'UNSUPPORTED_HOLDER', 'Buyer must be a player or a corporation');
+      if (!isSettleableHolder(trade.buyerType)) {
+        throw new HttpError(400, 'UNSUPPORTED_HOLDER', `Buyer holder type '${trade.buyerType}' cannot settle money`);
       }
-      if (trade.sellerType !== 'player' && trade.sellerType !== 'corporation') {
-        throw new HttpError(400, 'UNSUPPORTED_HOLDER', 'Seller must be a player or a corporation');
+      if (!isSettleableHolder(trade.sellerType)) {
+        throw new HttpError(400, 'UNSUPPORTED_HOLDER', `Seller holder type '${trade.sellerType}' cannot settle money`);
       }
       await debitHolder(trade.buyerType, trade.buyerId, {
         amount: trade.totalPrice,

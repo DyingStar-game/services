@@ -7,8 +7,10 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { ensurePlayerAccount, getPlayerAccounts } from '../services/accounts.service.js';
+import { getTaxDebts } from '../services/politics.service.js';
+import { payTaxDebts } from '../services/taxation.service.js';
 import { listPlayerTransactions } from '../services/transactions.service.js';
-import { limitQuery } from './schemas.js';
+import { limitQuery, payTaxesBody } from './schemas.js';
 
 /** Router for the current player's wallet. */
 export const meRoutes: IRouter = Router();
@@ -30,5 +32,24 @@ meRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     res.json(await listPlayerTransactions(player.id, Number(req.query.limit)));
+  }),
+);
+
+/** GET /taxes — My tax debts (due and settled), newest first. */
+meRoutes.get(
+  '/taxes',
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await getTaxDebts('player', player.id));
+  }),
+);
+
+/** POST /taxes/pay — Settle all my affordable due tax debts. */
+meRoutes.post(
+  '/taxes/pay',
+  validate(payTaxesBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await payTaxDebts('player', player.id, { currency: req.body.currency, entityId: req.body.entityId }));
   }),
 );

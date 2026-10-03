@@ -42,6 +42,8 @@ tags:
     description: Block list
   - name: corporations
     description: Corporation directory, pages, members, ranks and recruitment
+  - name: politics
+    description: Political entities (commune, agglomeration, department, region, country, federation), offices, members and hierarchy
   - name: reports
     description: Reporting players or corporations
   - name: admin
@@ -103,7 +105,7 @@ paths:
     get:
       tags: [me]
       operationId: getMe
-      summary: Own profile with presence and corporation
+      summary: Own profile with presence, corporations and political memberships
       description: The profile is created on first call from the token identity.
       responses:
         '200':
@@ -114,12 +116,16 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PlayerProfile'
                   - type: object
-                    required: [presence, corporations]
+                    required: [presence, corporations, politics]
                     properties:
                       presence: { $ref: '#/components/schemas/Presence' }
                       corporations:
                         type: array
                         items: { $ref: '#/components/schemas/CorporationRef' }
+                      politics:
+                        type: array
+                        description: Political entities the player belongs to (commune, country, federation, …)
+                        items: { $ref: '#/components/schemas/PoliticalEntityRef' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
     patch:
@@ -319,12 +325,15 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PlayerProfile'
                   - type: object
-                    required: [status, corporations]
+                    required: [status, corporations, politics]
                     properties:
                       status: { $ref: '#/components/schemas/PresenceStatus' }
                       corporations:
                         type: array
                         items: { $ref: '#/components/schemas/CorporationRef' }
+                      politics:
+                        type: array
+                        items: { $ref: '#/components/schemas/PoliticalEntityRef' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -697,6 +706,39 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/corporations/{corporationId}/politics:
+    put:
+      tags: [corporations]
+      operationId: setCorporationPoliticalEntity
+      summary: Attach to a political entity (fiscal home), or detach (manage_corporation)
+      description: >
+        Sets the corporation's political entity (its fiscal home) or clears it with
+        `politicalEntityId: null`. The entity must exist (`404` otherwise).
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [politicalEntityId]
+              properties:
+                politicalEntityId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/corporations/{corporationId}/transfer:
     post:
@@ -1684,6 +1726,678 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
+  # ── Politics ────────────────────────────────────────────────────────────────
+  /api/me/politics:
+    get:
+      tags: [me]
+      operationId: getMyPolitics
+      summary: Every political entity the player belongs to, with office
+      responses:
+        '200':
+          description: Memberships with office
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/PoliticalEntity'
+                    - type: object
+                      required: [joinedAt, office]
+                      properties:
+                        joinedAt: { type: string, format: date-time }
+                        office: { $ref: '#/components/schemas/PoliticalOffice' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/politics:
+    get:
+      tags: [politics]
+      operationId: listPoliticalEntities
+      summary: Political entity directory
+      parameters:
+        - $ref: '#/components/parameters/search'
+        - name: type
+          in: query
+          schema: { $ref: '#/components/schemas/PoliticalEntityType' }
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Entities with member counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalEntitySummary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [politics]
+      operationId: createPoliticalEntity
+      summary: Create a political entity
+      description: >
+        The caller becomes the head and holds the head office. Default offices are seeded
+        according to the level. A profile may belong to several political entities.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePoliticalEntity' }
+      responses:
+        '201':
+          description: Political entity created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [politics]
+      operationId: getPoliticalEntity
+      summary: Public political entity page
+      responses:
+        '200':
+          description: Entity with offices, members, parent and children
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntityPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [politics]
+      operationId: updatePoliticalEntity
+      summary: Edit a political entity
+      description: Requires the `manage_entity` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalEntityPatch' }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [politics]
+      operationId: disbandPoliticalEntity
+      summary: Disband a political entity (head only)
+      responses:
+        '204': { description: Entity disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/children:
+    get:
+      tags: [politics]
+      operationId: listPoliticalChildren
+      summary: Direct lower-level entities
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      responses:
+        '200':
+          description: Child summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalEntitySummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/parent:
+    put:
+      tags: [politics]
+      operationId: setPoliticalEntityParent
+      summary: Attach to a higher-level entity, or detach (manage_hierarchy)
+      description: >
+        The parent must be of a strictly higher level (a country may stay independent with
+        `parentId: null`). Refuses cycles (`409 POLITICAL_CYCLE`) and invalid levels
+        (`400 INVALID_PARENT_LEVEL`).
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parentId]
+              properties:
+                parentId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}/transfer:
+    post:
+      tags: [politics]
+      operationId: transferPoliticalHead
+      summary: Transfer the head office to another member (head only)
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/activity:
+    get:
+      tags: [politics]
+      operationId: listPoliticalActivity
+      summary: Internal journal (members only)
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Journal entries, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalActivityEntry' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/politics/{entityId}/members:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [politics]
+      operationId: listPoliticalMembers
+      summary: Members with office and presence
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalMember' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [politics]
+      operationId: appointPoliticalMember
+      summary: Appoint a member (manage_members)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalMemberBody' }
+      responses:
+        '201':
+          description: Membership created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+      - $ref: '#/components/parameters/playerId'
+    patch:
+      tags: [politics]
+      operationId: setPoliticalMemberOffice
+      summary: Change a member's office (manage_members)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalMemberOfficeBody' }
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [politics]
+      operationId: removePoliticalMember
+      summary: Leave (self) or remove a member (manage_members)
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/offices:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [politics]
+      operationId: listPoliticalOffices
+      summary: Offices, highest priority first
+      responses:
+        '200':
+          description: Offices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalOffice' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [politics]
+      operationId: createPoliticalOffice
+      summary: Create an office (manage_offices)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalOfficeInput' }
+      responses:
+        '201':
+          description: Office created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalOffice' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}/offices/{officeId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+      - $ref: '#/components/parameters/officeId'
+    patch:
+      tags: [politics]
+      operationId: updatePoliticalOffice
+      summary: Edit an office (manage_offices)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalOfficePatch' }
+      responses:
+        '200':
+          description: Updated office
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalOffice' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [politics]
+      operationId: deletePoliticalOffice
+      summary: Delete an office (manage_offices)
+      responses:
+        '204': { description: Office deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Internal: corporations & politics (game server) ─────────────────────────
+  /api/internal/corporations:
+    post:
+      tags: [internal]
+      operationId: internalCreateCorporation
+      summary: Create a corporation with an explicit CEO (player or NPC)
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InternalCreateCorporation' }
+      responses:
+        '201':
+          description: Corporation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/corporations/{corporationId}:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+    patch:
+      tags: [internal]
+      operationId: internalUpdateCorporation
+      summary: Edit a corporation, acting as its current CEO
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CorporationPatch' }
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [internal]
+      operationId: internalDisbandCorporation
+      summary: Disband a corporation, acting as its current CEO
+      security: [{ serviceAuth: [] }]
+      responses:
+        '204': { description: Corporation disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/corporations/{corporationId}/transfer:
+    post:
+      tags: [internal]
+      operationId: internalTransferCorporationCeo
+      summary: Transfer the CEO, acting as the current CEO
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/corporations/{corporationId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+      - $ref: '#/components/parameters/playerId'
+    patch:
+      tags: [internal]
+      operationId: internalSetCorporationMemberRank
+      summary: Assign a member's rank, acting as the current CEO
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rankId]
+              properties:
+                rankId: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationMember' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [internal]
+      operationId: internalRemoveCorporationMember
+      summary: Remove a member, acting as the current CEO
+      security: [{ serviceAuth: [] }]
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/corporations/{corporationId}/politics:
+    get:
+      tags: [internal]
+      operationId: internalGetCorporationPolitics
+      summary: Corporation's political (fiscal) attachment, for mirroring into economie
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: The corporation's fiscal home
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corporationId, politicalEntityId]
+                properties:
+                  corporationId: { type: string, format: uuid }
+                  politicalEntityId: { type: [string, 'null'], format: uuid }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/politics:
+    post:
+      tags: [internal]
+      operationId: internalCreatePoliticalEntity
+      summary: Create a political entity with an explicit head (player or NPC)
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InternalCreatePoliticalEntity' }
+      responses:
+        '201':
+          description: Political entity created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/politics/{entityId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    patch:
+      tags: [internal]
+      operationId: internalUpdatePoliticalEntity
+      summary: Edit a political entity, acting as its current head
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalEntityPatch' }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [internal]
+      operationId: internalDisbandPoliticalEntity
+      summary: Disband a political entity, acting as its current head
+      security: [{ serviceAuth: [] }]
+      responses:
+        '204': { description: Entity disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/politics/{entityId}/transfer:
+    post:
+      tags: [internal]
+      operationId: internalTransferPoliticalHead
+      summary: Transfer the head office, acting as the current head
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/players/{playerId}/politics:
+    parameters:
+      - $ref: '#/components/parameters/playerId'
+    put:
+      tags: [internal]
+      operationId: internalAddNpcToPolitics
+      summary: Add an NPC to a political entity
+      description: NPC-only. Uses `officeId` when given, otherwise the entity's default office.
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NpcPoliticalBody' }
+      responses:
+        '200':
+          description: Membership created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [internal]
+      operationId: internalRemoveNpcFromPolitics
+      summary: Remove an NPC from a political entity
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: entityId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: NPC removed }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerPolitics
+      summary: Political membership(s) and office of a profile
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: entityId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: A membership, `null`, or the list of memberships
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/PoliticalEntity'
+                      - type: object
+                        required: [office]
+                        properties:
+                          office: { $ref: '#/components/schemas/PoliticalOffice' }
+                  - type: 'null'
+                  - type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/PoliticalEntity'
+                        - type: object
+                          required: [office]
+                          properties:
+                            office: { $ref: '#/components/schemas/PoliticalOffice' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1717,6 +2431,16 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    politicalEntityId:
+      name: entityId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    officeId:
+      name: officeId
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
     requestId:
       name: id
       in: path
@@ -1970,7 +2694,7 @@ components:
 
     Corporation:
       type: object
-      required: [id, name, ticker, logoUrl, description, recruitment, parentId, ceoId, createdAt, updatedAt]
+      required: [id, name, ticker, logoUrl, description, recruitment, parentId, politicalEntityId, ceoId, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -1979,6 +2703,7 @@ components:
         description: { type: [string, 'null'] }
         recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode' }
         parentId: { type: [string, 'null'], format: uuid, description: "Holding company this corporation is a subsidiary of" }
+        politicalEntityId: { type: [string, 'null'], format: uuid, description: "Political entity (fiscal home) this corporation is attached to" }
         ceoId: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -2133,6 +2858,192 @@ components:
           examples: [corporation_created, member_joined, member_left, member_kicked, rank_changed, player_invited, ceo_transferred]
         details: { type: [object, 'null'], additionalProperties: true }
         createdAt: { type: string, format: date-time }
+
+    # ── Politics ──
+    PoliticalEntityType:
+      type: string
+      enum: [commune, agglomeration, department, region, country, federation]
+      description: '`commune` covers villages and towns; `federation` is the highest, optional level (a country may stay independent)'
+
+    PoliticalPermission:
+      type: string
+      enum: [manage_entity, manage_offices, manage_members, manage_hierarchy, manage_treasury, issue_currency]
+
+    PoliticalEntityRef:
+      type: object
+      required: [id, type, name]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/PoliticalEntityType' }
+        name: { type: string }
+
+    PoliticalEntity:
+      type: object
+      required: [id, type, name, description, bannerUrl, parentId, headId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/PoliticalEntityType' }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        bannerUrl: { type: [string, 'null'], format: uri }
+        parentId: { type: [string, 'null'], format: uuid, description: Higher-level entity, or null when independent }
+        headId: { type: [string, 'null'], format: uuid, description: Profile (player or NPC) holding the head office }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PoliticalEntitySummary:
+      allOf:
+        - $ref: '#/components/schemas/PoliticalEntity'
+        - type: object
+          required: [memberCount]
+          properties:
+            memberCount: { type: integer }
+
+    CreatePoliticalEntity:
+      type: object
+      required: [type, name]
+      properties:
+        type: { $ref: '#/components/schemas/PoliticalEntityType' }
+        name: { type: string, minLength: 3, maxLength: 64 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        bannerUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+
+    PoliticalEntityPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 3, maxLength: 64 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        bannerUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+
+    PoliticalEntityPage:
+      allOf:
+        - $ref: '#/components/schemas/PoliticalEntitySummary'
+        - type: object
+          required: [offices, members, parent, children]
+          properties:
+            offices:
+              type: array
+              items: { $ref: '#/components/schemas/PoliticalOffice' }
+            members:
+              type: array
+              items: { $ref: '#/components/schemas/PoliticalMember' }
+            parent:
+              oneOf:
+                - $ref: '#/components/schemas/PoliticalEntityRef'
+                - type: 'null'
+            children:
+              type: array
+              items: { $ref: '#/components/schemas/PoliticalEntitySummary' }
+
+    PoliticalOffice:
+      type: object
+      required: [id, entityId, name, priority, permissions, isHead, isDefault]
+      properties:
+        id: { type: integer }
+        entityId: { type: string, format: uuid }
+        name: { type: string }
+        priority: { type: integer, description: Higher wins; a member may only act on offices strictly below their own }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/PoliticalPermission' }
+        isHead: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
+        isDefault: { type: boolean, description: Office given to newly appointed members }
+
+    PoliticalOfficeInput:
+      type: object
+      required: [name, priority]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 48 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          default: []
+          items: { $ref: '#/components/schemas/PoliticalPermission' }
+        isDefault: { type: boolean }
+
+    PoliticalOfficePatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 48 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/PoliticalPermission' }
+        isDefault: { type: boolean }
+
+    PoliticalMemberBody:
+      type: object
+      required: [playerId]
+      properties:
+        playerId: { type: string, format: uuid }
+        officeId: { type: integer, minimum: 1 }
+
+    PoliticalMemberOfficeBody:
+      type: object
+      required: [officeId]
+      properties:
+        officeId: { type: integer, minimum: 1 }
+
+    NpcPoliticalBody:
+      type: object
+      required: [entityId]
+      properties:
+        entityId: { type: string, format: uuid }
+        officeId: { type: integer, minimum: 1 }
+
+    PoliticalMembership:
+      type: object
+      required: [entityId, playerId, officeId, joinedAt]
+      properties:
+        entityId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        officeId: { type: integer }
+        joinedAt: { type: string, format: date-time }
+
+    PoliticalMember:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [joinedAt, office, status, location]
+          properties:
+            joinedAt: { type: string, format: date-time }
+            office: { $ref: '#/components/schemas/PoliticalOffice' }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    PoliticalActivityEntry:
+      type: object
+      required: [id, entityId, actorId, type, details, createdAt]
+      properties:
+        id: { type: integer }
+        entityId: { type: string, format: uuid }
+        actorId: { type: [string, 'null'], format: uuid }
+        type:
+          type: string
+          examples: [entity_created, entity_updated, member_appointed, office_changed, parent_set, head_transferred]
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    InternalCreateCorporation:
+      allOf:
+        - $ref: '#/components/schemas/CreateCorporation'
+        - type: object
+          required: [ceoId]
+          properties:
+            ceoId: { type: string, format: uuid, description: Profile (player or NPC) to make CEO }
+
+    InternalCreatePoliticalEntity:
+      allOf:
+        - $ref: '#/components/schemas/CreatePoliticalEntity'
+        - type: object
+          required: [headId]
+          properties:
+            headId: { type: string, format: uuid, description: Profile (player or NPC) to make head }
 
     # ── Reputation & moderation ──
     ReputationEvent:

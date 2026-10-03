@@ -11,6 +11,7 @@ import { blocksRoutes } from './blocks.routes.js';
 import { corporationsRoutes } from './corporations.routes.js';
 import { friendsRoutes } from './friends.routes.js';
 import { meRoutes } from './me.routes.js';
+import { politicsRoutes } from './politics.routes.js';
 import { profilesRoutes } from './profiles.routes.js';
 import { publicRoutes } from './public.routes.js';
 import { reportsRoutes } from './reports.routes.js';
@@ -27,6 +28,7 @@ apiRouter.use('/profiles', playerAuth, enforceSanctions, profilesRoutes);
 apiRouter.use('/friends', playerAuth, enforceSanctions, friendsRoutes);
 apiRouter.use('/blocks', playerAuth, enforceSanctions, blocksRoutes);
 apiRouter.use('/corporations', playerAuth, enforceSanctions, corporationsRoutes);
+apiRouter.use('/politics', playerAuth, enforceSanctions, politicsRoutes);
 apiRouter.use('/reports', playerAuth, enforceSanctions, reportsRoutes);
 apiRouter.use('/admin', playerAuth, adminRoutes);
 

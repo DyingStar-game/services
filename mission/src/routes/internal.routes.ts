@@ -11,6 +11,7 @@ import { HttpError } from '../lib/httpError.js';
 import { requireService, requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
+  acceptMission,
   completeMission,
   getAssignment,
   listAssignmentsForPlayer,
@@ -28,6 +29,7 @@ import {
 import { settleMissionRewards } from '../services/rewards.service.js';
 import {
   createMissionBody,
+  internalAssignBody,
   internalCompleteBody,
   internalProgressBody,
   missionIdParams,
@@ -120,6 +122,18 @@ internalRoutes.post(
 );
 
 // ── Completion & rewards ─────────────────────────────────────────────────────
+
+/** POST /missions/:missionId/assign — Assign a mission to a holder (player or NPC). */
+internalRoutes.post(
+  '/missions/:missionId/assign',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(missionIdParams, 'params'),
+  validate(internalAssignBody),
+  asyncHandler(async (req, res) => {
+    const { playerId, holderType } = req.body;
+    res.status(201).json(await acceptMission(req.params.missionId, playerId, holderType));
+  }),
+);
 
 /** POST /missions/:missionId/complete — Complete a player's mission and settle its reward. */
 internalRoutes.post(

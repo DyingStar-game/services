@@ -17,12 +17,12 @@ export interface MoneySupplyBucket {
   accounts: number;
 }
 
-/** A holder ranking entry (player or corporation). */
+/** A holder ranking entry (player, NPC or corporation). */
 export interface RichestHolder {
   holderId: string;
   currency: string;
   balance: number;
-  /** Player pseudonym, resolved through Social for the admin dashboard (null when unknown). */
+  /** Pseudonym, resolved through Social for the admin dashboard (null when unknown). */
   displayName?: string | null;
 }
 
@@ -47,6 +47,7 @@ export interface EconomyStats {
   moneySupply: MoneySupplyBucket[];
   transactions: { total: TransactionTotals; period: TransactionTotals };
   richestPlayers: RichestHolder[];
+  richestNpcs: RichestHolder[];
   richestCorporations: RichestHolder[];
   series: DailySeriesPoint[];
 }
@@ -60,7 +61,8 @@ export interface EconomyStats {
 export async function getEconomyStats(days = 30, top = 10): Promise<EconomyStats> {
   const since = new Date(Date.now() - days * 86_400_000);
 
-  const [supplyRows, totalRows, periodRows, richestPlayers, richestCorporations, seriesRows] = await Promise.all([
+  const [supplyRows, totalRows, periodRows, richestPlayers, richestNpcs, richestCorporations, seriesRows] =
+    await Promise.all([
     db
       .select({
         currency: accounts.currency,
@@ -96,6 +98,12 @@ export async function getEconomyStats(days = 30, top = 10): Promise<EconomyStats
     db
       .select({ holderId: accounts.holderId, currency: accounts.currency, balance: accounts.balance })
       .from(accounts)
+      .where(and(eq(accounts.holderType, 'npc'), eq(accounts.status, 'active')))
+      .orderBy(desc(accounts.balance))
+      .limit(top),
+    db
+      .select({ holderId: accounts.holderId, currency: accounts.currency, balance: accounts.balance })
+      .from(accounts)
       .where(and(eq(accounts.holderType, 'corporation'), eq(accounts.status, 'active')))
       .orderBy(desc(accounts.balance))
       .limit(top),
@@ -126,6 +134,7 @@ export async function getEconomyStats(days = 30, top = 10): Promise<EconomyStats
     moneySupply: supplyRows.map((r) => ({ currency: r.currency, total: Number(r.total), accounts: Number(r.accounts) })),
     transactions: { total: toTotals(totalRows), period: toTotals(periodRows) },
     richestPlayers: richestPlayers.map((r) => ({ holderId: r.holderId, currency: r.currency, balance: Number(r.balance) })),
+    richestNpcs: richestNpcs.map((r) => ({ holderId: r.holderId, currency: r.currency, balance: Number(r.balance) })),
     richestCorporations: richestCorporations.map((r) => ({
       holderId: r.holderId,
       currency: r.currency,

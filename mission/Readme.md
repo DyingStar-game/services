@@ -64,7 +64,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 
 ## Fonctionnement
 
-**Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery`, `transport`, `generic`), un émetteur (`issuerType` : `system`, `corporation`, `city`, `player` + `issuerId`), une `visibility` (`public` | `corporation`), un statut (`available`, `active`, `completed`, `cancelled`, `expired`), une `reward` (`{ economic?: {currency, amount}, item?: {itemId, quantity, instanceId?} }`) et une liste d'**objectifs**.
+**Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery`, `transport`, `generic`), un émetteur (`issuerType` : `system`, `corporation`, `city`, `player`, `npc` + `issuerId`), une `visibility` (`public` | `corporation`), un statut (`available`, `active`, `completed`, `cancelled`, `expired`), une `reward` (`{ economic?: {currency, amount}, item?: {itemId, quantity, instanceId?} }`) et une liste d'**objectifs**.
 
 **Un objectif** est vérifiable : `type` (`deliver_material`, `transport`, `visit`, `custom`), `targetQuantity`, `currentProgress`, un `order` et des données libres (`locationFrom`, `locationTo`, `payload`). Pour une mission `scenario`, un objectif reste verrouillé (`409 OBJECTIVE_LOCKED`) tant que les objectifs d'ordre inférieur ne sont pas complétés.
 
@@ -72,7 +72,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 
 **Missions créées par les joueurs** (`POST /api/missions`) : n'importe quel joueur peut sponsoriser une mission à récompense **économique**, **séquestrée** depuis son portefeuille à la création (`economie:wallet:debit`, `externalId = mission-escrow:<missionId>`). Le séquestre est remboursé au créateur si la mission est annulée ou expire (`mission-refund:<missionId>`) et libéré aux participants à la complétion. Une mission peut être `public` ou réservée à une **corporation** (`visibility: corporation`, appartenance vérifiée auprès de social, `social:corporation:read`).
 
-**Récompense** : à la complétion, le service crédite chaque participant via l'API interne d'economie (`POST /api/internal/players/:id/wallet/credit`) avec `externalId = mission:<missionId>:<playerId>`, ce qui rend le paiement **idempotent** (jamais de double crédit). Les récompenses **item** sont octroyées via l'API interne d'inventory : une récompense **item séquestrée** (mission créée par un joueur) est **réservée** (`hold`) à la création depuis l'inventaire du créateur puis **consommée** au règlement ; sinon les biens sont **transférés** depuis le détenteur `system` (faucet du jeu). Le service ne crée jamais de propriété. Si un règlement échoue, les assignations restent `completed` et peuvent être rejouées via `POST /api/internal/missions/:missionId/settle`.
+**Récompense** : à la complétion, le service crédite chaque participant via l'API interne d'economie (portefeuille `player` ou `npc` selon l'assignation : `POST /api/internal/players/:id/wallet/credit` ou `/npcs/:id/wallet/credit`) avec `externalId = mission:<missionId>:<playerId>`, ce qui rend le paiement **idempotent** (jamais de double crédit). Les récompenses **item** sont octroyées via l'API interne d'inventory : une récompense **item séquestrée** (mission créée par un joueur) est **réservée** (`hold`) à la création depuis l'inventaire du créateur puis **consommée** au règlement ; sinon les biens sont **transférés** depuis le détenteur `system` (faucet du jeu). Le service ne crée jamais de propriété. Si un règlement échoue, les assignations restent `completed` et peuvent être rejouées via `POST /api/internal/missions/:missionId/settle`.
 
 ## Endpoints
 
@@ -106,6 +106,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | PATCH | `/api/internal/missions/:missionId` | `mission:write` | Modifier titre, description, récompense, capacité, expiration |
 | POST | `/api/internal/missions/:missionId/cancel` | `mission:write` | Annuler la mission, ses assignations actives et **rembourser le séquestre** |
 | POST | `/api/internal/missions/expire` | `mission:write` | Expirer les missions dépassées (job planifié) et rembourser leur séquestre |
+| POST | `/api/internal/missions/:missionId/assign` `{playerId, holderType?}` | `mission:write` | Assigner une mission à un détenteur (`player` par défaut, ou `npc`) |
 | POST | `/api/internal/missions/:missionId/objectives/:objectiveId/progress` `{playerId, quantity}` | `mission:progress` | Progression **vérifiée** côté serveur de jeu |
 | POST | `/api/internal/missions/:missionId/complete` `{playerId, force?, settle?}` | `mission:complete` | Compléter tous les participants (vérifie les objectifs ; `force` pour outrepasser) |
 | POST | `/api/internal/missions/:missionId/settle` `{playerId}` | `mission:complete` | Rejouer les parts de récompense non réglées (idempotent) |

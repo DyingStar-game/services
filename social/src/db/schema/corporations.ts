@@ -18,6 +18,7 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
+import { politicalEntities } from './politics.js';
 import { playerProfiles } from './profiles.js';
 
 export const CORPORATION_RECRUITMENT_MODES = ['open', 'apply', 'closed'] as const;
@@ -51,13 +52,20 @@ export const corporations = pgTable(
     parentId: uuid('parent_id').references((): AnyPgColumn => corporations.id, {
       onDelete: 'set null',
     }),
+    /** Political entity (commune, country, …) this corporation is fiscally attached to. */
+    politicalEntityId: uuid('political_entity_id').references(() => politicalEntities.id, {
+      onDelete: 'set null',
+    }),
     ceoId: uuid('ceo_id')
       .notNull()
       .references(() => playerProfiles.playerId),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('corporations_parent_idx').on(t.parentId)],
+  (t) => [
+    index('corporations_parent_idx').on(t.parentId),
+    index('corporations_political_entity_idx').on(t.politicalEntityId),
+  ],
 );
 
 export type Corporation = typeof corporations.$inferSelect;

@@ -9,6 +9,7 @@ import {
   missionAssignments,
   missionObjectives,
   missions,
+  type AssigneeHolderType,
   type AssignmentStatus,
   type Mission,
   type MissionAssignment,
@@ -108,6 +109,7 @@ export async function listPlayerMissions(
 export async function acceptMission(
   missionId: string,
   playerId: string,
+  holderType: AssigneeHolderType = 'player',
 ): Promise<{ assignment: MissionAssignment; mission: Mission; objectives: MissionObjective[] }> {
   const mission = await requireMission(missionId);
   requireOpenMission(mission);
@@ -146,7 +148,7 @@ export async function acceptMission(
     try {
       const [created] = await db
         .insert(missionAssignments)
-        .values({ missionId, playerId, rewardExternalId })
+        .values({ missionId, playerId, holderType, rewardExternalId })
         .returning();
       assignment = created;
     } catch (err) {

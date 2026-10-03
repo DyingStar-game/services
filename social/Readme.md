@@ -1,6 +1,6 @@
 # Service social
 
-API sociale de DyingStar : profils joueurs, amis, présence, et à terme corporations, réputation et modération.
+API sociale de DyingStar : profils joueurs, amis, présence, corporations, politique, réputation et modération.
 Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak validé via JWKS (`jose`).
 
 ## Lancer en local
@@ -93,6 +93,7 @@ Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur tout
 | DELETE | `/api/corporations/:corporationId` | Dissoudre (CEO) ; les filiales deviennent indépendantes |
 | GET | `/api/corporations/:corporationId/subsidiaries` | Filiales directes |
 | PUT | `/api/corporations/:corporationId/parent` `{parentId: uuid\|null}` | Rattacher à une maison mère ou détacher (`manage_corporation`, refus des cycles : `409 CORPORATION_CYCLE`) |
+| PUT | `/api/corporations/:corporationId/politics` `{politicalEntityId: uuid\|null}` | Rattacher la corporation à une entité politique (**siège fiscal**) ou détacher (`manage_corporation`) |
 | POST | `/api/corporations/:corporationId/transfer` `{playerId}` | Transférer le rôle de CEO (CEO) |
 | GET | `/api/corporations/:corporationId/activity?limit=` | Journal interne (membres) |
 | GET | `/api/corporations/:corporationId/members` | Membres avec grade et présence |
@@ -111,6 +112,35 @@ Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur tout
 Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade CEO (unique, indélébile) les a toutes. Grades créés par défaut : CEO (100), Director (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
 
 **Multi-appartenance & hiérarchie** : un joueur/PNJ peut être membre de plusieurs corporations (aucune contrainte d'unicité par joueur ; les doublons sont interdits par corporation). Une corporation peut être rattachée à une **maison mère** via `parentId` : la page publique expose `parent` (référence) et `subsidiaries` (filiales directes), `GET /api/corporations/:id/subsidiaries` liste les filiales et `PUT /api/corporations/:id/parent` rattache/détache (les cycles sont refusés). Dissoudre une maison mère laisse ses filiales indépendantes (`ON DELETE SET NULL`).
+
+### Politique (`Authorization: Bearer <JWT Keycloak>`)
+Catégorie sociale hiérarchique : **commune** (villages/villes, avec maire et conseil) → **agglomération** → **département** → **région** → **pays** → **fédération** (niveau le plus haut, optionnel — un pays peut rester indépendant). Une entité politique a des **offices** (maire, président, conseiller…), des **membres** (joueurs **et** PNJ) et un **office de tête**. Un profil (joueur ou PNJ) peut occuper n'importe quel office, y compris la tête.
+
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/politics?search=&type=&limit=` | Annuaire (nom, nombre de membres, filtre de niveau `type`) |
+| POST | `/api/politics` `{type, name, description?, bannerUrl?}` | Créer ; le créateur devient la tête (offices par défaut semés selon le niveau) |
+| GET | `/api/politics/:entityId` | Page publique : offices, membres + présence, entité parente et enfants |
+| PATCH | `/api/politics/:entityId` | `manage_entity` — nom, description, bannière |
+| DELETE | `/api/politics/:entityId` | Dissoudre (tête) ; les enfants deviennent indépendants |
+| GET | `/api/politics/:entityId/children` | Entités de niveau inférieur directement rattachées |
+| PUT | `/api/politics/:entityId/parent` `{parentId: uuid\|null}` | Rattacher à une entité de **niveau strictement supérieur** ou détacher (`manage_hierarchy`, refus des cycles `409 POLITICAL_CYCLE`, niveau invalide `400 INVALID_PARENT_LEVEL`) |
+| POST | `/api/politics/:entityId/transfer` `{playerId}` | Transférer la tête (tête) |
+| GET | `/api/politics/:entityId/activity?limit=` | Journal interne (membres) |
+| GET | `/api/politics/:entityId/members` | Membres avec office et présence |
+| POST | `/api/politics/:entityId/members` `{playerId, officeId?}` | Nommer un membre (`manage_members`) |
+| PATCH | `/api/politics/:entityId/members/:playerId` `{officeId}` | Changer d'office (`manage_members`, offices strictement inférieurs au sien) |
+| DELETE | `/api/politics/:entityId/members/:playerId` | Quitter (soi-même) ou révoquer (`manage_members`) |
+| GET | `/api/politics/:entityId/offices` | Offices (priorité décroissante) |
+| POST | `/api/politics/:entityId/offices` `{name, priority, permissions[], isDefault?}` | Créer un office (`manage_offices`) |
+| PATCH | `/api/politics/:entityId/offices/:officeId` | Modifier (`manage_offices` ; l'office de tête n'accepte qu'un renommage) |
+| DELETE | `/api/politics/:entityId/offices/:officeId` | Supprimer (membres déplacés vers l'office par défaut) |
+
+Permissions d'office : `manage_entity`, `manage_offices`, `manage_members`, `manage_hierarchy`, `manage_treasury` (dépenser/configurer la trésorerie), `issue_currency` (créer de la monnaie, pays/fédération). L'office de tête (unique, indélébile) les a toutes. Offices semés : `commune` → Maire (tête) / Deputy / Councilor / Citizen (défaut) ; niveaux intermédiaires → President (tête) / Vice President / Conseiller / Resident ; `country` → Head of State / Minister / Deputy / Citizen ; `federation` → President / Representative / Citizen.
+
+La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées par le service [`economie`](../economie/Readme.md) (l'entité politique y possède un compte `political`) : le serveur de jeu vérifie le niveau et l'office ici, puis appelle `economie`.
+
+`GET /api/me` (et `GET /api/me/politics`) expose les appartenances politiques du joueur ; `GET /api/profiles/:playerId` les expose aussi (`politics: [{ id, type, name }]`).
 
 ### Modération (`Authorization: Bearer` avec rôle Keycloak `moderator` < `admin` < `supervisor`)
 | Méthode | Route | Description |
@@ -143,11 +173,25 @@ Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `
 | GET | `/api/internal/players?search=&playerIds=&limit=` | `social:profile:read` | Résoudre des profils par pseudo (sous-chaîne) et/ou ids explicites — `{playerId, displayName, entityType}` (pour les services qui ne stockent que des UUID) |
 | PUT | `/api/internal/players/:playerId/corporation` `{corporationId, rankId?}` | `social:corporation:write` | Ajouter un **PNJ** à une corporation (grade par défaut si omis) |
 | DELETE | `/api/internal/players/:playerId/corporation?corporationId=` | `social:corporation:write` | Retirer un **PNJ** d'une corporation précise |
+| POST | `/api/internal/corporations` `{ceoId, name, ticker, description?, logoUrl?, recruitment?}` | `social:corporation:write` | Créer une corporation avec un CEO explicite (joueur ou **PNJ**) |
+| PATCH | `/api/internal/corporations/:corporationId` | `social:corporation:write` | Modifier (agit comme le CEO courant) |
+| DELETE | `/api/internal/corporations/:corporationId` | `social:corporation:write` | Dissoudre (agit comme le CEO courant) |
+| POST | `/api/internal/corporations/:corporationId/transfer` `{playerId}` | `social:corporation:write` | Transférer le CEO (agit comme le CEO courant) |
+| PATCH | `/api/internal/corporations/:corporationId/members/:playerId` `{rankId}` | `social:corporation:write` | Changer le grade d'un membre (agit comme le CEO) |
+| DELETE | `/api/internal/corporations/:corporationId/members/:playerId` | `social:corporation:write` | Retirer un membre (agit comme le CEO) |
+| GET | `/api/internal/corporations/:corporationId/politics` | `social:corporation:read` | Siège fiscal de la corporation (`politicalEntityId`) — pour le miroir vers economie |
+| POST | `/api/internal/politics` `{headId, type, name, description?, bannerUrl?}` | `social:politics:write` | Créer une entité politique avec un chef explicite (joueur ou **PNJ**) |
+| PATCH | `/api/internal/politics/:entityId` | `social:politics:write` | Modifier (agit comme le chef courant) |
+| DELETE | `/api/internal/politics/:entityId` | `social:politics:write` | Dissoudre (agit comme le chef courant) |
+| POST | `/api/internal/politics/:entityId/transfer` `{playerId}` | `social:politics:write` | Transférer la tête (agit comme le chef courant) |
+| PUT | `/api/internal/players/:playerId/politics` `{entityId, officeId?}` | `social:politics:write` | Ajouter un **PNJ** à une entité politique (office par défaut si omis) |
+| DELETE | `/api/internal/players/:playerId/politics?entityId=` | `social:politics:write` | Retirer un **PNJ** d'une entité politique |
+| GET | `/api/internal/players/:playerId/politics?entityId=` | `social:politics:read` | Avec `entityId` : cette adhésion ou `null` ; sans : la liste des adhésions politiques |
 | POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | `social:reputation:write` | Enregistrer une rencontre (alimente les suggestions) |
 
 **Auth de service** : garde monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`) ; `azp` ∈ `INTERNAL_SERVICE_CLIENTS`, `aud` = `social-api`, puis rôle de capacité sinon `403 SERVICE_FORBIDDEN`/`FORBIDDEN`. Un token joueur ne peut pas porter un `azp` de service : c'est la garantie de non-contournement.
 
-Les **PNJ** sont des profils `entityType: "npc"` (id UUID attribué par le serveur de jeu) : visibles dans la recherche (`?entityType=npc`), amiables et présents dans les corporations comme membres avec un grade, mais **exclus** de la réputation, des sanctions et des signalements (réponse `400 NPC_NOT_APPLICABLE`). Un PNJ ne peut jamais être le CEO d'une corporation.
+Les **PNJ** sont des profils `entityType: "npc"` (id UUID attribué par le serveur de jeu) : visibles dans la recherche (`?entityType=npc`), amiables, présents dans les corporations comme membres avec un grade, et **exclus** de la réputation, des sanctions et des signalements (réponse `400 NPC_NOT_APPLICABLE`). Un PNJ **peut** être le CEO d'une corporation (via l'API interne) : le jeu peut ainsi créer des corporations entièrement PNJ.
 
 ## Structure
 
@@ -155,7 +199,7 @@ Les **PNJ** sont des profils `entityType: "npc"` (id UUID attribué par le serve
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, moderation)
+  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, politics, moderation)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT joueur / service-account + rôles de capacité), sanctions, validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
@@ -192,8 +236,21 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [x] Hiérarchie maison mère / filiales (`parentId`, rattachement, anti-cycle)
 - [ ] Relations diplomatiques (alliances, trêves, guerres)
 - [x] Journal d'activité interne (actions, promotions, missions)
+- [x] Têtes PNJ et corporations entièrement PNJ (CEO PNJ via l'API interne)
 - [ ] Système de territoires (stations, flottes, zones contrôlées)
 - [ ] Classements et influence inter-corporations
+
+### Politique
+- [x] Entités politiques hiérarchiques : commune (village/ville) → agglomération → département → région → pays → fédération (optionnelle)
+- [x] Offices (maire, président, conseiller…), permissions et office de tête
+- [x] Membres joueurs **et** PNJ, nomination par la tête, API interne pour les PNJ
+- [x] Hiérarchie parent/enfants avec contrôle de niveau et anti-cycle
+- [x] Appartenances politiques exposées sur le profil (`/api/me`, `/api/profiles/:id`)
+- [x] Siège fiscal des corporations (`politicalEntityId`) et permissions `manage_treasury` / `issue_currency`
+- [ ] Trésorerie, taxes et émission monétaire (implémentées dans le service [`economie`](../economie/Readme.md))
+- [ ] Élections (candidatures et vote des membres) pour choisir la tête et les offices
+- [ ] Adhésion ouverte (open/apply/closed) et candidatures si ouverture aux joueurs
+- [ ] Relations entre entités (alliances, traités, guerres)
 
 ### Réputation joueur & Modération
 - [x] Système de réputation global pour chaque joueur

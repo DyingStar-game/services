@@ -11,12 +11,18 @@ import {
   corporationSettings,
   transactions,
   type CorporationMember,
+  type CorporationMemberHolderType,
   type CorporationRole,
   type CorporationSettings,
   type Transaction,
 } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
-import { ensureCorporationAccount, ensurePlayerAccount, getCorporationAccounts } from './accounts.service.js';
+import {
+  ensureAccount,
+  ensureCorporationAccount,
+  ensurePlayerAccount,
+  getCorporationAccounts,
+} from './accounts.service.js';
 import { transfer, type MovementResult } from './transactions.service.js';
 
 const ROLE_RANK: Record<CorporationRole, number> = { member: 1, treasurer: 2, leader: 3 };
@@ -86,21 +92,23 @@ export async function requireCorporationRole(
 /**
  * Sets (add or update) a member with a role.
  * @param corporationId - Corporation id.
- * @param playerId - Player id.
+ * @param playerId - Player or NPC id.
  * @param role - Role to grant.
+ * @param holderType - Whether the member is a player or an NPC (defaults to player).
  * @returns The membership.
  */
 export async function setCorporationMember(
   corporationId: string,
   playerId: string,
   role: CorporationRole,
+  holderType: CorporationMemberHolderType = 'player',
 ): Promise<CorporationMember> {
   const [row] = await db
     .insert(corporationMembers)
-    .values({ corporationId, playerId, role })
+    .values({ corporationId, playerId, role, holderType })
     .onConflictDoUpdate({
       target: [corporationMembers.corporationId, corporationMembers.playerId],
-      set: { role },
+      set: { role, holderType },
     })
     .returning();
   return row;
@@ -160,7 +168,7 @@ export async function getCorporationSettings(corporationId: string): Promise<Cor
  */
 export async function updateCorporationSettings(
   corporationId: string,
-  patch: { taxRateBps?: number; allowDonations?: boolean },
+  patch: { taxRateBps?: number; allowDonations?: boolean; politicalEntityId?: string | null },
 ): Promise<CorporationSettings> {
   const [updated] = await db
     .update(corporationSettings)

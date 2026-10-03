@@ -8,6 +8,8 @@ import {
   CORPORATION_RECRUITMENT_MODES,
   ENTITY_TYPES,
   ESCALATION_LEVELS,
+  POLITICAL_ENTITY_TYPES,
+  POLITICAL_PERMISSIONS,
   PRESENCE_STATUSES,
   REPORT_REASONS,
   REPORT_STATUSES,
@@ -129,6 +131,8 @@ export const corporationQueryOptional = z.object({ corporationId: uuidSchema.opt
 export const corporationIdParams = z.object({ corporationId: uuidSchema });
 /** Attach to a holding company (`parentId`), or detach with `null`. */
 export const corporationParentBody = z.object({ parentId: uuidSchema.nullable() });
+/** Attach the corporation to a political entity (fiscal home), or detach with `null`. */
+export const corporationPoliticalBody = z.object({ politicalEntityId: uuidSchema.nullable() });
 export const corporationMemberParams = corporationIdParams.extend({ playerId: uuidSchema });
 export const corporationRankParams = corporationIdParams.extend({ rankId: z.coerce.number().int().positive() });
 export const corporationRequestParams = corporationIdParams.extend({ id: z.coerce.number().int().positive() });
@@ -180,6 +184,82 @@ export const rankPatchBody = z
 export const memberRankBody = z.object({ rankId: z.number().int().positive() });
 
 export const joinCorporationBody = z.object({ message: z.string().trim().max(500).optional() });
+
+/** Internal: create a corporation with an explicit CEO (player or NPC). */
+export const internalCreateCorporationBody = z.object({
+  ceoId: uuidSchema,
+  name: corporationName,
+  ticker: corporationTicker,
+  description: nullableText(2000),
+  logoUrl: z.string().trim().url().max(512).nullable().optional(),
+  recruitment: z.enum(CORPORATION_RECRUITMENT_MODES).optional(),
+});
+
+// ── Politics ────────────────────────────────────────────────────────────────
+
+export const politicalEntityIdParams = z.object({ entityId: uuidSchema });
+export const politicalEntityMemberParams = politicalEntityIdParams.extend({ playerId: uuidSchema });
+export const politicalOfficeParams = politicalEntityIdParams.extend({ officeId: z.coerce.number().int().positive() });
+
+/** Political directory listing: name substring and optional level filter. */
+export const politicsListQuery = searchQuery.extend({
+  type: z.enum(POLITICAL_ENTITY_TYPES).optional(),
+});
+
+const politicalName = z.string().trim().min(3).max(64);
+
+export const createPoliticalEntityBody = z.object({
+  type: z.enum(POLITICAL_ENTITY_TYPES),
+  name: politicalName,
+  description: nullableText(2000),
+  bannerUrl: z.string().trim().url().max(512).nullable().optional(),
+});
+
+export const politicalEntityPatchBody = z
+  .object({
+    name: politicalName.optional(),
+    description: nullableText(2000),
+    bannerUrl: z.string().trim().url().max(512).nullable().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
+/** Attach to a higher-level entity (`parentId`), or detach with `null`. */
+export const politicalParentBody = z.object({ parentId: uuidSchema.nullable() });
+
+export const politicalMemberBody = z.object({
+  playerId: uuidSchema,
+  officeId: z.number().int().positive().optional(),
+});
+
+export const politicalMemberOfficeBody = z.object({ officeId: z.number().int().positive() });
+
+export const politicalOfficeBody = z.object({
+  name: z.string().trim().min(1).max(48),
+  priority: z.number().int().min(0).max(99),
+  permissions: z.array(z.enum(POLITICAL_PERMISSIONS)).default([]),
+  isDefault: z.boolean().optional(),
+});
+
+// Not `politicalOfficeBody.partial()`: the `permissions` default would turn every patch into a permissions change.
+export const politicalOfficePatchBody = z
+  .object({
+    name: z.string().trim().min(1).max(48).optional(),
+    priority: z.number().int().min(0).max(99).optional(),
+    permissions: z.array(z.enum(POLITICAL_PERMISSIONS)).optional(),
+    isDefault: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
+/** Internal: create a political entity with an explicit head (player or NPC). */
+export const internalCreatePoliticalEntityBody = createPoliticalEntityBody.extend({ headId: uuidSchema });
+
+export const npcPoliticalBody = z.object({
+  entityId: uuidSchema,
+  officeId: z.number().int().positive().optional(),
+});
+
+export const politicalQueryRequired = z.object({ entityId: uuidSchema });
+export const politicalQueryOptional = z.object({ entityId: uuidSchema.optional() });
 
 // ── Reputation & moderation ─────────────────────────────────────────────────
 

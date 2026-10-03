@@ -60,9 +60,19 @@ export function getPlayerAccounts(playerId: string): Promise<Account[]> {
   return getAccounts('player', playerId);
 }
 
+/** All wallet accounts of an NPC, one per currency. */
+export function getNpcAccounts(npcId: string): Promise<Account[]> {
+  return getAccounts('npc', npcId);
+}
+
 /** All wallet accounts of a corporation, one per currency. */
 export function getCorporationAccounts(corporationId: string): Promise<Account[]> {
   return getAccounts('corporation', corporationId);
+}
+
+/** All treasury accounts of a political entity, one per currency. */
+export function getPoliticalAccounts(entityId: string): Promise<Account[]> {
+  return getAccounts('political', entityId);
 }
 
 /**
@@ -117,9 +127,19 @@ export function ensurePlayerAccount(playerId: string, currency = 'credits'): Pro
   return ensureAccount('player', playerId, currency);
 }
 
+/** Returns the NPC's account for a currency, creating it if needed. */
+export function ensureNpcAccount(npcId: string, currency = 'credits'): Promise<Account> {
+  return ensureAccount('npc', npcId, currency);
+}
+
 /** Returns the corporation's account for a currency, creating it if needed. */
 export function ensureCorporationAccount(corporationId: string, currency = 'credits'): Promise<Account> {
   return ensureAccount('corporation', corporationId, currency);
+}
+
+/** Returns the political entity's treasury account for a currency, creating it if needed. */
+export function ensurePoliticalAccount(entityId: string, currency = 'credits'): Promise<Account> {
+  return ensureAccount('political', entityId, currency);
 }
 
 /**

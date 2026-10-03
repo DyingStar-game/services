@@ -19,7 +19,7 @@ import {
   type MissionAssignment,
 } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
-import { creditPlayer } from './economy.client.js';
+import { creditHolder } from './economy.client.js';
 import {
   consumeHold,
   isInventoryConfigured,
@@ -109,7 +109,7 @@ async function grantItemReward(mission: Mission, assignment: MissionAssignment):
   }
 
   const quantity = assignment.rewardItemQuantity ?? item.quantity;
-  const assignee = { holderType: 'player' as const, holderId: assignment.playerId };
+  const assignee = { holderType: assignment.holderType, holderId: assignment.playerId };
 
   if (mission.escrowItemStatus === 'held' && mission.escrowItemHoldId) {
     await consumeHold(mission.escrowItemHoldId, assignee);
@@ -164,7 +164,7 @@ export async function settleAssignment(
       return { settled: false, skipped: true, reason: 'auto_settle_disabled', assignment: current };
     }
     try {
-      const movement = await creditPlayer(current.playerId, {
+      const movement = await creditHolder(current.holderType, current.playerId, {
         amount,
         currency: economic!.currency,
         reference: `mission:${mission.id}`,

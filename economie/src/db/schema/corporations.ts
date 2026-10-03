@@ -9,12 +9,21 @@ import { boolean, index, integer, pgTable, primaryKey, text, timestamp, uuid } f
 export const CORPORATION_ROLES = ['leader', 'treasurer', 'member'] as const;
 export type CorporationRole = (typeof CORPORATION_ROLES)[number];
 
+/** Kinds of treasury member (players and NPCs have wallets). */
+export const CORPORATION_MEMBER_HOLDER_TYPES = ['player', 'npc'] as const;
+export type CorporationMemberHolderType = (typeof CORPORATION_MEMBER_HOLDER_TYPES)[number];
+
 export const corporationMembers = pgTable(
   'corporation_members',
   {
     corporationId: uuid('corporation_id').notNull(),
-    /** Player id (Keycloak subject) — opaque here, owned by the Social service. */
+    /** Player or NPC id — opaque here, owned by the Social service. */
     playerId: uuid('player_id').notNull(),
+    /** Whether the member is a player or an NPC (drives which wallet is paid). */
+    holderType: text('holder_type')
+      .$type<CorporationMemberHolderType>()
+      .notNull()
+      .default('player'),
     role: text('role').$type<CorporationRole>().notNull().default('member'),
     joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -33,6 +42,8 @@ export const corporationSettings = pgTable('corporation_settings', {
   /** Internal tax on member donations, in basis points (0-10000). */
   taxRateBps: integer('tax_rate_bps').notNull().default(0),
   allowDonations: boolean('allow_donations').notNull().default(true),
+  /** Political entity (Social) this corporation is fiscally attached to; null = none. */
+  politicalEntityId: uuid('political_entity_id'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

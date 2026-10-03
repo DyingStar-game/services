@@ -15,6 +15,8 @@ import {
   requireCorporationMember,
   requireCorporationRole,
 } from '../services/corporations.service.js';
+import { getTaxDebts } from '../services/politics.service.js';
+import { payTaxDebts } from '../services/taxation.service.js';
 import { listCorporationTransactions } from '../services/transactions.service.js';
 import {
   getSalaries,
@@ -31,6 +33,7 @@ import {
   donationBody,
   limitQuery,
   memberSalaryBody,
+  payTaxesBody,
   primeBody,
   reportQuery,
   roleSalaryBody,
@@ -89,6 +92,31 @@ corporationsRoutes.get(
     const from = req.query.from ? new Date(req.query.from as string) : undefined;
     const to = req.query.to ? new Date(req.query.to as string) : undefined;
     res.json(await getCorporationReport(corporationId, from, to));
+  }),
+);
+
+/** GET /:corporationId/taxes — Tax debts of the corporation (member only). */
+corporationsRoutes.get(
+  '/:corporationId/taxes',
+  validate(corporationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId } = req.params;
+    await requireCorporationMember(corporationId, player.id);
+    res.json(await getTaxDebts('corporation', corporationId));
+  }),
+);
+
+/** POST /:corporationId/taxes/pay — Settle the corporation's affordable due taxes (treasurer+). */
+corporationsRoutes.post(
+  '/:corporationId/taxes/pay',
+  validate(corporationIdParams, 'params'),
+  validate(payTaxesBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId } = req.params;
+    await requireCorporationRole(corporationId, player.id, 'treasurer');
+    res.json(await payTaxDebts('corporation', corporationId, { currency: req.body.currency, entityId: req.body.entityId }));
   }),
 );
 

@@ -4,6 +4,7 @@
 import { z } from 'zod';
 
 import {
+  ASSIGNEE_HOLDER_TYPES,
   ASSIGNMENT_STATUSES,
   MISSION_CATEGORIES,
   MISSION_ISSUER_TYPES,
@@ -155,6 +156,12 @@ export const internalCompleteBody = z.object({
 });
 
 export const settleBody = z.object({ playerId: uuidSchema });
+
+/** Assign a mission to a holder (player or NPC) on the game server's behalf. */
+export const internalAssignBody = z.object({
+  playerId: uuidSchema,
+  holderType: z.enum(ASSIGNEE_HOLDER_TYPES).default('player'),
+});
 
 export type CreateMissionBody = z.infer<typeof createMissionBody>;
 export type UpdateMissionBody = z.infer<typeof updateMissionBody>;

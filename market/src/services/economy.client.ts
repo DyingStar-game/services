@@ -65,17 +65,21 @@ export interface PlayerMovement {
   externalId: string;
 }
 
+/** Holder kinds whose wallets the economy service exposes on its internal API. */
+export type SettleableHolderType = 'player' | 'npc' | 'corporation';
+
 /** Shared credit/debit call to the Economy internal API (returns null on idempotent replay). */
-async function playerMovement(
+async function holderMovement(
   direction: 'credit' | 'debit',
-  holderType: 'player' | 'corporation',
+  holderType: SettleableHolderType,
   holderId: string,
   opts: PlayerMovement,
 ): Promise<unknown | null> {
   if (!env.economy.apiUrl) {
     throw new HttpError(503, 'ECONOMY_NOT_CONFIGURED', 'ECONOMY_API_URL is not configured');
   }
-  const base = holderType === 'player' ? `/api/internal/players/${holderId}` : `/api/internal/corporations/${holderId}`;
+  const segment = holderType === 'player' ? 'players' : holderType === 'npc' ? 'npcs' : 'corporations';
+  const base = `/api/internal/${segment}/${holderId}`;
   const res = await fetch(`${env.economy.apiUrl}${base}/wallet/${direction}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
@@ -106,18 +110,18 @@ async function playerMovement(
 
 /** Debits a holder's wallet (buyer pays for a trade). */
 export function debitHolder(
-  holderType: 'player' | 'corporation',
+  holderType: SettleableHolderType,
   holderId: string,
   opts: PlayerMovement,
 ): Promise<unknown | null> {
-  return playerMovement('debit', holderType, holderId, opts);
+  return holderMovement('debit', holderType, holderId, opts);
 }
 
 /** Credits a holder's wallet (seller gets paid for a trade). */
 export function creditHolder(
-  holderType: 'player' | 'corporation',
+  holderType: SettleableHolderType,
   holderId: string,
   opts: PlayerMovement,
 ): Promise<unknown | null> {
-  return playerMovement('credit', holderType, holderId, opts);
+  return holderMovement('credit', holderType, holderId, opts);
 }

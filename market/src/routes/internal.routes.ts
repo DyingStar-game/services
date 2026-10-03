@@ -9,19 +9,54 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listCatalog, setCatalogEnabled, upsertCatalogEntry } from '../services/catalog.service.js';
-import { listDemands, listOrders, listTrades, requireTrade, settleTrade } from '../services/market.service.js';
+import {
+  cancelDemand,
+  cancelOrder,
+  createDemand,
+  fulfillDemand,
+  listDemands,
+  listOrders,
+  listTrades,
+  placeOrder,
+  requireTrade,
+  settleTrade,
+  type Party,
+} from '../services/market.service.js';
 import {
   catalogBody,
   catalogEnabledBody,
   goodTypeParams,
+  internalDemandBody,
   internalDemandsQuery,
+  internalFulfillBody,
+  internalHolderBody,
+  internalOrderBody,
   internalOrdersQuery,
   internalTradesQuery,
+  orderIdParams,
   tradeIdParams,
 } from './schemas.js';
 
 /** Router for game-server driven updates. */
 export const internalRoutes: IRouter = Router();
+
+/**
+ * Resolves the trading party from an explicit holder (game server acting for a player,
+ * an NPC or a corporation). Corporation membership is authoritative in Social when an
+ * `actor` player is supplied.
+ */
+function internalParty(input: {
+  holderType: 'player' | 'npc' | 'corporation' | 'system';
+  holderId: string;
+  actor?: string;
+}): Party {
+  return {
+    holderType: input.holderType,
+    holderId: input.holderId,
+    isCorporation: input.holderType === 'corporation',
+    actorId: input.actor ?? input.holderId,
+  };
+}
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
 
@@ -125,6 +160,68 @@ internalRoutes.get(
         limit: Number(q.limit),
       }),
     );
+  }),
+);
+
+// ── Game-server driven trading (players / NPCs / corporations) ────────────────
+
+/** POST /orders — Place an order on behalf of an explicit holder (immediate matching). */
+internalRoutes.post(
+  '/orders',
+  requireServiceRole(SERVICE_ROLES.manage),
+  validate(internalOrderBody),
+  asyncHandler(async (req, res) => {
+    const body = req.body as { holderType: Party['holderType']; holderId: string; corporationId?: string };
+    const party = internalParty(body);
+    const input = req.body as Omit<Parameters<typeof placeOrder>[1], 'actor'>;
+    res.status(201).json(await placeOrder(party, { ...input, actor: req.service?.clientId ?? party.actorId }));
+  }),
+);
+
+/** POST /orders/:id/cancel — Cancel an order owned by the given holder. */
+internalRoutes.post(
+  '/orders/:id/cancel',
+  requireServiceRole(SERVICE_ROLES.manage),
+  validate(orderIdParams, 'params'),
+  validate(internalHolderBody),
+  asyncHandler(async (req, res) => {
+    res.json(await cancelOrder(req.params.id, internalParty(req.body)));
+  }),
+);
+
+/** POST /demands — Create a demand/contract on behalf of an explicit holder. */
+internalRoutes.post(
+  '/demands',
+  requireServiceRole(SERVICE_ROLES.manage),
+  validate(internalDemandBody),
+  asyncHandler(async (req, res) => {
+    const body = req.body as { holderType: Party['holderType']; holderId: string; corporationId?: string };
+    const party = internalParty(body);
+    const input = req.body as Omit<Parameters<typeof createDemand>[1], 'actor'>;
+    res.status(201).json(await createDemand(party, { ...input, actor: req.service?.clientId ?? party.actorId }));
+  }),
+);
+
+/** POST /demands/:id/fulfill — Fulfil a demand as the given holder (settles the trade). */
+internalRoutes.post(
+  '/demands/:id/fulfill',
+  requireServiceRole(SERVICE_ROLES.manage),
+  validate(orderIdParams, 'params'),
+  validate(internalFulfillBody),
+  asyncHandler(async (req, res) => {
+    const body = req.body as { unitPrice: number };
+    res.status(201).json(await fulfillDemand(req.params.id, internalParty(req.body), body.unitPrice));
+  }),
+);
+
+/** POST /demands/:id/cancel — Cancel a demand owned by the given holder. */
+internalRoutes.post(
+  '/demands/:id/cancel',
+  requireServiceRole(SERVICE_ROLES.manage),
+  validate(orderIdParams, 'params'),
+  validate(internalHolderBody),
+  asyncHandler(async (req, res) => {
+    res.json(await cancelDemand(req.params.id, internalParty(req.body)));
   }),
 );
 

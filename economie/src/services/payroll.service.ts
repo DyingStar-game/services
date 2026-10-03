@@ -15,19 +15,22 @@ import {
   corporationMembers,
   corporationSalaryRoles,
   transactions,
+  type CorporationMemberHolderType,
   type CorporationMemberSalary,
   type CorporationRole,
   type CorporationSalaryRole,
   type TransactionType,
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
-import { ensureCorporationAccount, ensurePlayerAccount, requireActiveAccount } from './accounts.service.js';
+import { ensureAccount, ensureCorporationAccount, requireActiveAccount } from './accounts.service.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** Effective salary of one member, after resolving the per-member override. */
 export interface EffectiveSalary {
   playerId: string;
+  /** Whether the recipient is a player or an NPC (drives which wallet is paid). */
+  holderType: CorporationMemberHolderType;
   role: CorporationRole;
   currency: string;
   amount: number;
@@ -163,7 +166,14 @@ async function resolveEffectiveSalaries(corporationId: string, currency: string)
     const source: 'member' | 'role' = override ? 'member' : 'role';
     const row = override ?? fallback;
     if (!row || !row.enabled || row.amount <= 0) continue;
-    effective.push({ playerId: member.playerId, role: member.role, currency, amount: row.amount, source });
+    effective.push({
+      playerId: member.playerId,
+      holderType: member.holderType,
+      role: member.role,
+      currency,
+      amount: row.amount,
+      source,
+    });
   }
   return effective;
 }
@@ -252,7 +262,7 @@ export async function runPayroll(corporationId: string, currency = 'credits'): P
   const memberAccounts = new Map<string, string>();
   await Promise.all(
     effective.map(async (e) => {
-      const account = await ensurePlayerAccount(e.playerId, currency);
+      const account = await ensureAccount(e.holderType, e.playerId, currency);
       memberAccounts.set(e.playerId, account.id);
     }),
   );
@@ -316,7 +326,7 @@ export async function payPrime(
 
   const [treasury, memberAccount] = await Promise.all([
     ensureCorporationAccount(corporationId, currency),
-    ensurePlayerAccount(playerId, currency),
+    ensureAccount(membership[0].holderType, playerId, currency),
   ]);
 
   const result = await db.transaction(async (tx) => {
