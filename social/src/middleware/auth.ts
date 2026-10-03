@@ -30,6 +30,7 @@ export interface AuthenticatedService {
 
 /** Service-account capability roles, checked per route by `requireServiceRole`. */
 export const SERVICE_ROLES = {
+  profileRead: 'social:profile:read',
   profileWrite: 'social:profile:write',
   playerWrite: 'social:player:write',
   corporationRead: 'social:corporation:read',

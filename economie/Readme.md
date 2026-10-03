@@ -49,6 +49,9 @@ curl localhost:3000/api/internal/players/$ID/wallet -H "Authorization: Bearer $T
 | `ECONOMY_TRANSFER_TAX_CEILING` | Plafond absolu de la taxe par transfert (0 = aucun) |
 | `ECONOMY_MIN_TRANSFER` / `ECONOMY_MAX_TRANSFER` | Bornes d'un transfert (0 = pas de plafond) |
 | `ECONOMY_TAX_VAULT_UUID` | Compte système réservé qui encaisse les taxes automatiques |
+| `SOCIAL_API_URL` | URL interne du service social (résolution des pseudos pour l'admin ; vide = désactivé) |
+| `SOCIAL_SERVICE_CLIENT_ID` / `SOCIAL_SERVICE_CLIENT_SECRET` | Compte de service Keycloak pour appeler social (`client_credentials`) |
+| `SOCIAL_INTERNAL_API_KEY` | Repli dev : clé partagée envoyée en `X-Internal-Key` si aucun secret n'est défini |
 
 Montants en **unités entières** (crédits). Une devise est une simple chaîne (`credits` = monnaie universelle) ; un porteur possède un compte par devise (`unique(holder_type, holder_id, currency)`).
 
@@ -62,6 +65,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/health` | Liveness |
+| GET | `/openapi.yaml` | Document OpenAPI du service (aussi exposé sur `/api/openapi.yaml`) |
 
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
 | Méthode | Route | Description |
@@ -78,8 +82,20 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | GET | `/api/corporations/:corporationId/members` | Membres et rôles (membre) |
 | GET | `/api/corporations/:corporationId/report?from=&to=` | Bilan financier par devise et par type (leader/trésorier) |
 | POST | `/api/corporations/:corporationId/donations` `{amount, memo?}` | Don d'un membre (respecte `allowDonations`, taxe interne `taxRateBps`) |
+| GET | `/api/corporations/:corporationId/salaries` | Salaires par rôle + overrides par membre (leader/trésorier) |
+| PUT | `/api/corporations/:corporationId/salaries/roles/:role` `{amount, currency?, enabled?}` | Définir le salaire par défaut d'un rôle (leader/trésorier) |
+| PUT | `/api/corporations/:corporationId/salaries/members/:playerId` `{amount, currency?, enabled?}` | Définir un override de salaire pour un membre (leader/trésorier) |
+| DELETE | `/api/corporations/:corporationId/salaries/members/:playerId` | Retirer un override (retour au salaire du rôle) |
+| POST | `/api/corporations/:corporationId/payroll?currency=` | Verser les salaires à tous les membres éligibles (leader/trésorier, atomique) |
+| POST | `/api/corporations/:corporationId/members/:playerId/prime` `{amount, currency?, memo?}` | Verser une prime ponctuelle à un membre (leader/trésorier) |
 
 Rôles de trésorerie : `leader` > `treasurer` > `member`.
+
+### Admin — tableau de bord (`Authorization: Bearer <JWT>, rôle moderator+`)
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/admin/stats?days=&top=` | Analytique : masse monétaire, volume/taxes, classements des plus riches (pseudos résolus via social), série journalière |
+| GET | `/api/admin/players?search=&limit=` | Rechercher des joueurs **par pseudo** (proxy vers l'API interne de social) et renvoyer leur portefeuille |
 
 ### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
 | Méthode | Route | Rôle requis | Description |
@@ -111,11 +127,11 @@ Rôles de trésorerie : `leader` > `treasurer` > `member`.
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (accounts, transactions, corporation_members, corporation_settings)
+  db/schema/        tables drizzle (accounts, transactions, corporation_members, corporation_settings, salaires)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
-  services/         logique métier (une fonction exportée par cas d'usage)
+  services/         logique métier (une fonction exportée par cas d'usage) ; social.client.ts (résolution des pseudos)
 ```
 
 Déploiement : `docker/Dockerfile` (image standalone, migrations au démarrage), workflows `.github/workflows/build-*-economie.yaml`.
@@ -136,6 +152,8 @@ Ce service est dédié à la partie économique du jeu ; les features ci-dessous
 - [x] Trésorerie de corporation (compte commun) et rôles leader/trésorier/membre
 - [x] Dons des membres (politique `allowDonations`, taxe interne `taxRateBps`)
 - [x] Bilan financier détaillé (revenus, dépenses, par devise et par type)
+- [x] Salaires des membres : montant par défaut par rôle + override par membre, versement manuel leader/trésorier
+- [x] Primes ponctuelles versées par la trésorerie à un membre
 - [ ] Classement économique des corporations (richesse, stabilité, influence)
 - [ ] Système de sponsoring ou mécénat entre corporations
 
@@ -146,9 +164,11 @@ Ce service est dédié à la partie économique du jeu ; les features ci-dessous
 - [ ] Réputation économique personnelle (fiabilité, dette, solvabilité)
 
 ### Analytique & Statistiques (à venir)
-- [ ] Masse monétaire totale, inflation, volume des transactions
-- [ ] Classement des joueurs / corporations les plus riches
-- [ ] Tableaux de bord publics et internes
+- [x] Masse monétaire totale, volume des transactions, taxes collectées
+- [x] Classement des joueurs / corporations les plus riches
+- [x] Tableaux de bord internes (`/api/admin/stats`, rôle `moderator`+)
+- [ ] Inflation et tableaux de bord publics
+- [ ] Séries temporelles configurables (granularité horaire, export)
 
 ### API & Intégrations
 - [x] API interne synchronisée avec les serveurs du jeu (transactions, gains, marchés)

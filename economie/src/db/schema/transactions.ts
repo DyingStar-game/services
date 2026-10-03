@@ -26,6 +26,7 @@ export const TRANSACTION_TYPES = [
   'fee',
   'mission_reward',
   'salary',
+  'prime',
   'donation',
   'corporation_fund',
   'system',

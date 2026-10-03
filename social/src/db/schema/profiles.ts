@@ -23,7 +23,6 @@ export const playerProfiles = pgTable('player_profiles', {
   faction: text('faction'),
   biography: text('biography'),
   role: text('role'),
-  level: integer('level').notNull().default(0),
   reputation: integer('reputation').notNull().default(0),
   playtimeSeconds: bigint('playtime_seconds', { mode: 'number' }).notNull().default(0),
   rpSheet: jsonb('rp_sheet').$type<RpSheet>(),

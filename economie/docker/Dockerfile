@@ -23,6 +23,7 @@ COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
 COPY --chown=nodejs:nodejs package.json ./
 COPY --chown=nodejs:nodejs drizzle ./drizzle
+COPY --chown=nodejs:nodejs openapi.yaml ./openapi.yaml
 USER nodejs
 ENV NODE_ENV=production
 ENV PORT=3000

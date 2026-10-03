@@ -51,6 +51,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/health` | Liveness |
+| GET | `/openapi.yaml` | Document OpenAPI du service (aussi exposé sur `/api/openapi.yaml`) |
 
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
 | Méthode | Route | Description |
@@ -71,7 +72,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | GET | `/api/blocks` | Joueurs bloqués |
 | POST | `/api/blocks` `{playerId}` | Bloquer (supprime amitié / demandes, empêche les nouvelles) |
 | DELETE | `/api/blocks/:playerId` | Débloquer |
-| GET | `/api/me/corporation` | Ma corporation + mon grade (`null` si aucune) |
+| GET | `/api/me/corporations` | Mes corporations + mon grade dans chacune (vide si aucune) |
 | GET | `/api/me/corporation/requests` | Mes invitations et candidatures en attente |
 | POST | `/api/me/corporation/requests/:id/accept` | Accepter une invitation |
 | POST | `/api/me/corporation/requests/:id/decline` | Refuser une invitation / retirer une candidature |
@@ -82,14 +83,16 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 
 Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 
-### Corporations (`Authorization: Bearer <JWT Keycloak>`) — un joueur appartient à une corporation max
+### Corporations (`Authorization: Bearer <JWT Keycloak>`) — un joueur peut appartenir à plusieurs corporations ; une corporation peut être la filiale d'une autre (maison mère)
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/corporations?search=&limit=` | Annuaire (nom/ticker, nombre de membres) |
-| POST | `/api/corporations` `{name, ticker, description?, logoUrl?, recruitment?}` | Créer ; le créateur devient le CEO avec le grade CEO |
-| GET | `/api/corporations/:corporationId` | Page publique : corporation, grades, membres + présence |
+| POST | `/api/corporations` `{name, ticker, description?, logoUrl?, recruitment?}` | Créer ; le créateur devient le CEO avec le grade CEO (un joueur peut créer/posséder plusieurs corporations) |
+| GET | `/api/corporations/:corporationId` | Page publique : corporation, grades, membres + présence, maison mère (`parent`) et filiales (`subsidiaries`) |
 | PATCH | `/api/corporations/:corporationId` | `manage_corporation` — nom, ticker, logo, description, `recruitment` ∈ `open\|apply\|closed` |
-| DELETE | `/api/corporations/:corporationId` | Dissoudre (CEO) |
+| DELETE | `/api/corporations/:corporationId` | Dissoudre (CEO) ; les filiales deviennent indépendantes |
+| GET | `/api/corporations/:corporationId/subsidiaries` | Filiales directes |
+| PUT | `/api/corporations/:corporationId/parent` `{parentId: uuid\|null}` | Rattacher à une maison mère ou détacher (`manage_corporation`, refus des cycles : `409 CORPORATION_CYCLE`) |
 | POST | `/api/corporations/:corporationId/transfer` `{playerId}` | Transférer le rôle de CEO (CEO) |
 | GET | `/api/corporations/:corporationId/activity?limit=` | Journal interne (membres) |
 | GET | `/api/corporations/:corporationId/members` | Membres avec grade et présence |
@@ -106,6 +109,8 @@ Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur tout
 | POST | `/api/corporations/:corporationId/requests/:id/decline` | Refuser une candidature (`recruit`) ou retirer une invitation (`invite`) |
 
 Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade CEO (unique, indélébile) les a toutes. Grades créés par défaut : CEO (100), Director (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
+
+**Multi-appartenance & hiérarchie** : un joueur/PNJ peut être membre de plusieurs corporations (aucune contrainte d'unicité par joueur ; les doublons sont interdits par corporation). Une corporation peut être rattachée à une **maison mère** via `parentId` : la page publique expose `parent` (référence) et `subsidiaries` (filiales directes), `GET /api/corporations/:id/subsidiaries` liste les filiales et `PUT /api/corporations/:id/parent` rattache/détache (les cycles sont refusés). Dissoudre une maison mère laisse ses filiales indépendantes (`ON DELETE SET NULL`).
 
 ### Modération (`Authorization: Bearer` avec rôle Keycloak `moderator` < `admin` < `supervisor`)
 | Méthode | Route | Description |
@@ -128,15 +133,16 @@ Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `
 | Méthode | Route | Rôle requis | Description |
 |---|---|---|---|
 | PUT | `/api/internal/players/:playerId` `{displayName}` | `social:profile:write` | Créer le profil au login (nom existant conservé) |
-| PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?, level?}` | `social:profile:write` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
+| PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?}` | `social:profile:write` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
 | PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
-| POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, level, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
+| POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
 | GET | `/api/internal/players/:playerId/sanctions` | `social:sanctions:read` | Sanctions actives (pour appliquer mute/ban côté jeu) |
 | POST | `/api/internal/reputation/rehabilitate` | `social:reputation:write` | Lancer une passe de réhabilitation |
 | POST | `/api/internal/players/:playerId/activity` `{type, details?}` | `social:player:write` | Ajouter une entrée d'activité |
-| GET | `/api/internal/players/:playerId/corporation` | `social:corporation:read` | Corporation et grade d'un joueur (`null` si aucune) |
+| GET | `/api/internal/players/:playerId/corporation?corporationId=` | `social:corporation:read` | Avec `corporationId` : cette adhésion ou `null` ; sans : la liste des adhésions d'un joueur |
+| GET | `/api/internal/players?search=&playerIds=&limit=` | `social:profile:read` | Résoudre des profils par pseudo (sous-chaîne) et/ou ids explicites — `{playerId, displayName, entityType}` (pour les services qui ne stockent que des UUID) |
 | PUT | `/api/internal/players/:playerId/corporation` `{corporationId, rankId?}` | `social:corporation:write` | Ajouter un **PNJ** à une corporation (grade par défaut si omis) |
-| DELETE | `/api/internal/players/:playerId/corporation` | `social:corporation:write` | Retirer un **PNJ** de sa corporation |
+| DELETE | `/api/internal/players/:playerId/corporation?corporationId=` | `social:corporation:write` | Retirer un **PNJ** d'une corporation précise |
 | POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | `social:reputation:write` | Enregistrer une rencontre (alimente les suggestions) |
 
 **Auth de service** : garde monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`) ; `azp` ∈ `INTERNAL_SERVICE_CLIENTS`, `aud` = `social-api`, puis rôle de capacité sinon `403 SERVICE_FORBIDDEN`/`FORBIDDEN`. Un token joueur ne peut pas porter un `azp` de service : c'est la garantie de non-contournement.
@@ -165,7 +171,7 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 ### Profils Joueurs
 - [x] Création et gestion du profil (nom, avatar, faction, biographie)
 - [x] Profils NPC côté serveur (`entityType: npc`, gestion via l'API interne, visibles et amiables, exclus de la modération)
-- [x] Statistiques personnelles (temps de jeu, niveau, réputation (joueur), rôle, etc.)
+- [x] Statistiques personnelles (temps de jeu, réputation (joueur), rôle, etc.)
 - [x] Historique d'activité
 - [x] Réputation (joueur) dynamique selon les interactions et signalements
 - [x] Fiche RP optionnelle (identité de personnage, histoire, alignement)
@@ -182,6 +188,8 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [x] Système de grades et permissions internes
 - [x] Page publique de corporation avec présentation et statistiques
 - [x] Recrutement et gestion des membres
+- [x] Multi-appartenance (un joueur peut rejoindre plusieurs corporations)
+- [x] Hiérarchie maison mère / filiales (`parentId`, rattachement, anti-cycle)
 - [ ] Relations diplomatiques (alliances, trêves, guerres)
 - [x] Journal d'activité interne (actions, promotions, missions)
 - [ ] Système de territoires (stations, flottes, zones contrôlées)

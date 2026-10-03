@@ -55,20 +55,24 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `SOCIAL_API_URL` | Base URL du service social (vérification d'appartenance à une corporation) ; vide = missions corporation désactivées |
 | `SOCIAL_SERVICE_CLIENT_ID` / `SOCIAL_SERVICE_CLIENT_SECRET` | Compte de service Keycloak (`svc-mission`) pour l'API interne sociale |
 | `SOCIAL_INTERNAL_API_KEY` | Repli dev : `X-Internal-Key` envoyé à social |
+| `INVENTORY_API_URL` | Base URL du service inventory (séquestre et octroi des récompenses item) ; vide = récompenses item désactivées |
+| `INVENTORY_SERVICE_CLIENT_ID` / `INVENTORY_SERVICE_CLIENT_SECRET` | Compte de service Keycloak (`svc-mission`) pour l'API interne inventaire |
+| `INVENTORY_INTERNAL_API_KEY` | Repli dev : `X-Internal-Key` envoyé à inventory |
+| `INVENTORY_SYSTEM_HOLDER_ID` | Détenteur `system` servant de source aux récompenses item non séquestrées |
 | `MISSION_REWARD_AUTO_SETTLE` | Payer automatiquement les récompenses à la complétion (défaut `true`) |
 | `MISSION_DEFAULT_TTL_HOURS` | Durée de vie par défaut d'une mission en heures (0 = jamais) |
 
 ## Fonctionnement
 
-**Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery`, `transport`, `generic`), un émetteur (`issuerType` : `system`, `corporation`, `city`, `player` + `issuerId`), une `visibility` (`public` | `corporation`), un statut (`available`, `active`, `completed`, `cancelled`, `expired`), une `reward` (`{ economic?: {currency, amount}, item?: {itemId, quantity} }`) et une liste d'**objectifs**.
+**Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery`, `transport`, `generic`), un émetteur (`issuerType` : `system`, `corporation`, `city`, `player` + `issuerId`), une `visibility` (`public` | `corporation`), un statut (`available`, `active`, `completed`, `cancelled`, `expired`), une `reward` (`{ economic?: {currency, amount}, item?: {itemId, quantity, instanceId?} }`) et une liste d'**objectifs**.
 
 **Un objectif** est vérifiable : `type` (`deliver_material`, `transport`, `visit`, `custom`), `targetQuantity`, `currentProgress`, un `order` et des données libres (`locationFrom`, `locationTo`, `payload`). Pour une mission `scenario`, un objectif reste verrouillé (`409 OBJECTIVE_LOCKED`) tant que les objectifs d'ordre inférieur ne sont pas complétés.
 
-**Multijoueur** : une mission avec `maxAssignees > 1` accepte plusieurs assignés indépendants qui **partagent les objectifs** (progression commune). À la complétion, tous les participants actifs sont complétés d'un coup et se **répartissent la récompense économique à parts égales** ; le reste de la division va aux premiers arrivés (tri par `acceptedAt`). La part de chacun est figée sur l'assignation (`rewardAmount`), ce qui rend un rejeu de paiement déterministe. La récompense **item** est refusée en multijoueur (`400 ITEM_REWARD_NOT_SPLITABLE`).
+**Multijoueur** : une mission avec `maxAssignees > 1` accepte plusieurs assignés indépendants qui **partagent les objectifs** (progression commune). À la complétion, tous les participants actifs sont complétés d'un coup et se **répartissent la récompense** (économique et item fongible) **à parts égales** ; le reste de la division va aux premiers arrivés (tri par `acceptedAt`). La part de chacun est figée sur l'assignation (`rewardAmount`, `rewardItemQuantity`), ce qui rend un rejeu de règlement déterministe. Une récompense item **instance unique** ou **séquestrée** (financée par un joueur) est refusée en multijoueur (`400 ITEM_REWARD_NOT_SPLITABLE`).
 
 **Missions créées par les joueurs** (`POST /api/missions`) : n'importe quel joueur peut sponsoriser une mission à récompense **économique**, **séquestrée** depuis son portefeuille à la création (`economie:wallet:debit`, `externalId = mission-escrow:<missionId>`). Le séquestre est remboursé au créateur si la mission est annulée ou expire (`mission-refund:<missionId>`) et libéré aux participants à la complétion. Une mission peut être `public` ou réservée à une **corporation** (`visibility: corporation`, appartenance vérifiée auprès de social, `social:corporation:read`).
 
-**Récompense** : à la complétion, le service crédite chaque participant via l'API interne d'economie (`POST /api/internal/players/:id/wallet/credit`) avec `externalId = mission:<missionId>:<playerId>`, ce qui rend le paiement **idempotent** (jamais de double crédit). Si le paiement échoue, les assignations restent `completed` avec `rewardSettled=false` et peuvent être rejouées via `POST /api/internal/missions/:missionId/settle`. Les récompenses **items** sont stockées en base (`{itemId, quantity}`) et seront réglées par un futur service inventaire.
+**Récompense** : à la complétion, le service crédite chaque participant via l'API interne d'economie (`POST /api/internal/players/:id/wallet/credit`) avec `externalId = mission:<missionId>:<playerId>`, ce qui rend le paiement **idempotent** (jamais de double crédit). Les récompenses **item** sont octroyées via l'API interne d'inventory : une récompense **item séquestrée** (mission créée par un joueur) est **réservée** (`hold`) à la création depuis l'inventaire du créateur puis **consommée** au règlement ; sinon les biens sont **transférés** depuis le détenteur `system` (faucet du jeu). Le service ne crée jamais de propriété. Si un règlement échoue, les assignations restent `completed` et peuvent être rejouées via `POST /api/internal/missions/:missionId/settle`.
 
 ## Endpoints
 
@@ -80,12 +84,13 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/health` | Liveness |
+| GET | `/openapi.yaml` | Document OpenAPI du service (aussi exposé sur `/api/openapi.yaml`) |
 
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/missions?status=&kind=&category=&issuerType=&issuerId=&visibility=&limit=` | Missions disponibles (statut `available` par défaut) |
-| POST | `/api/missions` `{title, reward.economic, visibility?, corporationId?, maxAssignees?, objectives}` | Créer une mission sponsorisée par le joueur (récompense séquestrée) |
+| POST | `/api/missions` `{title, reward.economic? and/or reward.item?, visibility?, corporationId?, maxAssignees?, objectives}` | Créer une mission sponsorisée par le joueur (récompense économique et/ou item séquestrée) |
 | GET | `/api/missions/:missionId` | Détail + objectifs + mon assignation |
 | POST | `/api/missions/:missionId/accept` | Accepter (crée l'assignation ; vérifie l'appartenance corporation) |
 | POST | `/api/missions/:missionId/abandon` | Abandonner l'assignation |
@@ -139,6 +144,7 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Cycle de vie joueur : accepter, progresser, compléter, abandonner
 - [x] Missions scénarisées avec objectifs ordonnés (verrouillage séquentiel)
 - [x] Récompense économique ou item
+- [x] Récompense item réglée via le service inventory (séquestre à la création pour les missions joueur)
 - [x] Missions multijoueurs : objectifs partagés et récompense répartie entre participants
 - [ ] Branches/conditions dans les scénarios (échec, embranchements)
 
@@ -148,12 +154,12 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [ ] Régénération/rotation périodique et expiration
 
 ### Missions joueurs
-- [x] Création de missions par les joueurs (récompense économique séquestrée)
+- [x] Création de missions par les joueurs (récompense économique et/ou item séquestrée)
 - [x] Visibilité publique ou réservée à une corporation (via l'API interne sociale)
 - [ ] Missions privées (invitation de joueurs précis)
 
 ### Récompenses
 - [x] Paiement économique via l'API interne economie (idempotent)
-- [x] Séquestre des récompenses des missions joueurs (débit/remboursement)
-- [ ] Récompenses items via un futur service inventaire
+- [x] Séquestre des récompenses des missions joueurs (débit/remboursement ; hold item/release)
+- [x] Récompenses items via le service inventory (hold/consume ou transfert depuis `system`)
 - [ ] Récompenses de réputation (via l'API interne sociale)

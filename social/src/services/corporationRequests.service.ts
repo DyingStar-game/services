@@ -71,7 +71,9 @@ export async function requestJoinCorporation(
 ): Promise<{ joined: true } | { joined: false; request: CorporationJoinRequest }> {
   const corporation = await requireCorporation(corporationId);
   await requireProfile(playerId);
-  if (await getCorporationMembership(playerId)) throw conflict('Already a member of a corporation');
+  if (await getCorporationMembership(corporationId, playerId)) {
+    throw conflict('Already a member of this corporation');
+  }
 
   const existing = await findRequest(corporationId, playerId);
   if (existing?.kind === 'invitation') {
@@ -107,7 +109,9 @@ export async function inviteCorporationPlayer(
 ): Promise<{ joined: true } | { joined: false; request: CorporationJoinRequest }> {
   await requireCorporationPermission(corporationId, actorId, 'invite');
   await requireProfile(playerId);
-  if (await getCorporationMembership(playerId)) throw conflict('Player is already a member of a corporation');
+  if (await getCorporationMembership(corporationId, playerId)) {
+    throw conflict('Player is already a member of this corporation');
+  }
   if (await isBlockedEitherWay(actorId, playerId)) throw conflict('A block exists between these players');
 
   const existing = await findRequest(corporationId, playerId);

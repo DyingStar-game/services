@@ -72,6 +72,32 @@ paths:
                   service: { type: string, const: social }
                   version: { type: string, example: 0.1.0 }
 
+  /openapi.yaml:
+    get:
+      tags: [public]
+      operationId: getOpenapi
+      summary: This service's OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.yaml:
+    get:
+      tags: [public]
+      operationId: getOpenapiAlias
+      summary: This service's OpenAPI document (alias under /api)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
   # ── Me ──────────────────────────────────────────────────────────────────────
   /api/me:
     get:
@@ -88,13 +114,12 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PlayerProfile'
                   - type: object
-                    required: [presence, corporation]
+                    required: [presence, corporations]
                     properties:
                       presence: { $ref: '#/components/schemas/Presence' }
-                      corporation:
-                        oneOf:
-                          - $ref: '#/components/schemas/CorporationRef'
-                          - type: 'null'
+                      corporations:
+                        type: array
+                        items: { $ref: '#/components/schemas/CorporationRef' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
     patch:
@@ -140,26 +165,26 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
-  /api/me/corporation:
+  /api/me/corporations:
     get:
       tags: [me]
-      operationId: getMyCorporation
-      summary: Own corporation with rank
+      operationId: getMyCorporations
+      summary: Every corporation the caller belongs to, with rank
       responses:
         '200':
-          description: Corporation membership, or `null` when corporationless
+          description: Corporation memberships (empty when the player belongs to none)
           content:
             application/json:
               schema:
-                oneOf:
-                  - allOf:
-                      - $ref: '#/components/schemas/Corporation'
-                      - type: object
-                        required: [joinedAt, rank]
-                        properties:
-                          joinedAt: { type: string, format: date-time }
-                          rank: { $ref: '#/components/schemas/CorporationRank' }
-                  - type: 'null'
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Corporation'
+                    - type: object
+                      required: [joinedAt, rank]
+                      properties:
+                        joinedAt: { type: string, format: date-time }
+                        rank: { $ref: '#/components/schemas/CorporationRank' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
@@ -264,7 +289,7 @@ paths:
             oneOf:
               - $ref: '#/components/schemas/ProfileKind'
               - type: 'null'
-          description: Restrict to players or NPCs (default: both).
+          description: "Restrict to players or NPCs (default: both)."
       responses:
         '200':
           description: Matching profiles, sorted by display name
@@ -294,13 +319,12 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PlayerProfile'
                   - type: object
-                    required: [status, corporation]
+                    required: [status, corporations]
                     properties:
                       status: { $ref: '#/components/schemas/PresenceStatus' }
-                      corporation:
-                        oneOf:
-                          - $ref: '#/components/schemas/CorporationRef'
-                          - type: 'null'
+                      corporations:
+                        type: array
+                        items: { $ref: '#/components/schemas/CorporationRef' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -572,7 +596,7 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/CorporationSummary'
                   - type: object
-                    required: [ranks, members]
+                    required: [ranks, members, parent, subsidiaries]
                     properties:
                       ranks:
                         type: array
@@ -580,6 +604,13 @@ paths:
                       members:
                         type: array
                         items: { $ref: '#/components/schemas/CorporationMember' }
+                      parent:
+                        oneOf:
+                          - $ref: '#/components/schemas/CorporationRef'
+                          - type: 'null'
+                      subsidiaries:
+                        type: array
+                        items: { $ref: '#/components/schemas/CorporationSummary' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -613,6 +644,59 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/subsidiaries:
+    get:
+      tags: [corporations]
+      operationId: listSubsidiaries
+      summary: Direct subsidiaries of a corporation
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Subsidiary summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CorporationSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/parent:
+    put:
+      tags: [corporations]
+      operationId: setCorporationParent
+      summary: Attach to a holding company, or detach (manage_corporation)
+      description: >
+        Sets the corporation's parent (making it a subsidiary of a holding company) or clears
+        it with `parentId: null`. Refuses cycles (`409 CORPORATION_CYCLE`).
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parentId]
+              properties:
+                parentId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /api/corporations/{corporationId}/transfer:
     post:
@@ -1300,7 +1384,6 @@ paths:
                 faction: { type: [string, 'null'], maxLength: 64 }
                 biography: { type: [string, 'null'], maxLength: 2000 }
                 role: { type: [string, 'null'], maxLength: 64 }
-                level: { type: integer, minimum: 0, default: 0 }
       responses:
         '200':
           description: Existing or created NPC profile
@@ -1355,7 +1438,7 @@ paths:
     post:
       tags: [internal]
       operationId: internalApplyStats
-      summary: Apply playtime / reputation deltas, level and role
+      summary: Apply playtime / reputation deltas and role
       description: "Reputation changes go through the event system (`source: game`)."
       security: [{ serviceAuth: [] }]
       parameters:
@@ -1369,7 +1452,6 @@ paths:
               minProperties: 1
               properties:
                 playtimeSecondsDelta: { type: integer, minimum: 0 }
-                level: { type: integer, minimum: 0 }
                 role: { type: [string, 'null'], maxLength: 64 }
                 reputationDelta: { type: integer }
                 reputationReason: { type: string, maxLength: 128, default: Game event }
@@ -1408,17 +1490,58 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
+  /api/internal/players:
+    get:
+      tags: [internal]
+      operationId: internalResolveProfiles
+      summary: Resolve profiles by display-name substring and/or explicit ids
+      description: >
+        Trusted-service lookup for callers that only store opaque player ids (e.g. the
+        Economy admin dashboard). With `search`, returns profiles whose display name
+        matches (like the public search) as `{playerId, displayName, entityType}`; without
+        it, resolves the ids passed in `playerIds`.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema: { type: string, maxLength: 64, default: '' }
+        - name: playerIds
+          in: query
+          required: false
+          description: Comma-separated player ids (used when `search` is empty)
+          schema: { type: string }
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Matching profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ProfileIdentity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
   /api/internal/players/{playerId}/corporation:
     get:
       tags: [internal]
       operationId: internalGetPlayerCorporation
-      summary: Corporation and rank of a player
+      summary: Corporation(s) and rank of a player
+      description: >
+        With `?corporationId`, returns that membership (or `null`). Without it, returns the
+        list of the player's memberships (a player may belong to several corporations).
       security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
+        - name: corporationId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Corporation with the player's rank, or `null`
+          description: A membership, `null`, or the list of memberships
           content:
             application/json:
               schema:
@@ -1430,6 +1553,15 @@ paths:
                         properties:
                           rank: { $ref: '#/components/schemas/CorporationRank' }
                   - type: 'null'
+                  - type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Corporation'
+                        - type: object
+                          required: [rank]
+                          properties:
+                            rank: { $ref: '#/components/schemas/CorporationRank' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
     put:
@@ -1473,12 +1605,17 @@ paths:
     delete:
       tags: [internal]
       operationId: internalRemoveNpcFromCorporation
-      summary: Remove an NPC from its corporation
+      summary: Remove an NPC from one corporation
       security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
+        - name: corporationId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
       responses:
         '204': { description: Membership removed }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -1651,6 +1788,15 @@ components:
         message: { type: string }
         status: { type: integer }
 
+    ProfileIdentity:
+      type: object
+      description: Minimal profile identity returned to trusted services for name resolution
+      required: [playerId, displayName, entityType]
+      properties:
+        playerId: { type: string, format: uuid }
+        displayName: { type: string }
+        entityType: { $ref: '#/components/schemas/ProfileKind' }
+
     # ── Enums ──
     PresenceStatus:
       type: string
@@ -1698,7 +1844,7 @@ components:
 
     PlayerProfile:
       type: object
-      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, level, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
+      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
       properties:
         playerId: { type: string, format: uuid, description: Keycloak subject (players) or server-assigned id (NPCs) }
         entityType: { $ref: '#/components/schemas/ProfileKind' }
@@ -1707,7 +1853,6 @@ components:
         faction: { type: [string, 'null'] }
         biography: { type: [string, 'null'] }
         role: { type: [string, 'null'], description: In-game role reported by the game server }
-        level: { type: integer }
         reputation: { type: integer }
         playtimeSeconds: { type: integer }
         rpSheet:
@@ -1762,7 +1907,7 @@ components:
         playerId: { type: string, format: uuid }
         type:
           type: string
-          examples: [profile_created, profile_updated, friend_request_sent, friend_added, player_blocked, level_changed, corporation_application_sent]
+          examples: [profile_created, profile_updated, friend_request_sent, friend_added, player_blocked, corporation_application_sent]
         details: { type: [object, 'null'], additionalProperties: true }
         createdAt: { type: string, format: date-time }
 
@@ -1825,7 +1970,7 @@ components:
 
     Corporation:
       type: object
-      required: [id, name, ticker, logoUrl, description, recruitment, ceoId, createdAt, updatedAt]
+      required: [id, name, ticker, logoUrl, description, recruitment, parentId, ceoId, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -1833,6 +1978,7 @@ components:
         logoUrl: { type: [string, 'null'], format: uri }
         description: { type: [string, 'null'] }
         recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode' }
+        parentId: { type: [string, 'null'], format: uuid, description: "Holding company this corporation is a subsidiary of" }
         ceoId: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

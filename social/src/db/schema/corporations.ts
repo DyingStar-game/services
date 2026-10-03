@@ -1,6 +1,7 @@
 /**
  * Corporations: identity, ranks with permissions, members, join requests and internal journal.
- * A player or NPC belongs to at most one corporation.
+ * A player or NPC may belong to several corporations, and a corporation may be a subsidiary
+ * of another (a holding company and its subsidiaries) via `parentId`.
  */
 import { sql } from 'drizzle-orm';
 import {
@@ -14,6 +15,7 @@ import {
   timestamp,
   unique,
   uuid,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
 import { playerProfiles } from './profiles.js';
@@ -36,19 +38,27 @@ export const CORPORATION_PERMISSIONS = [
 ] as const;
 export type CorporationPermission = (typeof CORPORATION_PERMISSIONS)[number];
 
-export const corporations = pgTable('corporations', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').notNull().unique(),
-  ticker: text('ticker').notNull().unique(),
-  logoUrl: text('logo_url'),
-  description: text('description'),
-  recruitment: text('recruitment').$type<CorporationRecruitmentMode>().notNull().default('apply'),
-  ceoId: uuid('ceo_id')
-    .notNull()
-    .references(() => playerProfiles.playerId),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const corporations = pgTable(
+  'corporations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull().unique(),
+    ticker: text('ticker').notNull().unique(),
+    logoUrl: text('logo_url'),
+    description: text('description'),
+    recruitment: text('recruitment').$type<CorporationRecruitmentMode>().notNull().default('apply'),
+    /** Holding company this corporation is a subsidiary of (null = independent). */
+    parentId: uuid('parent_id').references((): AnyPgColumn => corporations.id, {
+      onDelete: 'set null',
+    }),
+    ceoId: uuid('ceo_id')
+      .notNull()
+      .references(() => playerProfiles.playerId),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('corporations_parent_idx').on(t.parentId)],
+);
 
 export type Corporation = typeof corporations.$inferSelect;
 
@@ -93,8 +103,7 @@ export const corporationMembers = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.corporationId, t.playerId] }),
-    // One corporation per player/NPC.
-    unique('corporation_members_player_unique').on(t.playerId),
+    index('corporation_members_player_idx').on(t.playerId),
   ],
 );
 

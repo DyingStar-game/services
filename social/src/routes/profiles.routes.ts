@@ -38,6 +38,6 @@ profilesRoutes.get(
       getPresence(profile.playerId),
       getCorporationRefMap([profile.playerId]),
     ]);
-    res.json({ ...profile, status: presence.status, corporation: corporationRefs.get(profile.playerId) ?? null });
+    res.json({ ...profile, status: presence.status, corporations: corporationRefs.get(profile.playerId) ?? [] });
   }),
 );

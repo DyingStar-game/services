@@ -23,6 +23,7 @@ import {
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { debitPlayer, creditPlayer } from './economy.client.js';
+import { createHold, isInventoryConfigured, releaseHold } from './inventory.client.js';
 import { settledTotal } from './rewards.service.js';
 import { isCorporationMember } from './social.client.js';
 
@@ -179,16 +180,27 @@ export async function listMissions(filters: MissionFilters, limit: number): Prom
 }
 
 /**
- * Rejects an item reward on a multiplayer mission, since it cannot be split.
+ * Rejects an item reward that cannot be split across participants.
+ *
+ * A unique-instance reward can only go to one assignee. A player-funded (escrowed) item is
+ * reserved as a whole and is therefore also restricted to a single assignee. System-funded
+ * fungible rewards may be split between participants.
  * @param maxAssignees - Mission capacity.
  * @param reward - Mission reward.
+ * @param opts.escrowed - True when the item reward is escrowed from the creator.
  */
-function assertRewardSplitable(maxAssignees: number, reward?: MissionReward | null): void {
-  if (maxAssignees > 1 && reward?.item) {
+function assertRewardSplitable(
+  maxAssignees: number,
+  reward?: MissionReward | null,
+  opts: { escrowed?: boolean } = {},
+): void {
+  if (maxAssignees <= 1 || !reward?.item) return;
+  const splittable = !reward.item.instanceId && !opts.escrowed;
+  if (!splittable) {
     throw new HttpError(
       400,
       'ITEM_REWARD_NOT_SPLITABLE',
-      'Item rewards are not supported on multiplayer missions',
+      'This item reward cannot be shared by several assignees (unique instance or escrowed item)',
     );
   }
 }
@@ -263,13 +275,14 @@ export async function createMission(
 }
 
 /**
- * Creates a player-sponsored mission: the economic reward is escrowed (debited) from the
- * creator's wallet through Economy, then held until settlement or refund.
+ * Creates a player-sponsored mission. An economic reward is escrowed (debited) from the
+ * creator's wallet through Economy, and/or an item reward is escrowed (held) from the
+ * creator's inventory through Inventory, then held until settlement or refund.
  *
- * The escrow debit uses a deterministic `externalId`, so a retried creation never debits
- * twice. If the debit is refused (e.g. insufficient funds), the mission is cancelled and
- * the error is propagated.
- * @param input - Mission definition (economic reward required).
+ * Both escrows use deterministic keys, so a retried creation never debits/holds twice. If
+ * an escrow is refused (insufficient funds/goods), everything is rolled back and the error
+ * is propagated.
+ * @param input - Mission definition (economic and/or item reward required).
  * @param playerId - Creating player (escrow payer).
  * @returns The created mission and objectives.
  */
@@ -281,10 +294,11 @@ export async function createPlayerMission(
     throw new HttpError(400, 'MISSING_OBJECTIVES', 'A mission requires at least one objective');
   }
   const economic = input.reward.economic;
-  if (!economic) {
-    throw new HttpError(400, 'ECONOMIC_REWARD_REQUIRED', 'Player-created missions require an economic reward');
+  const item = input.reward.item;
+  if (!economic && !item) {
+    throw new HttpError(400, 'REWARD_REQUIRED', 'Player-created missions require an economic and/or item reward');
   }
-  assertRewardSplitable(input.maxAssignees ?? 1, input.reward);
+  assertRewardSplitable(input.maxAssignees ?? 1, input.reward, { escrowed: true });
 
   const visibility = input.visibility ?? 'public';
   if (visibility === 'corporation') {
@@ -294,6 +308,10 @@ export async function createPlayerMission(
     if (!(await isCorporationMember(playerId, input.issuerId))) {
       throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'You are not a member of this corporation');
     }
+  }
+
+  if (item && !isInventoryConfigured()) {
+    throw new HttpError(503, 'INVENTORY_NOT_CONFIGURED', 'Item rewards require the Inventory service to be configured');
   }
 
   const missionId = randomUUID();
@@ -314,11 +332,12 @@ export async function createPlayerMission(
         reward: input.reward,
         maxAssignees: input.maxAssignees ?? 1,
         expiresAt: input.expiresAt ?? null,
-        escrowStatus: 'pending',
-        escrowAmount: economic.amount,
-        escrowCurrency: economic.currency,
+        escrowStatus: economic ? 'pending' : 'none',
+        escrowAmount: economic?.amount ?? null,
+        escrowCurrency: economic?.currency ?? null,
         escrowPayerId: playerId,
-        escrowExternalId,
+        escrowExternalId: economic ? escrowExternalId : null,
+        escrowItemStatus: item ? 'held' : 'none',
         createdBy: playerId,
       })
       .returning();
@@ -344,24 +363,56 @@ export async function createPlayerMission(
     return { mission, objectives };
   });
 
-  try {
-    await debitPlayer(playerId, {
-      amount: economic.amount,
-      currency: economic.currency,
-      reference: 'mission_escrow',
-      externalId: escrowExternalId,
-    });
-  } catch (err) {
-    await db
-      .update(missions)
-      .set({ status: 'cancelled', escrowStatus: 'none', updatedAt: new Date() })
-      .where(eq(missions.id, missionId));
-    throw err;
+  // Escrow the item reward (hold from the creator's inventory).
+  let itemHoldId: string | null = null;
+  if (item) {
+    try {
+      const hold = await createHold(
+        { holderType: 'player', holderId: playerId },
+        {
+          kind: item.instanceId ? 'instance' : 'stack',
+          goodType: item.itemId,
+          quantity: item.instanceId ? undefined : item.quantity,
+          instanceId: item.instanceId,
+          refType: 'mission_escrow',
+          refId: missionId,
+        },
+      );
+      itemHoldId = hold.id;
+      await db.update(missions).set({ escrowItemHoldId: itemHoldId, updatedAt: new Date() }).where(eq(missions.id, missionId));
+    } catch (err) {
+      await db
+        .update(missions)
+        .set({ status: 'cancelled', escrowItemStatus: 'none', updatedAt: new Date() })
+        .where(eq(missions.id, missionId));
+      throw err;
+    }
+  }
+
+  // Escrow the economic reward (debit from the creator's wallet).
+  if (economic) {
+    try {
+      await debitPlayer(playerId, {
+        amount: economic.amount,
+        currency: economic.currency,
+        reference: 'mission_escrow',
+        externalId: escrowExternalId,
+      });
+    } catch (err) {
+      if (itemHoldId) {
+        await releaseHold(itemHoldId).catch(() => undefined);
+      }
+      await db
+        .update(missions)
+        .set({ status: 'cancelled', escrowStatus: 'none', escrowItemStatus: 'none', escrowItemHoldId: null, updatedAt: new Date() })
+        .where(eq(missions.id, missionId));
+      throw err;
+    }
   }
 
   const [mission] = await db
     .update(missions)
-    .set({ escrowStatus: 'held', updatedAt: new Date() })
+    .set({ ...(economic ? { escrowStatus: 'held' } : {}), updatedAt: new Date() })
     .where(eq(missions.id, missionId))
     .returning();
 
@@ -369,25 +420,35 @@ export async function createPlayerMission(
 }
 
 /**
- * Refunds the unspent escrow of a cancelled/expired player mission to its creator.
- * Idempotent through the `mission-refund:<missionId>` Economy key.
+ * Refunds the unspent escrow of a cancelled/expired player mission to its creator, and
+ * releases any held item escrow. Idempotent through the `mission-refund:<missionId>` Economy
+ * key and the hold status.
  * @param mission - Mission whose escrow may be refunded.
  */
 export async function refundEscrow(mission: Mission): Promise<void> {
-  if (mission.escrowStatus !== 'held' || !mission.escrowAmount || !mission.escrowPayerId) return;
-  const refund = mission.escrowAmount - (await settledTotal(mission.id));
-  if (refund > 0) {
-    await creditPlayer(mission.escrowPayerId, {
-      amount: refund,
-      currency: mission.escrowCurrency ?? 'credits',
-      reference: 'mission_refund',
-      externalId: `mission-refund:${mission.id}`,
-    });
+  if (mission.escrowStatus === 'held' && mission.escrowAmount && mission.escrowPayerId) {
+    const refund = mission.escrowAmount - (await settledTotal(mission.id));
+    if (refund > 0) {
+      await creditPlayer(mission.escrowPayerId, {
+        amount: refund,
+        currency: mission.escrowCurrency ?? 'credits',
+        reference: 'mission_refund',
+        externalId: `mission-refund:${mission.id}`,
+      });
+    }
+    await db
+      .update(missions)
+      .set({ escrowStatus: 'refunded', updatedAt: new Date() })
+      .where(and(eq(missions.id, mission.id), eq(missions.escrowStatus, 'held')));
   }
-  await db
-    .update(missions)
-    .set({ escrowStatus: 'refunded', updatedAt: new Date() })
-    .where(and(eq(missions.id, mission.id), eq(missions.escrowStatus, 'held')));
+
+  if (mission.escrowItemStatus === 'held' && mission.escrowItemHoldId) {
+    await releaseHold(mission.escrowItemHoldId).catch(() => undefined);
+    await db
+      .update(missions)
+      .set({ escrowItemStatus: 'released', escrowItemHoldId: null, updatedAt: new Date() })
+      .where(and(eq(missions.id, mission.id), eq(missions.escrowItemStatus, 'held')));
+  }
 }
 
 /**

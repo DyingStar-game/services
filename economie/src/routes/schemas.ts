@@ -53,6 +53,31 @@ export const memberRoleBody = z.object({
   role: z.enum(CORPORATION_ROLES),
 });
 
+/** Salary amount: integer minor units, zero allowed (disables the payout). */
+const salaryAmount = z.number().int().min(0).max(10_000_000_000_000);
+
+export const corporationRoleParams = corporationIdParams.extend({
+  role: z.enum(CORPORATION_ROLES),
+});
+
+export const roleSalaryBody = z.object({
+  amount: salaryAmount,
+  currency,
+  enabled: z.boolean().optional(),
+});
+
+export const memberSalaryBody = z.object({
+  amount: salaryAmount,
+  currency,
+  enabled: z.boolean().optional(),
+});
+
+export const primeBody = z.object({
+  amount,
+  currency,
+  memo: z.string().trim().max(256).optional(),
+});
+
 export const corporationSettingsBody = z
   .object({
     taxRateBps: z.number().int().min(0).max(10_000).optional(),
@@ -64,4 +89,16 @@ export const corporationSettingsBody = z
 export const reportQuery = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
+});
+
+/** Admin analytics window and ranking size. */
+export const statsQuery = z.object({
+  days: z.coerce.number().int().min(1).max(365).default(30),
+  top: z.coerce.number().int().min(1).max(100).default(10),
+});
+
+/** Admin player search by pseudonym. */
+export const playerSearchQuery = z.object({
+  search: z.string().trim().min(1).max(64),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
 });

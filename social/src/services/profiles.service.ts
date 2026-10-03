@@ -1,7 +1,7 @@
 /**
  * Player profiles: creation on first contact, updates, search and game-server stats.
  */
-import { and, eq, ilike, sql } from 'drizzle-orm';
+import { and, eq, ilike, inArray, sql } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
 import { playerProfiles, type EntityType, type PlayerProfile, type RpSheet } from '../db/schema/index.js';
@@ -24,13 +24,11 @@ export interface NpcProfileInput {
   faction?: string | null;
   biography?: string | null;
   role?: string | null;
-  level?: number;
 }
 
 /** Stat deltas / values reported by the game server (reputation goes through `reputation.service`). */
 export interface StatsUpdate {
   playtimeSecondsDelta?: number;
-  level?: number;
   role?: string | null;
 }
 
@@ -130,7 +128,6 @@ export async function ensureNpcProfile(playerId: string, input: NpcProfileInput)
       ...(input.faction !== undefined ? { faction: input.faction } : {}),
       ...(input.biography !== undefined ? { biography: input.biography } : {}),
       ...(input.role !== undefined ? { role: input.role } : {}),
-      ...(input.level !== undefined ? { level: input.level } : {}),
     };
     if (Object.keys(patch).length === 0) return existing;
     const [updated] = await db
@@ -193,28 +190,50 @@ export async function searchProfiles(search: string, limit: number, entityType?:
   return filtered.orderBy(playerProfiles.displayName).limit(limit);
 }
 
+/** Minimal profile identity returned to trusted services (name resolution). */
+export interface ProfileIdentity {
+  playerId: string;
+  displayName: string;
+  entityType: EntityType;
+}
+
 /**
- * Applies game-server reported stats (deltas for counters, absolute for level/role).
+ * Resolves several profiles at once (id → display name), for trusted services that only
+ * store opaque player ids (e.g. the Economy admin dashboard).
+ * @param playerIds - Player ids to resolve.
+ * @returns Known profiles among the given ids.
+ */
+export async function getProfilesByIds(playerIds: string[]): Promise<ProfileIdentity[]> {
+  if (playerIds.length === 0) return [];
+  const rows = await db
+    .select({
+      playerId: playerProfiles.playerId,
+      displayName: playerProfiles.displayName,
+      entityType: playerProfiles.entityType,
+    })
+    .from(playerProfiles)
+    .where(inArray(playerProfiles.playerId, playerIds));
+  return rows;
+}
+
+/**
+ * Applies game-server reported stats (playtime delta and absolute role).
  * @param playerId - Player id.
  * @param stats - Stats update.
  * @returns Updated profile.
  */
 export async function applyStats(playerId: string, stats: StatsUpdate): Promise<PlayerProfile> {
   await requireProfile(playerId);
-  const [updated] = await db
+  return db
     .update(playerProfiles)
     .set({
       playtimeSeconds: stats.playtimeSecondsDelta
         ? sql`${playerProfiles.playtimeSeconds} + ${stats.playtimeSecondsDelta}`
         : undefined,
-      level: stats.level,
       role: stats.role,
       updatedAt: new Date(),
     })
     .where(eq(playerProfiles.playerId, playerId))
-    .returning();
-  if (stats.level !== undefined) {
-    await recordActivity(playerId, 'level_changed', { level: stats.level });
-  }
-  return updated;
+    .returning()
+    .then((rows) => rows[0]);
 }

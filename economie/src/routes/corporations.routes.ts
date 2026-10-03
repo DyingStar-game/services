@@ -16,7 +16,25 @@ import {
   requireCorporationRole,
 } from '../services/corporations.service.js';
 import { listCorporationTransactions } from '../services/transactions.service.js';
-import { corporationIdParams, donationBody, limitQuery, reportQuery } from './schemas.js';
+import {
+  getSalaries,
+  payPrime,
+  removeMemberSalary,
+  runPayroll,
+  setMemberSalary,
+  setRoleSalary,
+} from '../services/payroll.service.js';
+import {
+  corporationIdParams,
+  corporationMemberParams,
+  corporationRoleParams,
+  donationBody,
+  limitQuery,
+  memberSalaryBody,
+  primeBody,
+  reportQuery,
+  roleSalaryBody,
+} from './schemas.js';
 
 /** Router mounted at `/api/corporations`. */
 export const corporationsRoutes: IRouter = Router();
@@ -84,5 +102,83 @@ corporationsRoutes.post(
     const { corporationId } = req.params;
     const result = await donate(player.id, corporationId, req.body.amount, req.body.memo);
     res.status(201).json(result);
+  }),
+);
+
+// ── Payroll (salaries & primes) — leader/treasurer only ───────────────────────
+
+/** GET /:corporationId/salaries — Role defaults and per-member overrides (treasurer+). */
+corporationsRoutes.get(
+  '/:corporationId/salaries',
+  validate(corporationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId } = req.params;
+    await requireCorporationRole(corporationId, player.id, 'treasurer');
+    res.json(await getSalaries(corporationId));
+  }),
+);
+
+/** PUT /:corporationId/salaries/roles/:role — Set a role default salary (treasurer+). */
+corporationsRoutes.put(
+  '/:corporationId/salaries/roles/:role',
+  validate(corporationRoleParams, 'params'),
+  validate(roleSalaryBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId } = req.params;
+    await requireCorporationRole(corporationId, player.id, 'treasurer');
+    res.json(await setRoleSalary(corporationId, req.params.role as never, req.body));
+  }),
+);
+
+/** PUT /:corporationId/salaries/members/:playerId — Set a member override (treasurer+). */
+corporationsRoutes.put(
+  '/:corporationId/salaries/members/:playerId',
+  validate(corporationMemberParams, 'params'),
+  validate(memberSalaryBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId, playerId } = req.params;
+    await requireCorporationRole(corporationId, player.id, 'treasurer');
+    res.json(await setMemberSalary(corporationId, playerId, req.body));
+  }),
+);
+
+/** DELETE /:corporationId/salaries/members/:playerId — Drop an override (treasurer+). */
+corporationsRoutes.delete(
+  '/:corporationId/salaries/members/:playerId',
+  validate(corporationMemberParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId, playerId } = req.params;
+    await requireCorporationRole(corporationId, player.id, 'treasurer');
+    await removeMemberSalary(corporationId, playerId);
+    res.status(204).send();
+  }),
+);
+
+/** POST /:corporationId/payroll — Pay every member's salary now (treasurer+). */
+corporationsRoutes.post(
+  '/:corporationId/payroll',
+  validate(corporationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId } = req.params;
+    await requireCorporationRole(corporationId, player.id, 'treasurer');
+    res.json(await runPayroll(corporationId, (req.query.currency as string | undefined) ?? 'credits'));
+  }),
+);
+
+/** POST /:corporationId/members/:playerId/prime — Pay a one-off prime (treasurer+). */
+corporationsRoutes.post(
+  '/:corporationId/members/:playerId/prime',
+  validate(corporationMemberParams, 'params'),
+  validate(primeBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId, playerId } = req.params;
+    await requireCorporationRole(corporationId, player.id, 'treasurer');
+    res.status(201).json(await payPrime(corporationId, playerId, req.body.amount, { currency: req.body.currency, memo: req.body.memo }));
   }),
 );

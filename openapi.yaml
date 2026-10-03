@@ -1,0 +1,5879 @@
+openapi: 3.1.0
+info:
+  title: DyingStar — API joueur (mission, social, economie, inventory, market)
+  version: 0.1.0
+  description: 'Document agrege (fusion) des endpoints cote joueur des services mission, social, economie, inventory et market.
+    Chaque service expose aussi sa propre spec sur GET /openapi.yaml.
+
+
+    Authentification : JWT Keycloak (Authorization: Bearer, claim sub = player id). En dev uniquement, AUTH_DEV_BYPASS=true
+    accepte X-Player-Id / X-Player-Name.
+
+
+    Chaque operation porte son service (tag) et l''override `servers` du chemin : les services sont des processus distincts,
+    avec le meme prefixe /api. Les routes /api/internal/* (serveur de jeu, tokens de service) et /api/admin/* ne sont pas
+    couvertes.
+
+
+    Erreurs : { error, message, status }.'
+tags:
+- name: public
+  description: Non authentifie
+- name: mission
+  description: Service mission
+  servers:
+  - url: http://mission:3000
+- name: social
+  description: Service social
+  servers:
+  - url: http://social:3000
+- name: economie
+  description: Service economie
+  servers:
+  - url: http://economie:3000
+- name: inventory
+  description: Service inventory
+  servers:
+  - url: http://inventory:3000
+- name: market
+  description: Service market
+  servers:
+  - url: http://market:3000
+security:
+- bearerAuth: []
+paths:
+  /api/blocks:
+    get:
+      tags:
+      - social
+      operationId: listBlocks
+      summary: Blocked players
+      responses:
+        '200':
+          description: Blocked profiles with block date
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                  - $ref: '#/components/schemas/social_PlayerProfile'
+                  - type: object
+                    required:
+                    - blockedAt
+                    properties:
+                      blockedAt:
+                        type: string
+                        format: date-time
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: &id001
+    - &id006
+      url: http://social:3000
+      description: social
+    - &id002
+      url: http://economie:3000
+      description: economie
+    post:
+      tags:
+      - social
+      operationId: blockPlayer
+      summary: Block a player
+      description: 'Drops any friendship or pending request between the two players, prevents new ones and costs the blocked
+        player `REPUTATION_BLOCK_PENALTY` (refunded on unblock). Idempotent.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_TargetPlayer'
+      responses:
+        '204':
+          description: Player blocked
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+  /api/blocks/{playerId}:
+    delete:
+      tags:
+      - social
+      operationId: unblockPlayer
+      summary: Unblock a player
+      parameters:
+      - $ref: '#/components/parameters/social_playerId'
+      responses:
+        '204':
+          description: Block removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations:
+    get:
+      tags:
+      - social
+      operationId: listCorporations
+      summary: Corporation directory
+      parameters:
+      - $ref: '#/components/parameters/social_search'
+      - $ref: '#/components/parameters/social_limit'
+      responses:
+        '200':
+          description: Corporations matching name or ticker, with member counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_CorporationSummary'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    post:
+      tags:
+      - social
+      operationId: createCorporation
+      summary: Create a corporation
+      description: 'The caller becomes the CEO and holds the CEO rank. Default ranks are created: CEO (100, all permissions),
+        Director (50: invite, recruit, manage_members), Member (0, default rank). A player belongs to at most one corporation.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_CreateCorporation'
+      responses:
+        '201':
+          description: Corporation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Corporation'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '409':
+          description: Already in a corporation, or name/ticker already taken
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+      security:
+      - bearerAuth: []
+  /api/corporations/{corporationId}:
+    get:
+      tags:
+      - social
+      operationId: getCorporation
+      summary: Public corporation page
+      responses:
+        '200':
+          description: Corporation with ranks and members (with presence)
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/social_CorporationSummary'
+                - type: object
+                  required:
+                  - ranks
+                  - members
+                  - parent
+                  - subsidiaries
+                  properties:
+                    ranks:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/social_CorporationRank'
+                    members:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/social_CorporationMember'
+                    parent:
+                      oneOf:
+                      - $ref: '#/components/schemas/social_CorporationRef'
+                      - type: 'null'
+                    subsidiaries:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/social_CorporationSummary'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    patch:
+      tags:
+      - social
+      operationId: updateCorporation
+      summary: Edit a corporation
+      description: Requires the `manage_corporation` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_CorporationPatch'
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Corporation'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+    delete:
+      tags:
+      - social
+      operationId: disbandCorporation
+      summary: Disband a corporation (CEO only)
+      responses:
+        '204':
+          description: Corporation disbanded
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+  /api/corporations/{corporationId}/activity:
+    get:
+      tags:
+      - social
+      operationId: getCorporationActivity
+      summary: Internal corporation journal (members only)
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      - $ref: '#/components/parameters/social_limit'
+      responses:
+        '200':
+          description: Journal entries, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_CorporationActivityEntry'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/donations:
+    post:
+      tags:
+      - economie
+      summary: Donate credits from the member's wallet to the treasury
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/economie_DonationBody'
+      responses:
+        '201':
+          description: Donation recorded (internal tax stays in the corporation)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_MovementResult'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          description: Not a member, or donations disabled (`DONATIONS_DISABLED`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_Error'
+        '409':
+          $ref: '#/components/responses/economie_Conflict'
+      security:
+      - bearerAuth: []
+    servers: &id004
+    - *id002
+  /api/corporations/{corporationId}/inventory:
+    get:
+      tags:
+      - inventory
+      summary: Corporation inventory (member only, membership checked in Social)
+      parameters:
+      - $ref: '#/components/parameters/inventory_corporationId'
+      responses:
+        '200':
+          description: Inventory of the corporation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_HolderInventory'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          description: Not a member of this corporation (`NOT_CORPORATION_MEMBER`), or Social not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_Error'
+      security:
+      - bearerAuth: []
+    servers: &id003
+    - &id007
+      url: http://inventory:3000
+      description: inventory
+  /api/corporations/{corporationId}/inventory/stacks/{goodType}:
+    get:
+      tags:
+      - inventory
+      summary: One corporation stack (member only)
+      parameters:
+      - $ref: '#/components/parameters/inventory_corporationId'
+      - $ref: '#/components/parameters/inventory_goodType'
+      responses:
+        '200':
+          description: The stack
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_StackView'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_Forbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id003
+  /api/corporations/{corporationId}/invitations:
+    post:
+      tags:
+      - social
+      operationId: inviteToCorporation
+      summary: Invite a player (`invite`)
+      description: A pending application from that player is accepted instead (`200`).
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_TargetPlayer'
+      responses:
+        '200':
+          description: Player joined the corporation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_JoinedResult'
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_PendingRequestResult'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          description: Player already in a corporation, invitation already pending, or a block exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/join:
+    post:
+      tags:
+      - social
+      operationId: joinCorporation
+      summary: Join directly (`open`) or apply (`apply`)
+      description: A pending invitation from that corporation is accepted instead (`200`).
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Joined the corporation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_JoinedResult'
+        '201':
+          description: Application created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_PendingRequestResult'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          description: Corporation is `closed`, or caller is sanctioned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          description: Already in a corporation, or application already pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/members:
+    get:
+      tags:
+      - economie
+      - social
+      operationId: listCorporationMembers
+      summary: Members with rank and presence
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/social_CorporationMember'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/economie_CorporationMember'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+      description: Also served by economie on the same path.
+    servers: *id001
+  /api/corporations/{corporationId}/members/{playerId}:
+    patch:
+      tags:
+      - social
+      operationId: setCorporationMemberRank
+      summary: Change a member's rank
+      description: Requires `manage_members`; only ranks strictly below the actor's own may be given or taken.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - rankId
+              properties:
+                rankId:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_CorporationMembership'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    delete:
+      tags:
+      - social
+      operationId: removeCorporationMember
+      summary: Leave (self) or kick (`manage_members`) a member
+      description: The CEO cannot leave; transfer leadership or disband first.
+      responses:
+        '204':
+          description: Member removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+  /api/corporations/{corporationId}/members/{playerId}/prime:
+    post:
+      tags:
+      - economie
+      summary: Pay a one-off prime to a member from the treasury (leader/treasurer only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/economie_PrimeBody'
+      responses:
+        '201':
+          description: Prime recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_PrimeResult'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+        '404':
+          description: The player is not a member of this corporation (`NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_Error'
+        '409':
+          $ref: '#/components/responses/economie_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/corporations/{corporationId}/parent:
+    put:
+      tags:
+      - social
+      operationId: setCorporationParent
+      summary: Attach to a holding company, or detach (manage_corporation)
+      description: 'Sets the corporation''s parent (making it a subsidiary of a holding company) or clears it with `parentId:
+        null`. Refuses cycles (`409 CORPORATION_CYCLE`).
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - parentId
+              properties:
+                parentId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Corporation'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/payroll:
+    post:
+      tags:
+      - economie
+      summary: Pay every member's salary now from the treasury (leader/treasurer only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_currencyQuery'
+      responses:
+        '200':
+          description: Payout summary (atomic, aborted if the treasury is short)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_PayrollResult'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+        '409':
+          description: Treasury balance too low for the whole run (`INSUFFICIENT_FUNDS`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_Error'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/corporations/{corporationId}/ranks:
+    get:
+      tags:
+      - social
+      operationId: listCorporationRanks
+      summary: Ranks, highest priority first
+      responses:
+        '200':
+          description: Ranks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_CorporationRank'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    post:
+      tags:
+      - social
+      operationId: createCorporationRank
+      summary: Create a rank (`manage_ranks`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_CreateRank'
+      responses:
+        '201':
+          description: Rank created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_CorporationRank'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+  /api/corporations/{corporationId}/ranks/{rankId}:
+    patch:
+      tags:
+      - social
+      operationId: updateCorporationRank
+      summary: Edit a rank (`manage_ranks`)
+      description: The CEO rank only accepts a rename.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_RankPatch'
+      responses:
+        '200':
+          description: Updated rank
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_CorporationRank'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    delete:
+      tags:
+      - social
+      operationId: deleteCorporationRank
+      summary: Delete a rank (`manage_ranks`)
+      description: Members holding it are moved to the default rank. The CEO and default ranks cannot be deleted.
+      responses:
+        '204':
+          description: Rank deleted
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+  /api/corporations/{corporationId}/report:
+    get:
+      tags:
+      - economie
+      summary: Financial report (leader/treasurer only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_from'
+      - $ref: '#/components/parameters/economie_to'
+      responses:
+        '200':
+          description: Totals and breakdown by transaction type and currency
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_CorporationReport'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/corporations/{corporationId}/requests:
+    get:
+      tags:
+      - social
+      operationId: listCorporationRequests
+      summary: Pending applications and invitations (`recruit` or `invite`)
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      responses:
+        '200':
+          description: Requests with the player's profile
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_CorporationRequest'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/requests/{id}/accept:
+    post:
+      tags:
+      - social
+      operationId: acceptCorporationApplication
+      summary: Accept an application (`recruit`)
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '204':
+          description: Player added to the corporation
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/requests/{id}/decline:
+    post:
+      tags:
+      - social
+      operationId: declineCorporationApplication
+      summary: Decline an application (`recruit`) or withdraw an invitation (`invite`)
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '204':
+          description: Request removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/salaries:
+    get:
+      tags:
+      - economie
+      summary: Role defaults and per-member salary overrides (leader/treasurer only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      responses:
+        '200':
+          description: Salary configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_CorporationSalaries'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/corporations/{corporationId}/salaries/members/{playerId}:
+    put:
+      tags:
+      - economie
+      summary: Set a per-member salary override (leader/treasurer only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/economie_SalaryBody'
+      responses:
+        '200':
+          description: Stored member salary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_CorporationMemberSalary'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+        '404':
+          description: The player is not a member of this corporation (`NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_Error'
+      security:
+      - bearerAuth: []
+    servers: *id004
+    delete:
+      tags:
+      - economie
+      summary: Remove a per-member salary override (leader/treasurer only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_playerId'
+      responses:
+        '204':
+          description: Override removed
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+      security:
+      - bearerAuth: []
+  /api/corporations/{corporationId}/salaries/roles/{role}:
+    put:
+      tags:
+      - economie
+      summary: Set the default salary for a role (leader/treasurer only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_role'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/economie_SalaryBody'
+      responses:
+        '200':
+          description: Stored role salary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_CorporationSalaryRole'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/corporations/{corporationId}/subsidiaries:
+    get:
+      tags:
+      - social
+      operationId: listSubsidiaries
+      summary: Direct subsidiaries of a corporation
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      responses:
+        '200':
+          description: Subsidiary summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_CorporationSummary'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/transfer:
+    post:
+      tags:
+      - social
+      operationId: transferCorporationOwnership
+      summary: Transfer leadership to another member (CEO only)
+      parameters:
+      - $ref: '#/components/parameters/social_corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_TargetPlayer'
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Corporation'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/corporations/{corporationId}/wallet:
+    get:
+      tags:
+      - economie
+      summary: Treasury accounts (member only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      responses:
+        '200':
+          description: Corporation treasury accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - corporationId
+                - accounts
+                properties:
+                  corporationId:
+                    type: string
+                    format: uuid
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/economie_Account'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          description: Not a member of this corporation (`NOT_CORPORATION_MEMBER`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_Error'
+        '404':
+          $ref: '#/components/responses/economie_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/corporations/{corporationId}/wallet/transactions:
+    get:
+      tags:
+      - economie
+      summary: Treasury ledger (member only)
+      parameters:
+      - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_limit'
+      responses:
+        '200':
+          description: Corporation ledger across currencies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/economie_Transaction'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/friends:
+    get:
+      tags:
+      - social
+      operationId: listFriends
+      summary: Friends with presence
+      responses:
+        '200':
+          description: Accepted friends with status and location
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_Friend'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/friends/online:
+    get:
+      tags:
+      - social
+      operationId: listOnlineFriends
+      summary: Friends currently online or in mission
+      responses:
+        '200':
+          description: Friends whose status is not `offline`
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_Friend'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/friends/requests:
+    get:
+      tags:
+      - social
+      operationId: listFriendRequests
+      summary: Pending friend requests
+      responses:
+        '200':
+          description: Incoming and outgoing requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - incoming
+                - outgoing
+                properties:
+                  incoming:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/social_FriendRequest'
+                  outgoing:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/social_FriendRequest'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    post:
+      tags:
+      - social
+      operationId: sendFriendRequest
+      summary: Send a friend request
+      description: If the target already sent a pending request, it is accepted instead (`200`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_TargetPlayer'
+      responses:
+        '201':
+          description: Request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Friendship'
+        '200':
+          description: Reverse request auto-accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Friendship'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          description: Already friends, request already pending, or a block exists (`BLOCKED`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+      security:
+      - bearerAuth: []
+  /api/friends/requests/{id}/accept:
+    post:
+      tags:
+      - social
+      operationId: acceptFriendRequest
+      summary: Accept an incoming request (addressee only)
+      parameters:
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '200':
+          description: Accepted friendship
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Friendship'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/friends/requests/{id}/decline:
+    post:
+      tags:
+      - social
+      operationId: declineFriendRequest
+      summary: Decline (addressee) or cancel (requester) a pending request
+      parameters:
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '204':
+          description: Request removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/friends/suggestions:
+    get:
+      tags:
+      - social
+      operationId: listFriendSuggestions
+      summary: Recently met players who are not friends yet
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      responses:
+        '200':
+          description: Suggested players
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_FriendSuggestion'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/friends/{playerId}:
+    delete:
+      tags:
+      - social
+      operationId: removeFriend
+      summary: Remove a friend
+      parameters:
+      - $ref: '#/components/parameters/social_playerId'
+      responses:
+        '204':
+          description: Friendship removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/health:
+    get:
+      tags:
+      - public
+      summary: Liveness check
+      security: []
+      responses:
+        '200':
+          description: API is up
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - oneOf:
+                  - oneOf:
+                    - oneOf:
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            example: ok
+                          service:
+                            type: string
+                            example: mission
+                          version:
+                            type: string
+                            example: 0.1.0
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            const: ok
+                          service:
+                            type: string
+                            const: social
+                          version:
+                            type: string
+                            example: 0.1.0
+                    - type: object
+                      properties:
+                        status:
+                          type: string
+                          example: ok
+                        service:
+                          type: string
+                          example: economie
+                        version:
+                          type: string
+                          example: 0.1.0
+                  - type: object
+                    properties:
+                      status:
+                        type: string
+                        example: ok
+                      service:
+                        type: string
+                        example: inventory
+                      version:
+                        type: string
+                        example: 0.1.0
+                - type: object
+                  properties:
+                    status:
+                      type: string
+                      example: ok
+                    service:
+                      type: string
+                      example: market
+                    version:
+                      type: string
+                      example: 0.1.0
+      description: Also served by social on the same path. Also served by economie on the same path. Also served by inventory
+        on the same path. Also served by market on the same path.
+    servers:
+    - url: http://mission:3000
+      description: mission
+    - url: http://social:3000
+      description: social
+    - url: http://economie:3000
+      description: economie
+    - url: http://inventory:3000
+      description: inventory
+    - url: http://market:3000
+      description: market
+  /api/market/book:
+    get:
+      tags:
+      - market
+      summary: Order book depth (open buy/sell counts) for a good type
+      parameters:
+      - $ref: '#/components/parameters/market_goodType'
+      responses:
+        '200':
+          description: Open order counts per side
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - buy
+                - sell
+                properties:
+                  buy:
+                    type: integer
+                  sell:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: &id005
+    - &id008
+      url: http://market:3000
+      description: market
+  /api/market/catalog:
+    get:
+      tags:
+      - market
+      summary: Tradable good types (enabled only)
+      responses:
+        '200':
+          description: Catalog entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/market_CatalogEntry'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id005
+  /api/market/demands:
+    get:
+      tags:
+      - market
+      summary: Demands/contracts (newest first)
+      parameters:
+      - $ref: '#/components/parameters/market_goodTypeOptional'
+      - $ref: '#/components/parameters/market_demandStatus'
+      - $ref: '#/components/parameters/market_limit'
+      responses:
+        '200':
+          description: Demands
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/market_Demand'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id005
+    post:
+      tags:
+      - market
+      summary: Create a demand/contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/market_DemandBody'
+      responses:
+        '201':
+          description: The demand
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/market_Demand'
+        '400':
+          $ref: '#/components/responses/market_ValidationError'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+        '403':
+          $ref: '#/components/responses/market_Forbidden'
+      security:
+      - bearerAuth: []
+  /api/market/demands/{id}:
+    get:
+      tags:
+      - market
+      summary: One demand
+      parameters:
+      - $ref: '#/components/parameters/market_id'
+      responses:
+        '200':
+          description: The demand
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/market_Demand'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+        '404':
+          $ref: '#/components/responses/market_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id005
+  /api/market/demands/{id}/cancel:
+    post:
+      tags:
+      - market
+      summary: Cancel one of the caller's demands
+      parameters:
+      - $ref: '#/components/parameters/market_id'
+      responses:
+        '200':
+          description: The cancelled demand
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/market_Demand'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+        '403':
+          $ref: '#/components/responses/market_Forbidden'
+        '404':
+          $ref: '#/components/responses/market_NotFound'
+        '409':
+          $ref: '#/components/responses/market_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id005
+  /api/market/demands/{id}/fulfill:
+    post:
+      tags:
+      - market
+      summary: Fulfil a demand as a supplier (settles the trade)
+      parameters:
+      - $ref: '#/components/parameters/market_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/market_FulfillBody'
+      responses:
+        '201':
+          description: The created trade (settled or pending)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/market_Trade'
+        '400':
+          $ref: '#/components/responses/market_ValidationError'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+        '403':
+          $ref: '#/components/responses/market_Forbidden'
+        '404':
+          $ref: '#/components/responses/market_NotFound'
+        '409':
+          $ref: '#/components/responses/market_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id005
+  /api/market/orders:
+    get:
+      tags:
+      - market
+      summary: Order book (newest first)
+      parameters:
+      - $ref: '#/components/parameters/market_goodTypeOptional'
+      - $ref: '#/components/parameters/market_orderSide'
+      - $ref: '#/components/parameters/market_orderStatus'
+      - $ref: '#/components/parameters/market_limit'
+      responses:
+        '200':
+          description: Orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/market_Order'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id005
+    post:
+      tags:
+      - market
+      summary: Place an order (immediately matched against the book)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/market_OrderBody'
+      responses:
+        '201':
+          description: The order and the trades it generated
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - order
+                - trades
+                properties:
+                  order:
+                    $ref: '#/components/schemas/market_Order'
+                  trades:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/market_Trade'
+        '400':
+          $ref: '#/components/responses/market_ValidationError'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+        '403':
+          $ref: '#/components/responses/market_Forbidden'
+      security:
+      - bearerAuth: []
+  /api/market/orders/{id}:
+    get:
+      tags:
+      - market
+      summary: One order
+      parameters:
+      - $ref: '#/components/parameters/market_id'
+      responses:
+        '200':
+          description: The order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/market_Order'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+        '404':
+          $ref: '#/components/responses/market_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id005
+  /api/market/orders/{id}/cancel:
+    post:
+      tags:
+      - market
+      summary: Cancel one of the caller's orders
+      parameters:
+      - $ref: '#/components/parameters/market_id'
+      responses:
+        '200':
+          description: The cancelled order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/market_Order'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+        '403':
+          $ref: '#/components/responses/market_Forbidden'
+        '404':
+          $ref: '#/components/responses/market_NotFound'
+        '409':
+          $ref: '#/components/responses/market_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id005
+  /api/market/trades:
+    get:
+      tags:
+      - market
+      summary: Trades where the caller is buyer or seller
+      parameters:
+      - $ref: '#/components/parameters/market_tradeStatus'
+      - $ref: '#/components/parameters/market_limit'
+      responses:
+        '200':
+          description: Trades
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/market_Trade'
+        '401':
+          $ref: '#/components/responses/market_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id005
+  /api/me:
+    get:
+      tags:
+      - social
+      operationId: getMe
+      summary: Own profile with presence and corporation
+      description: The profile is created on first call from the token identity.
+      responses:
+        '200':
+          description: Own profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/social_PlayerProfile'
+                - type: object
+                  required:
+                  - presence
+                  - corporations
+                  properties:
+                    presence:
+                      $ref: '#/components/schemas/social_Presence'
+                    corporations:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/social_CorporationRef'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    patch:
+      tags:
+      - social
+      operationId: updateMe
+      summary: Update editable profile fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_ProfilePatch'
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_PlayerProfile'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '409':
+          description: Display name already taken
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+      security:
+      - bearerAuth: []
+  /api/me/activity:
+    get:
+      tags:
+      - social
+      operationId: getMyActivity
+      summary: Own activity history (newest first)
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      responses:
+        '200':
+          description: Activity entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_ActivityEntry'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/me/corporation/requests:
+    get:
+      tags:
+      - social
+      operationId: getMyCorporationRequests
+      summary: My pending corporation invitations and applications
+      responses:
+        '200':
+          description: Pending requests with the corporation reference
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_PlayerCorporationRequest'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/me/corporation/requests/{id}/accept:
+    post:
+      tags:
+      - social
+      operationId: acceptCorporationInvitation
+      summary: Accept a corporation invitation
+      parameters:
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '204':
+          description: Joined the corporation
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/me/corporation/requests/{id}/decline:
+    post:
+      tags:
+      - social
+      operationId: declineCorporationRequest
+      summary: Decline an invitation or withdraw an application
+      parameters:
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '204':
+          description: Request removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/me/corporations:
+    get:
+      tags:
+      - social
+      operationId: getMyCorporations
+      summary: Every corporation the caller belongs to, with rank
+      responses:
+        '200':
+          description: Corporation memberships (empty when the player belongs to none)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                  - $ref: '#/components/schemas/social_Corporation'
+                  - type: object
+                    required:
+                    - joinedAt
+                    - rank
+                    properties:
+                      joinedAt:
+                        type: string
+                        format: date-time
+                      rank:
+                        $ref: '#/components/schemas/social_CorporationRank'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/me/inventory:
+    get:
+      tags:
+      - inventory
+      summary: The caller's inventory (stacks with held/available, and owned instances)
+      responses:
+        '200':
+          description: Inventory of the caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_HolderInventory'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id003
+  /api/me/inventory/stacks/{goodType}:
+    get:
+      tags:
+      - inventory
+      summary: One stack of the caller, with held and available quantities
+      parameters:
+      - $ref: '#/components/parameters/inventory_goodType'
+      responses:
+        '200':
+          description: The stack
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_StackView'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id003
+  /api/me/missions:
+    get:
+      tags:
+      - mission
+      summary: The caller's missions (assignments joined with their mission)
+      parameters:
+      - $ref: '#/components/parameters/mission_AssignmentStatus'
+      - $ref: '#/components/parameters/mission_Limit'
+      responses:
+        '200':
+          description: Player missions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - missions
+                properties:
+                  missions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/mission_PlayerMission'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: &id009
+    - url: http://mission:3000
+      description: mission
+    - *id006
+    - *id002
+    - *id007
+    - *id008
+  /api/me/reputation:
+    get:
+      tags:
+      - social
+      operationId: getMyReputation
+      summary: Own reputation score, history and active sanctions
+      description: Reachable while suspended or banned.
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      responses:
+        '200':
+          description: Reputation summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - reputation
+                - events
+                - activeSanctions
+                properties:
+                  reputation:
+                    type: integer
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/social_ReputationEvent'
+                  activeSanctions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/social_Sanction'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/me/sanctions:
+    get:
+      tags:
+      - social
+      operationId: getMySanctions
+      summary: Own active sanctions
+      description: Reachable while suspended or banned.
+      responses:
+        '200':
+          description: Active sanctions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_Sanction'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/me/wallet:
+    get:
+      tags:
+      - economie
+      summary: All wallet accounts of the caller (one per currency, `credits` auto-created)
+      responses:
+        '200':
+          description: Wallet accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - accounts
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/economie_Account'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/me/wallet/transactions:
+    get:
+      tags:
+      - economie
+      summary: Ledger of the caller across all currencies
+      parameters:
+      - $ref: '#/components/parameters/economie_limit'
+      responses:
+        '200':
+          description: Transactions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/economie_Transaction'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id004
+  /api/missions:
+    get:
+      tags:
+      - mission
+      summary: Browse missions (defaults to the `available` ones)
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionStatus'
+      - $ref: '#/components/parameters/mission_MissionKind'
+      - $ref: '#/components/parameters/mission_MissionCategory'
+      - $ref: '#/components/parameters/mission_IssuerType'
+      - $ref: '#/components/parameters/mission_IssuerId'
+      - $ref: '#/components/parameters/mission_Visibility'
+      - $ref: '#/components/parameters/mission_Limit'
+      responses:
+        '200':
+          description: Missions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - missions
+                properties:
+                  missions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/mission_Mission'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+      security:
+      - bearerAuth: []
+    servers: *id009
+    post:
+      tags:
+      - mission
+      summary: Create a player-sponsored mission (economic reward escrowed from the caller)
+      description: 'The economic reward is debited from the caller''s wallet through Economy and held until settlement or
+        refund. Corporation missions require membership (checked in Social). Item rewards are not supported here.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mission_CreatePlayerMission'
+      responses:
+        '201':
+          description: Created mission and objectives (escrow held)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mission:
+                    $ref: '#/components/schemas/mission_Mission'
+                  objectives:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/mission_Objective'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          description: Caller is not a member of the target corporation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '409':
+          description: Escrow refused (insufficient funds)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+              examples:
+                broke:
+                  value:
+                    error: INSUFFICIENT_FUNDS
+                    message: Insufficient balance for the mission escrow
+                    status: 409
+        '502':
+          description: Economy or Social is unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+      security:
+      - bearerAuth: []
+  /api/missions/{missionId}:
+    get:
+      tags:
+      - mission
+      summary: Mission detail with its objectives and the caller's assignment
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      responses:
+        '200':
+          description: Mission, objectives and assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - mission
+                - objectives
+                properties:
+                  mission:
+                    $ref: '#/components/schemas/mission_Mission'
+                  objectives:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/mission_Objective'
+                  assignment:
+                    oneOf:
+                    - $ref: '#/components/schemas/mission_Assignment'
+                    - type: 'null'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id009
+  /api/missions/{missionId}/abandon:
+    post:
+      tags:
+      - mission
+      summary: Abandon the caller's active assignment
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      responses:
+        '200':
+          description: Updated assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assignment:
+                    $ref: '#/components/schemas/mission_Assignment'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Assignment is not active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+      security:
+      - bearerAuth: []
+    servers: *id009
+  /api/missions/{missionId}/accept:
+    post:
+      tags:
+      - mission
+      summary: Accept a mission (creates the caller's assignment)
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      responses:
+        '201':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - assignment
+                - mission
+                - objectives
+                properties:
+                  assignment:
+                    $ref: '#/components/schemas/mission_Assignment'
+                  mission:
+                    $ref: '#/components/schemas/mission_Mission'
+                  objectives:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/mission_Objective'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Mission not open, already assigned/completed, or full
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+              examples:
+                full:
+                  value:
+                    error: MISSION_FULL
+                    message: Mission has no free slot
+                    status: 409
+      security:
+      - bearerAuth: []
+    servers: *id009
+  /api/missions/{missionId}/complete:
+    post:
+      tags:
+      - mission
+      summary: Complete the mission and settle its economic reward
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      responses:
+        '200':
+          description: Completed assignment, mission and settlement outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - assignment
+                - mission
+                properties:
+                  assignment:
+                    $ref: '#/components/schemas/mission_Assignment'
+                  mission:
+                    $ref: '#/components/schemas/mission_Mission'
+                  settlement:
+                    $ref: '#/components/schemas/mission_Settlement'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Objectives incomplete or assignment not active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '502':
+          description: Economy rejected the reward credit (assignment completed, reward unsettled)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+      security:
+      - bearerAuth: []
+    servers: *id009
+  /api/missions/{missionId}/objectives/{objectiveId}/progress:
+    post:
+      tags:
+      - mission
+      summary: Report progress on one objective (quantity delivered/transported)
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      - $ref: '#/components/parameters/mission_ObjectiveId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - quantity
+              properties:
+                quantity:
+                  type: integer
+                  minimum: 1
+                  example: 5
+      responses:
+        '200':
+          description: Updated objective and mission progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - objective
+                - objectives
+                - allComplete
+                properties:
+                  objective:
+                    $ref: '#/components/schemas/mission_Objective'
+                  objectives:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/mission_Objective'
+                  allComplete:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Objective locked, mission closed or assignment not active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+              examples:
+                locked:
+                  value:
+                    error: OBJECTIVE_LOCKED
+                    message: Previous objectives must be completed first
+                    status: 409
+      security:
+      - bearerAuth: []
+    servers: *id009
+  /api/profiles:
+    get:
+      tags:
+      - social
+      operationId: searchProfiles
+      summary: Search profiles by display name
+      parameters:
+      - $ref: '#/components/parameters/social_search'
+      - $ref: '#/components/parameters/social_limit'
+      - name: entityType
+        in: query
+        required: false
+        schema:
+          oneOf:
+          - $ref: '#/components/schemas/social_ProfileKind'
+          - type: 'null'
+        description: 'Restrict to players or NPCs (default: both).'
+      responses:
+        '200':
+          description: Matching profiles, sorted by display name
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_PlayerProfile'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/profiles/{playerId}:
+    get:
+      tags:
+      - social
+      operationId: getProfile
+      summary: Public profile with online status
+      description: Location is not exposed here (friends only, see `/api/friends`).
+      parameters:
+      - $ref: '#/components/parameters/social_playerId'
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/social_PlayerProfile'
+                - type: object
+                  required:
+                  - status
+                  - corporations
+                  properties:
+                    status:
+                      $ref: '#/components/schemas/social_PresenceStatus'
+                    corporations:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/social_CorporationRef'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+      security:
+      - bearerAuth: []
+    servers: *id001
+  /api/reports:
+    post:
+      tags:
+      - social
+      operationId: createReport
+      summary: Report a player or a corporation
+      description: Reporting a player costs them `REPUTATION_REPORT_PENALTY` (refunded if the report is dismissed).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_CreateReport'
+      responses:
+        '201':
+          description: Report filed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Report'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+      security:
+      - bearerAuth: []
+    servers: *id001
+    get:
+      tags:
+      - social
+      operationId: listMyReports
+      summary: Reports I filed
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      responses:
+        '200':
+          description: Reports, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_Report'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+      security:
+      - bearerAuth: []
+  /api/transfers:
+    post:
+      tags:
+      - economie
+      summary: Direct credits transfer to another player (automatic tax, payer side)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/economie_TransferBody'
+      responses:
+        '201':
+          description: Transfer recorded (a tax may have been collected)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_MovementResult'
+        '400':
+          $ref: '#/components/responses/economie_ValidationError'
+        '401':
+          $ref: '#/components/responses/economie_Unauthorized'
+        '404':
+          $ref: '#/components/responses/economie_NotFound'
+        '409':
+          description: Insufficient balance or already recorded `externalId` (`INSUFFICIENT_FUNDS` / `DUPLICATE_EXTERNAL_ID`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/economie_Error'
+        '403':
+          $ref: '#/components/responses/economie_Forbidden'
+      security:
+      - bearerAuth: []
+    servers: *id004
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'Keycloak access token (RS256). The player id is the `sub` claim. Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id`,
+        `X-Player-Name`, `X-Player-Roles` headers.
+
+        '
+  schemas:
+    mission_MissionStatus:
+      type: string
+      enum:
+      - available
+      - active
+      - completed
+      - cancelled
+      - expired
+    mission_MissionKind:
+      type: string
+      enum:
+      - dynamic
+      - scenario
+      - player
+    mission_MissionCategory:
+      type: string
+      enum:
+      - delivery
+      - transport
+      - generic
+    mission_MissionVisibility:
+      type: string
+      enum:
+      - public
+      - corporation
+    mission_EscrowStatus:
+      type: string
+      enum:
+      - none
+      - pending
+      - held
+      - refunded
+      - claimed
+    mission_IssuerType:
+      type: string
+      enum:
+      - system
+      - corporation
+      - city
+      - player
+    mission_ObjectiveType:
+      type: string
+      enum:
+      - deliver_material
+      - transport
+      - visit
+      - custom
+    mission_ObjectiveStatus:
+      type: string
+      enum:
+      - pending
+      - in_progress
+      - completed
+      - failed
+    mission_AssignmentStatus:
+      type: string
+      enum:
+      - active
+      - completed
+      - abandoned
+      - expired
+    mission_Reward:
+      type: object
+      description: At least one of `economic` or `item` is required.
+      properties:
+        economic:
+          type: object
+          required:
+          - currency
+          - amount
+          properties:
+            currency:
+              type: string
+              default: credits
+            amount:
+              type: integer
+              minimum: 1
+        item:
+          type: object
+          required:
+          - itemId
+          - quantity
+          properties:
+            itemId:
+              type: string
+              description: Inventory good type
+            quantity:
+              type: integer
+              minimum: 1
+            instanceId:
+              type: string
+              format: uuid
+              description: Unique-instance reward (single assignee only)
+    mission_Mission:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        kind:
+          $ref: '#/components/schemas/mission_MissionKind'
+        category:
+          $ref: '#/components/schemas/mission_MissionCategory'
+        issuerType:
+          $ref: '#/components/schemas/mission_IssuerType'
+        issuerId:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          $ref: '#/components/schemas/mission_MissionStatus'
+        reward:
+          $ref: '#/components/schemas/mission_Reward'
+        visibility:
+          $ref: '#/components/schemas/mission_MissionVisibility'
+        maxAssignees:
+          type: integer
+        escrowStatus:
+          $ref: '#/components/schemas/mission_EscrowStatus'
+        escrowAmount:
+          type: integer
+          nullable: true
+        escrowCurrency:
+          type: string
+          nullable: true
+        escrowPayerId:
+          type: string
+          format: uuid
+          nullable: true
+        scriptId:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    mission_Objective:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/mission_ObjectiveType'
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        targetQuantity:
+          type: integer
+        unit:
+          type: string
+          nullable: true
+        locationFrom:
+          type: object
+          additionalProperties: true
+          nullable: true
+        locationTo:
+          type: object
+          additionalProperties: true
+          nullable: true
+        order:
+          type: integer
+        status:
+          $ref: '#/components/schemas/mission_ObjectiveStatus'
+        currentProgress:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    mission_Assignment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/mission_AssignmentStatus'
+        acceptedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        rewardAmount:
+          type: integer
+          nullable: true
+          description: Frozen reward share at completion
+        rewardSettled:
+          type: boolean
+        rewardExternalId:
+          type: string
+        rewardSettledAt:
+          type: string
+          format: date-time
+          nullable: true
+        rewardDetails:
+          type: object
+          additionalProperties: true
+          nullable: true
+    mission_PlayerMission:
+      type: object
+      properties:
+        assignment:
+          $ref: '#/components/schemas/mission_Assignment'
+        mission:
+          oneOf:
+          - $ref: '#/components/schemas/mission_Mission'
+          - type: 'null'
+    mission_Settlement:
+      type: object
+      properties:
+        settled:
+          type: boolean
+        skipped:
+          type: boolean
+        reason:
+          type: string
+          example: credited
+        assignment:
+          $ref: '#/components/schemas/mission_Assignment'
+    mission_CreateMission:
+      type: object
+      required:
+      - title
+      - objectives
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 4000
+        kind:
+          $ref: '#/components/schemas/mission_MissionKind'
+        category:
+          $ref: '#/components/schemas/mission_MissionCategory'
+        issuerType:
+          $ref: '#/components/schemas/mission_IssuerType'
+        issuerId:
+          type: string
+          format: uuid
+          nullable: true
+        reward:
+          $ref: '#/components/schemas/mission_Reward'
+        maxAssignees:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 1
+        scriptId:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        objectives:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/mission_CreateObjective'
+    mission_CreateObjective:
+      type: object
+      required:
+      - type
+      - title
+      properties:
+        type:
+          $ref: '#/components/schemas/mission_ObjectiveType'
+        title:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        targetQuantity:
+          type: integer
+          minimum: 1
+        unit:
+          type: string
+        locationFrom:
+          type: object
+          additionalProperties: true
+        locationTo:
+          type: object
+          additionalProperties: true
+        order:
+          type: integer
+          minimum: 0
+        payload:
+          type: object
+          additionalProperties: true
+    mission_UpdateMission:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 4000
+          nullable: true
+        reward:
+          $ref: '#/components/schemas/mission_Reward'
+        maxAssignees:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+    mission_PlayerReward:
+      type: object
+      description: 'At least one of `economic` or `item` is required. The economic reward is escrowed (debited) from the creator''s
+        wallet; the item reward is escrowed (held) from the creator''s inventory.
+
+        '
+      properties:
+        economic:
+          type: object
+          required:
+          - amount
+          properties:
+            currency:
+              type: string
+              default: credits
+            amount:
+              type: integer
+              minimum: 1
+        item:
+          type: object
+          required:
+          - itemId
+          - quantity
+          properties:
+            itemId:
+              type: string
+              description: Inventory good type
+            quantity:
+              type: integer
+              minimum: 1
+            instanceId:
+              type: string
+              format: uuid
+              description: Unique-instance reward (single assignee only)
+    mission_CreatePlayerMission:
+      type: object
+      required:
+      - title
+      - reward
+      - objectives
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 4000
+        category:
+          $ref: '#/components/schemas/mission_MissionCategory'
+        visibility:
+          $ref: '#/components/schemas/mission_MissionVisibility'
+        corporationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Required when `visibility` is `corporation`
+        reward:
+          $ref: '#/components/schemas/mission_PlayerReward'
+        maxAssignees:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 1
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        objectives:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/mission_CreateObjective'
+    mission_Error:
+      type: object
+      required:
+      - error
+      - message
+      - status
+      properties:
+        error:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+        status:
+          type: integer
+          example: 400
+    social_Error:
+      type: object
+      required:
+      - error
+      - message
+      - status
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples:
+          - VALIDATION_ERROR
+          - UNAUTHORIZED
+          - FORBIDDEN
+          - SERVICE_FORBIDDEN
+          - SANCTIONED
+          - NOT_FOUND
+          - CONFLICT
+          - BLOCKED
+          - INVALID_TARGET
+          - INTERNAL_ERROR
+        message:
+          type: string
+        status:
+          type: integer
+    social_ProfileIdentity:
+      type: object
+      description: Minimal profile identity returned to trusted services for name resolution
+      required:
+      - playerId
+      - displayName
+      - entityType
+      properties:
+        playerId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        entityType:
+          $ref: '#/components/schemas/social_ProfileKind'
+    social_PresenceStatus:
+      type: string
+      enum:
+      - online
+      - mission
+      - offline
+    social_CorporationRecruitmentMode:
+      type: string
+      enum:
+      - open
+      - apply
+      - closed
+    social_CorporationPermission:
+      type: string
+      enum:
+      - manage_corporation
+      - manage_ranks
+      - manage_members
+      - invite
+      - recruit
+    social_CorporationRequestKind:
+      type: string
+      enum:
+      - invitation
+      - application
+    social_ReputationSource:
+      type: string
+      enum:
+      - game
+      - block
+      - report
+      - sanction
+      - moderation
+      - rehabilitation
+    social_ReportTargetType:
+      type: string
+      enum:
+      - player
+      - corporation
+    social_ReportReason:
+      type: string
+      enum:
+      - harassment
+      - cheating
+      - griefing
+      - offensive_name
+      - scam
+      - other
+    social_ReportStatus:
+      type: string
+      enum:
+      - open
+      - reviewing
+      - resolved
+      - dismissed
+    social_EscalationLevel:
+      type: string
+      enum:
+      - moderator
+      - admin
+      - supervisor
+    social_SanctionType:
+      type: string
+      enum:
+      - warning
+      - mute
+      - suspension
+      - ban
+    social_RpSheet:
+      type: object
+      properties:
+        characterName:
+          type: string
+          maxLength: 64
+        story:
+          type: string
+          maxLength: 4000
+        alignment:
+          type: string
+          maxLength: 32
+    social_ProfileKind:
+      type: string
+      enum:
+      - player
+      - npc
+      description: '`player` = Keycloak-authenticated; `npc` = server-managed, excluded from reputation, sanctions and reports'
+    social_PlayerProfile:
+      type: object
+      required:
+      - playerId
+      - entityType
+      - displayName
+      - avatarUrl
+      - faction
+      - biography
+      - role
+      - reputation
+      - playtimeSeconds
+      - rpSheet
+      - createdAt
+      - updatedAt
+      properties:
+        playerId:
+          type: string
+          format: uuid
+          description: Keycloak subject (players) or server-assigned id (NPCs)
+        entityType:
+          $ref: '#/components/schemas/social_ProfileKind'
+        displayName:
+          type: string
+        avatarUrl:
+          type:
+          - string
+          - 'null'
+          format: uri
+        faction:
+          type:
+          - string
+          - 'null'
+        biography:
+          type:
+          - string
+          - 'null'
+        role:
+          type:
+          - string
+          - 'null'
+          description: In-game role reported by the game server
+        reputation:
+          type: integer
+        playtimeSeconds:
+          type: integer
+        rpSheet:
+          oneOf:
+          - $ref: '#/components/schemas/social_RpSheet'
+          - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    social_ProfilePatch:
+      type: object
+      minProperties: 1
+      properties:
+        displayName:
+          type: string
+          minLength: 2
+          maxLength: 32
+        avatarUrl:
+          type:
+          - string
+          - 'null'
+          format: uri
+          maxLength: 512
+        faction:
+          type:
+          - string
+          - 'null'
+          maxLength: 64
+        biography:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        rpSheet:
+          oneOf:
+          - $ref: '#/components/schemas/social_RpSheet'
+          - type: 'null'
+    social_Location:
+      type: object
+      properties:
+        system:
+          type: string
+          maxLength: 64
+        scene:
+          type: string
+          maxLength: 128
+        position:
+          type: object
+          required:
+          - x
+          - y
+          - z
+          properties:
+            x:
+              type: number
+            y:
+              type: number
+            z:
+              type: number
+    social_Presence:
+      type: object
+      required:
+      - status
+      - location
+      - updatedAt
+      properties:
+        status:
+          $ref: '#/components/schemas/social_PresenceStatus'
+        location:
+          oneOf:
+          - $ref: '#/components/schemas/social_Location'
+          - type: 'null'
+        updatedAt:
+          type: string
+          format: date-time
+    social_ActivityEntry:
+      type: object
+      required:
+      - id
+      - playerId
+      - type
+      - details
+      - createdAt
+      properties:
+        id:
+          type: integer
+        playerId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          examples:
+          - profile_created
+          - profile_updated
+          - friend_request_sent
+          - friend_added
+          - player_blocked
+          - corporation_application_sent
+        details:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    social_TargetPlayer:
+      type: object
+      required:
+      - playerId
+      properties:
+        playerId:
+          type: string
+          format: uuid
+    social_Friendship:
+      type: object
+      required:
+      - id
+      - requesterId
+      - addresseeId
+      - status
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: integer
+        requesterId:
+          type: string
+          format: uuid
+        addresseeId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - pending
+          - accepted
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    social_Friend:
+      allOf:
+      - $ref: '#/components/schemas/social_PlayerProfile'
+      - type: object
+        required:
+        - friendsSince
+        - status
+        - location
+        properties:
+          friendsSince:
+            type: string
+            format: date-time
+          status:
+            $ref: '#/components/schemas/social_PresenceStatus'
+          location:
+            oneOf:
+            - $ref: '#/components/schemas/social_Location'
+            - type: 'null'
+    social_FriendRequest:
+      type: object
+      required:
+      - id
+      - createdAt
+      - player
+      properties:
+        id:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        player:
+          $ref: '#/components/schemas/social_PlayerProfile'
+          description: The other party
+    social_FriendSuggestion:
+      allOf:
+      - $ref: '#/components/schemas/social_PlayerProfile'
+      - type: object
+        required:
+        - lastMetAt
+        - encounters
+        properties:
+          lastMetAt:
+            type: string
+            format: date-time
+          encounters:
+            type: integer
+    social_CorporationRef:
+      type: object
+      required:
+      - id
+      - name
+      - ticker
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        ticker:
+          type: string
+    social_Corporation:
+      type: object
+      required:
+      - id
+      - name
+      - ticker
+      - logoUrl
+      - description
+      - recruitment
+      - parentId
+      - ceoId
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        ticker:
+          type: string
+          description: Uppercase alphanumeric, 2–5 chars
+        logoUrl:
+          type:
+          - string
+          - 'null'
+          format: uri
+        description:
+          type:
+          - string
+          - 'null'
+        recruitment:
+          $ref: '#/components/schemas/social_CorporationRecruitmentMode'
+        parentId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Holding company this corporation is a subsidiary of
+        ceoId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    social_CorporationSummary:
+      allOf:
+      - $ref: '#/components/schemas/social_Corporation'
+      - type: object
+        required:
+        - memberCount
+        properties:
+          memberCount:
+            type: integer
+    social_CreateCorporation:
+      type: object
+      required:
+      - name
+      - ticker
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 48
+        ticker:
+          type: string
+          minLength: 2
+          maxLength: 5
+          pattern: ^[A-Za-z0-9]+$
+          description: Stored uppercased
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        logoUrl:
+          type:
+          - string
+          - 'null'
+          format: uri
+          maxLength: 512
+        recruitment:
+          $ref: '#/components/schemas/social_CorporationRecruitmentMode'
+          default: apply
+    social_CorporationPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 48
+        ticker:
+          type: string
+          minLength: 2
+          maxLength: 5
+          pattern: ^[A-Za-z0-9]+$
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        logoUrl:
+          type:
+          - string
+          - 'null'
+          format: uri
+          maxLength: 512
+        recruitment:
+          $ref: '#/components/schemas/social_CorporationRecruitmentMode'
+    social_CorporationRank:
+      type: object
+      required:
+      - id
+      - corporationId
+      - name
+      - priority
+      - permissions
+      - isCeo
+      - isDefault
+      properties:
+        id:
+          type: integer
+        corporationId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        priority:
+          type: integer
+          description: Higher wins; a member may only act on ranks strictly below their own
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/social_CorporationPermission'
+        isCeo:
+          type: boolean
+          description: Unique, undeletable, implicitly has all permissions
+        isDefault:
+          type: boolean
+          description: Rank given to new members
+    social_CreateRank:
+      type: object
+      required:
+      - name
+      - priority
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 32
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 99
+        permissions:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/social_CorporationPermission'
+        isDefault:
+          type: boolean
+    social_RankPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 32
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 99
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/social_CorporationPermission'
+        isDefault:
+          type: boolean
+    social_CorporationMembership:
+      type: object
+      required:
+      - corporationId
+      - playerId
+      - rankId
+      - joinedAt
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        rankId:
+          type: integer
+        joinedAt:
+          type: string
+          format: date-time
+    social_CorporationMember:
+      allOf:
+      - $ref: '#/components/schemas/social_PlayerProfile'
+      - type: object
+        required:
+        - joinedAt
+        - rank
+        - status
+        - location
+        properties:
+          joinedAt:
+            type: string
+            format: date-time
+          rank:
+            $ref: '#/components/schemas/social_CorporationRank'
+          status:
+            $ref: '#/components/schemas/social_PresenceStatus'
+          location:
+            oneOf:
+            - $ref: '#/components/schemas/social_Location'
+            - type: 'null'
+    social_CorporationJoinRequest:
+      type: object
+      required:
+      - id
+      - corporationId
+      - playerId
+      - kind
+      - message
+      - createdBy
+      - createdAt
+      properties:
+        id:
+          type: integer
+        corporationId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/social_CorporationRequestKind'
+        message:
+          type:
+          - string
+          - 'null'
+        createdBy:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Inviting member for invitations; null for applications
+        createdAt:
+          type: string
+          format: date-time
+    social_CorporationRequest:
+      description: A corporation-side view of a request, with the player's profile
+      allOf:
+      - $ref: '#/components/schemas/social_CorporationJoinRequest'
+      - type: object
+        required:
+        - player
+        properties:
+          player:
+            $ref: '#/components/schemas/social_PlayerProfile'
+    social_PlayerCorporationRequest:
+      description: A player-side view of a request, with the corporation reference
+      allOf:
+      - $ref: '#/components/schemas/social_CorporationJoinRequest'
+      - type: object
+        required:
+        - corporation
+        properties:
+          corporation:
+            type: object
+            required:
+            - id
+            - name
+            - ticker
+            - logoUrl
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              ticker:
+                type: string
+              logoUrl:
+                type:
+                - string
+                - 'null'
+                format: uri
+    social_JoinedResult:
+      type: object
+      required:
+      - joined
+      properties:
+        joined:
+          type: boolean
+          const: true
+    social_PendingRequestResult:
+      type: object
+      required:
+      - joined
+      - request
+      properties:
+        joined:
+          type: boolean
+          const: false
+        request:
+          $ref: '#/components/schemas/social_CorporationJoinRequest'
+    social_CorporationActivityEntry:
+      type: object
+      required:
+      - id
+      - corporationId
+      - actorId
+      - type
+      - details
+      - createdAt
+      properties:
+        id:
+          type: integer
+        corporationId:
+          type: string
+          format: uuid
+        actorId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        type:
+          type: string
+          examples:
+          - corporation_created
+          - member_joined
+          - member_left
+          - member_kicked
+          - rank_changed
+          - player_invited
+          - ceo_transferred
+        details:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    social_ReputationEvent:
+      type: object
+      required:
+      - id
+      - playerId
+      - delta
+      - balance
+      - source
+      - reason
+      - actorId
+      - details
+      - createdAt
+      properties:
+        id:
+          type: integer
+        playerId:
+          type: string
+          format: uuid
+        delta:
+          type: integer
+        balance:
+          type: integer
+          description: Score after applying the delta
+        source:
+          $ref: '#/components/schemas/social_ReputationSource'
+        reason:
+          type: string
+        actorId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        details:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    social_CreateReport:
+      type: object
+      required:
+      - targetType
+      - targetId
+      - reason
+      properties:
+        targetType:
+          $ref: '#/components/schemas/social_ReportTargetType'
+        targetId:
+          type: string
+          format: uuid
+          description: Player id or corporation id depending on `targetType`
+        reason:
+          $ref: '#/components/schemas/social_ReportReason'
+        message:
+          type: string
+          maxLength: 1000
+    social_Report:
+      type: object
+      required:
+      - id
+      - reporterId
+      - targetType
+      - targetPlayerId
+      - targetCorporationId
+      - reason
+      - message
+      - status
+      - escalation
+      - resolvedBy
+      - resolutionNote
+      - resolvedAt
+      - createdAt
+      properties:
+        id:
+          type: integer
+        reporterId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Null for reports raised automatically by the system
+        targetType:
+          $ref: '#/components/schemas/social_ReportTargetType'
+        targetPlayerId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        targetCorporationId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        reason:
+          type: string
+          enum:
+          - harassment
+          - cheating
+          - griefing
+          - offensive_name
+          - scam
+          - other
+          - reputation_threshold
+          description: '`reputation_threshold` is set on system-raised reports'
+        message:
+          type:
+          - string
+          - 'null'
+        status:
+          $ref: '#/components/schemas/social_ReportStatus'
+        escalation:
+          $ref: '#/components/schemas/social_EscalationLevel'
+        resolvedBy:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        resolutionNote:
+          type:
+          - string
+          - 'null'
+        resolvedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    social_ReportView:
+      allOf:
+      - $ref: '#/components/schemas/social_Report'
+      - type: object
+        required:
+        - reporterName
+        - targetName
+        properties:
+          reporterName:
+            type:
+            - string
+            - 'null'
+          targetName:
+            type:
+            - string
+            - 'null'
+    social_Sanction:
+      type: object
+      required:
+      - id
+      - playerId
+      - type
+      - reason
+      - automatic
+      - issuedBy
+      - expiresAt
+      - revokedAt
+      - revokedBy
+      - createdAt
+      properties:
+        id:
+          type: integer
+        playerId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/social_SanctionType'
+        reason:
+          type: string
+        automatic:
+          type: boolean
+          description: Issued by the reputation thresholds rather than a moderator
+        issuedBy:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        expiresAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: Null = permanent (or instantaneous for warnings)
+        revokedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        revokedBy:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    social_ModerationLogEntry:
+      type: object
+      required:
+      - id
+      - actorId
+      - action
+      - targetPlayerId
+      - details
+      - createdAt
+      properties:
+        id:
+          type: integer
+        actorId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        action:
+          type: string
+        targetPlayerId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        details:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    social_CommunityStats:
+      type: object
+      required:
+      - players
+      - corporations
+      - reports
+      - sanctions
+      - activityLast24h
+      - mostReported
+      - lowestReputation
+      properties:
+        players:
+          type: object
+          required:
+          - total
+          - online
+          properties:
+            total:
+              type: integer
+            online:
+              type: integer
+        corporations:
+          type: object
+          required:
+          - total
+          - top
+          properties:
+            total:
+              type: integer
+            top:
+              type: array
+              description: Top 5 by member count
+              items:
+                type: object
+                required:
+                - id
+                - name
+                - ticker
+                - members
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  ticker:
+                    type: string
+                  members:
+                    type: integer
+        reports:
+          type: object
+          description: Count per status (missing key = 0)
+          additionalProperties:
+            type: integer
+          propertyNames:
+            $ref: '#/components/schemas/social_ReportStatus'
+        sanctions:
+          type: object
+          required:
+          - active
+          properties:
+            active:
+              type: integer
+        activityLast24h:
+          type: integer
+        mostReported:
+          type: array
+          description: Top 5 players by open/reviewing reports
+          items:
+            type: object
+            required:
+            - playerId
+            - reports
+            properties:
+              playerId:
+                type: string
+                format: uuid
+              reports:
+                type: integer
+        lowestReputation:
+          type: array
+          description: 5 lowest scores
+          items:
+            type: object
+            required:
+            - playerId
+            - displayName
+            - reputation
+            properties:
+              playerId:
+                type: string
+                format: uuid
+              displayName:
+                type: string
+              reputation:
+                type: integer
+    economie_Error:
+      type: object
+      required:
+      - error
+      - message
+      - status
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples:
+          - VALIDATION_ERROR
+          - UNAUTHORIZED
+          - FORBIDDEN
+          - SERVICE_FORBIDDEN
+          - ACCOUNT_LOCKED
+          - INSUFFICIENT_FUNDS
+          - DUPLICATE_EXTERNAL_ID
+          - NOT_CORPORATION_MEMBER
+          - NOT_FOUND
+          - INTERNAL_ERROR
+        message:
+          type: string
+        status:
+          type: integer
+    economie_AccountHolderType:
+      type: string
+      enum:
+      - player
+      - corporation
+      - system
+    economie_AccountStatus:
+      type: string
+      enum:
+      - active
+      - locked
+      - frozen
+    economie_TransactionType:
+      type: string
+      enum:
+      - transfer
+      - deposit
+      - withdrawal
+      - tax
+      - fee
+      - mission_reward
+      - salary
+      - prime
+      - donation
+      - corporation_fund
+      - system
+    economie_CorporationRole:
+      type: string
+      enum:
+      - leader
+      - treasurer
+      - member
+    economie_Account:
+      type: object
+      required:
+      - id
+      - holderType
+      - holderId
+      - currency
+      - balance
+      - status
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        holderType:
+          $ref: '#/components/schemas/economie_AccountHolderType'
+        holderId:
+          type: string
+          format: uuid
+          description: Keycloak subject for players
+          Social `corporationId` for corporations: null
+          reserved key for the system vault: null
+        currency:
+          type: string
+          default: credits
+        balance:
+          type: integer
+          description: Integer minor units
+          never negative: null
+        status:
+          $ref: '#/components/schemas/economie_AccountStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    economie_Transaction:
+      type: object
+      required:
+      - id
+      - type
+      - currency
+      - amount
+      - taxAmount
+      - feeAmount
+      - createdAt
+      properties:
+        id:
+          type: integer
+          format: int64
+        fromAccountId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        toAccountId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        type:
+          $ref: '#/components/schemas/economie_TransactionType'
+        currency:
+          type: string
+        amount:
+          type: integer
+          description: Amount credited to `toAccountId`
+        taxAmount:
+          type: integer
+          description: Tax collected from the payer and routed to `details.taxTo`
+        feeAmount:
+          type: integer
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: Idempotency key unique when present
+        reference:
+          type:
+          - string
+          - 'null'
+        caller:
+          type:
+          - string
+          - 'null'
+          description: Keycloak client id of the calling service; null for player-driven movements
+        details:
+          oneOf:
+          - type: object
+            description: Free-form; `taxTo` records where the collected tax went (`system` or an account id)
+          - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+    economie_MovementResult:
+      type: object
+      required:
+      - transaction
+      - amount
+      - taxAmount
+      properties:
+        transaction:
+          $ref: '#/components/schemas/economie_Transaction'
+        amount:
+          type: integer
+        taxAmount:
+          type: integer
+        fromBalance:
+          type: integer
+          description: New payer balance after the movement
+        toBalance:
+          type: integer
+          description: New receiver balance after the movement
+    economie_TransferBody:
+      type: object
+      required:
+      - toPlayerId
+      - amount
+      properties:
+        toPlayerId:
+          type: string
+          format: uuid
+          description: Must differ from the caller
+        amount:
+          type: integer
+          minimum: 1
+          description: Integer minor units — what the receiver gets; the payer also pays the tax
+        memo:
+          type: string
+          maxLength: 256
+    economie_MovementBody:
+      type: object
+      required:
+      - amount
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+        currency:
+          type: string
+          maxLength: 16
+          default: credits
+        reference:
+          type: string
+          maxLength: 128
+        externalId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Idempotency key; replaying a movement returns `409 DUPLICATE_EXTERNAL_ID`
+        type:
+          description: Overrides the default type (default `deposit` on credit, `withdrawal` on debit)
+          oneOf:
+          - type: string
+          - $ref: '#/components/schemas/economie_TransactionType'
+    economie_DonationBody:
+      type: object
+      required:
+      - amount
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+        memo:
+          type: string
+          maxLength: 256
+    economie_CorporationMember:
+      type: object
+      required:
+      - corporationId
+      - playerId
+      - role
+      - joinedAt
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/economie_CorporationRole'
+        joinedAt:
+          type: string
+          format: date-time
+    economie_MemberRoleBody:
+      type: object
+      required:
+      - role
+      properties:
+        role:
+          $ref: '#/components/schemas/economie_CorporationRole'
+    economie_CorporationSettings:
+      type: object
+      required:
+      - corporationId
+      - taxRateBps
+      - allowDonations
+      - updatedAt
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        taxRateBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: Internal tax on donations
+          in basis points; stays in the corporation: null
+        allowDonations:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+    economie_CorporationSettingsBody:
+      type: object
+      minProperties: 1
+      properties:
+        taxRateBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+        allowDonations:
+          type: boolean
+    economie_CorporationReport:
+      type: object
+      required:
+      - corporationId
+      - totals
+      - byType
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        from:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        to:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        totals:
+          type: array
+          description: Inflow/outflow per currency (outflow includes taxes paid by the corporation)
+          items:
+            type: object
+            required:
+            - currency
+            - inflow
+            - outflow
+            properties:
+              currency:
+                type: string
+              inflow:
+                type: integer
+              outflow:
+                type: integer
+        byType:
+          type: array
+          description: Breakdown of the same flows by transaction type and currency
+          items:
+            type: object
+            required:
+            - type
+            - currency
+            - count
+            - inflow
+            - outflow
+            properties:
+              type:
+                $ref: '#/components/schemas/economie_TransactionType'
+              currency:
+                type: string
+              count:
+                type: integer
+              inflow:
+                type: integer
+              outflow:
+                type: integer
+    economie_CorporationSalaryRole:
+      type: object
+      required:
+      - corporationId
+      - role
+      - currency
+      - amount
+      - enabled
+      - updatedAt
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/economie_CorporationRole'
+        currency:
+          type: string
+          default: credits
+        amount:
+          type: integer
+          minimum: 0
+          description: Integer minor units paid per period
+        enabled:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+    economie_CorporationMemberSalary:
+      type: object
+      required:
+      - corporationId
+      - playerId
+      - currency
+      - amount
+      - enabled
+      - updatedAt
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          default: credits
+        amount:
+          type: integer
+          minimum: 0
+          description: Overrides the role default
+        enabled:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+    economie_CorporationSalaries:
+      type: object
+      required:
+      - corporationId
+      - roleDefaults
+      - memberOverrides
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        roleDefaults:
+          type: array
+          items:
+            $ref: '#/components/schemas/economie_CorporationSalaryRole'
+        memberOverrides:
+          type: array
+          items:
+            $ref: '#/components/schemas/economie_CorporationMemberSalary'
+    economie_SalaryBody:
+      type: object
+      required:
+      - amount
+      properties:
+        amount:
+          type: integer
+          minimum: 0
+          description: Integer minor units; 0 disables the payout
+        currency:
+          type: string
+          maxLength: 16
+          default: credits
+        enabled:
+          type: boolean
+          default: true
+    economie_PayrollResult:
+      type: object
+      required:
+      - corporationId
+      - currency
+      - paid
+      - skipped
+      - total
+      properties:
+        corporationId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+        paid:
+          type: array
+          items:
+            type: object
+            required:
+            - playerId
+            - amount
+            - source
+            properties:
+              playerId:
+                type: string
+                format: uuid
+              amount:
+                type: integer
+              source:
+                type: string
+                enum:
+                - member
+                - role
+                description: Whether the amount came from a per-member override or the role default
+        skipped:
+          type: array
+          description: Members with no enabled salary
+          items:
+            type: string
+            format: uuid
+        total:
+          type: integer
+          description: Total debited from the treasury
+    economie_PrimeBody:
+      type: object
+      required:
+      - amount
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          description: Integer minor units
+        currency:
+          type: string
+          maxLength: 16
+          default: credits
+        memo:
+          type: string
+          maxLength: 256
+    economie_PrimeResult:
+      type: object
+      required:
+      - transaction
+      - treasuryBalance
+      - memberBalance
+      properties:
+        transaction:
+          $ref: '#/components/schemas/economie_Transaction'
+        treasuryBalance:
+          type: integer
+        memberBalance:
+          type: integer
+    economie_EconomyStats:
+      type: object
+      required:
+      - moneySupply
+      - transactions
+      - richestPlayers
+      - richestCorporations
+      - series
+      properties:
+        moneySupply:
+          type: array
+          description: Total balance and account count per currency
+          items:
+            type: object
+            required:
+            - currency
+            - total
+            - accounts
+            properties:
+              currency:
+                type: string
+              total:
+                type: integer
+              accounts:
+                type: integer
+        transactions:
+          type: object
+          required:
+          - total
+          - period
+          properties:
+            total:
+              $ref: '#/components/schemas/economie_TransactionTotals'
+            period:
+              $ref: '#/components/schemas/economie_TransactionTotals'
+        richestPlayers:
+          type: array
+          description: Holder ids only; the admin UI resolves display names through the Social service
+          items:
+            $ref: '#/components/schemas/economie_RichestHolder'
+        richestCorporations:
+          type: array
+          items:
+            $ref: '#/components/schemas/economie_RichestHolder'
+        series:
+          type: array
+          description: Daily transaction count, volume and tax collected
+          items:
+            type: object
+            required:
+            - date
+            - transactions
+            - volume
+            - tax
+            properties:
+              date:
+                type: string
+                description: Day in YYYY-MM-DD
+              transactions:
+                type: integer
+              volume:
+                type: integer
+              tax:
+                type: integer
+    economie_TransactionTotals:
+      type: object
+      required:
+      - count
+      - volume
+      - tax
+      - fee
+      properties:
+        count:
+          type: integer
+        volume:
+          type: integer
+          description: Sum of credited amounts
+        tax:
+          type: integer
+        fee:
+          type: integer
+    economie_RichestHolder:
+      type: object
+      required:
+      - holderId
+      - currency
+      - balance
+      properties:
+        holderId:
+          type: string
+          format: uuid
+          description: Player id (Keycloak subject) or corporation id
+        currency:
+          type: string
+        balance:
+          type: integer
+        displayName:
+          type:
+          - string
+          - 'null'
+          description: Player pseudonym resolved through Social (null when unknown or for corporations)
+    economie_AdminPlayer:
+      type: object
+      required:
+      - playerId
+      - displayName
+      - entityType
+      - accounts
+      properties:
+        playerId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        entityType:
+          type: string
+          enum:
+          - player
+          - npc
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/economie_Account'
+    inventory_Error:
+      type: object
+      required:
+      - error
+      - message
+      - status
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples:
+          - VALIDATION_ERROR
+          - UNAUTHORIZED
+          - FORBIDDEN
+          - SERVICE_FORBIDDEN
+          - NOT_CORPORATION_MEMBER
+          - NOT_FOUND
+          - CONFLICT
+          - INSUFFICIENT_GOODS
+          - INTERNAL_ERROR
+        message:
+          type: string
+        status:
+          type: integer
+    inventory_HolderType:
+      type: string
+      enum:
+      - player
+      - npc
+      - corporation
+      - system
+    inventory_GoodKind:
+      type: string
+      enum:
+      - stack
+      - instance
+    inventory_InstanceStatus:
+      type: string
+      enum:
+      - stored
+      - in_world
+    inventory_HoldKind:
+      type: string
+      enum:
+      - stack
+      - instance
+    inventory_HoldStatus:
+      type: string
+      enum:
+      - active
+      - consumed
+      - released
+    inventory_HoldRefType:
+      type: string
+      enum:
+      - market_order
+      - mission_escrow
+      - manual
+    inventory_Holder:
+      type: object
+      required:
+      - holderType
+      - holderId
+      properties:
+        holderType:
+          $ref: '#/components/schemas/inventory_HolderType'
+        holderId:
+          type: string
+          format: uuid
+          description: Player/NPC Keycloak subject
+          or corporation id (both owned by Social): null
+    inventory_Stack:
+      type: object
+      required:
+      - holderType
+      - holderId
+      - goodType
+      - quantity
+      - updatedAt
+      properties:
+        holderType:
+          $ref: '#/components/schemas/inventory_HolderType'
+        holderId:
+          type: string
+          format: uuid
+        goodType:
+          type: string
+        quantity:
+          type: integer
+          description: Total owned quantity (integer units)
+        updatedAt:
+          type: string
+          format: date-time
+    inventory_StackView:
+      allOf:
+      - $ref: '#/components/schemas/inventory_Stack'
+      - type: object
+        required:
+        - held
+        - available
+        properties:
+          held:
+            type: integer
+            description: Quantity reserved by active holds
+          available:
+            type: integer
+            description: '`quantity - held`, the tradable/consumable part'
+    inventory_Instance:
+      type: object
+      required:
+      - id
+      - goodType
+      - holderType
+      - holderId
+      - status
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable instance UUID
+        goodType:
+          type: string
+        holderType:
+          $ref: '#/components/schemas/inventory_HolderType'
+        holderId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/inventory_InstanceStatus'
+        metadata:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    inventory_HolderInventory:
+      type: object
+      required:
+      - holderType
+      - holderId
+      - stacks
+      - instances
+      properties:
+        holderType:
+          $ref: '#/components/schemas/inventory_HolderType'
+        holderId:
+          type: string
+          format: uuid
+        stacks:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory_StackView'
+        instances:
+          type: array
+          items:
+            $ref: '#/components/schemas/inventory_Instance'
+    inventory_Hold:
+      type: object
+      required:
+      - id
+      - holderType
+      - holderId
+      - kind
+      - goodType
+      - quantity
+      - refType
+      - status
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        holderType:
+          $ref: '#/components/schemas/inventory_HolderType'
+        holderId:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/inventory_HoldKind'
+        goodType:
+          type: string
+        quantity:
+          type: integer
+        instanceId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        refType:
+          $ref: '#/components/schemas/inventory_HoldRefType'
+        refId:
+          type:
+          - string
+          - 'null'
+        status:
+          $ref: '#/components/schemas/inventory_HoldStatus'
+        details:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        expiresAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    inventory_GoodQuantityBody:
+      type: object
+      required:
+      - goodType
+      - quantity
+      properties:
+        goodType:
+          type: string
+          maxLength: 128
+        quantity:
+          type: integer
+          minimum: 1
+    inventory_RegisterInstanceBody:
+      type: object
+      required:
+      - instanceId
+      - goodType
+      properties:
+        instanceId:
+          type: string
+          format: uuid
+        goodType:
+          type: string
+          maxLength: 128
+        metadata:
+          type: object
+          additionalProperties: true
+    inventory_TransferStackBody:
+      type: object
+      required:
+      - from
+      - to
+      - goodType
+      - quantity
+      properties:
+        from:
+          $ref: '#/components/schemas/inventory_Holder'
+        to:
+          $ref: '#/components/schemas/inventory_Holder'
+        goodType:
+          type: string
+          maxLength: 128
+        quantity:
+          type: integer
+          minimum: 1
+    inventory_TransferInstanceBody:
+      type: object
+      required:
+      - from
+      - to
+      - instanceId
+      properties:
+        from:
+          $ref: '#/components/schemas/inventory_Holder'
+        to:
+          $ref: '#/components/schemas/inventory_Holder'
+        instanceId:
+          type: string
+          format: uuid
+    inventory_CreateHoldBody:
+      type: object
+      required:
+      - kind
+      - goodType
+      - refType
+      properties:
+        kind:
+          $ref: '#/components/schemas/inventory_HoldKind'
+        goodType:
+          type: string
+          maxLength: 128
+        quantity:
+          type: integer
+          minimum: 1
+          description: Required for stack holds
+        instanceId:
+          type: string
+          format: uuid
+          description: Required for instance holds
+        refType:
+          $ref: '#/components/schemas/inventory_HoldRefType'
+        refId:
+          type: string
+          maxLength: 128
+          description: Required for non-manual holds
+        expiresAt:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true
+    market_Error:
+      type: object
+      required:
+      - error
+      - message
+      - status
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples:
+          - VALIDATION_ERROR
+          - UNAUTHORIZED
+          - FORBIDDEN
+          - SERVICE_FORBIDDEN
+          - NOT_CORPORATION_MEMBER
+          - NOT_FOUND
+          - CONFLICT
+          - INSUFFICIENT_GOODS
+          - INSUFFICIENT_FUNDS
+          - GOOD_DISABLED
+          - GOOD_KIND_MISMATCH
+          - INTERNAL_ERROR
+        message:
+          type: string
+        status:
+          type: integer
+    market_HolderType:
+      type: string
+      enum:
+      - player
+      - npc
+      - corporation
+      - system
+    market_GoodKind:
+      type: string
+      enum:
+      - stack
+      - instance
+    market_OrderSide:
+      type: string
+      enum:
+      - buy
+      - sell
+    market_OrderStatus:
+      type: string
+      enum:
+      - open
+      - partially_filled
+      - filled
+      - cancelled
+      - expired
+    market_DemandStatus:
+      type: string
+      enum:
+      - open
+      - fulfilled
+      - cancelled
+      - expired
+    market_TradeStatus:
+      type: string
+      enum:
+      - pending
+      - settled
+      - cancelled
+    market_CatalogEntry:
+      type: object
+      required:
+      - goodType
+      - kind
+      - enabled
+      - createdAt
+      - updatedAt
+      properties:
+        goodType:
+          type: string
+        kind:
+          $ref: '#/components/schemas/market_GoodKind'
+        unit:
+          type:
+          - string
+          - 'null'
+        displayName:
+          type:
+          - string
+          - 'null'
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    market_Order:
+      type: object
+      required:
+      - id
+      - side
+      - goodType
+      - kind
+      - quantity
+      - remaining
+      - price
+      - currency
+      - holderType
+      - holderId
+      - status
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        side:
+          $ref: '#/components/schemas/market_OrderSide'
+        goodType:
+          type: string
+        kind:
+          $ref: '#/components/schemas/market_GoodKind'
+        instanceId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        quantity:
+          type: integer
+        remaining:
+          type: integer
+        price:
+          type: integer
+          description: Credits per unit (stack) or total price (instance)
+        currency:
+          type: string
+        holderType:
+          $ref: '#/components/schemas/market_HolderType'
+        holderId:
+          type: string
+          format: uuid
+        isCorporation:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/market_OrderStatus'
+        createdBy:
+          type:
+          - string
+          - 'null'
+        expiresAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    market_Demand:
+      type: object
+      required:
+      - id
+      - goodType
+      - kind
+      - quantity
+      - maxPrice
+      - currency
+      - holderType
+      - holderId
+      - status
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        goodType:
+          type: string
+        kind:
+          $ref: '#/components/schemas/market_GoodKind'
+        instanceId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        quantity:
+          type: integer
+        maxPrice:
+          type: integer
+          description: Maximum credits per unit
+        currency:
+          type: string
+        holderType:
+          $ref: '#/components/schemas/market_HolderType'
+        holderId:
+          type: string
+          format: uuid
+        isCorporation:
+          type: boolean
+        message:
+          type:
+          - string
+          - 'null'
+        status:
+          $ref: '#/components/schemas/market_DemandStatus'
+        createdBy:
+          type:
+          - string
+          - 'null'
+        expiresAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    market_Trade:
+      type: object
+      required:
+      - id
+      - goodType
+      - kind
+      - quantity
+      - unitPrice
+      - totalPrice
+      - currency
+      - buyerType
+      - buyerId
+      - sellerType
+      - sellerId
+      - status
+      - goodsMoved
+      - moneyMoved
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        goodType:
+          type: string
+        kind:
+          $ref: '#/components/schemas/market_GoodKind'
+        instanceId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        quantity:
+          type: integer
+        unitPrice:
+          type: integer
+        totalPrice:
+          type: integer
+        currency:
+          type: string
+        buyerType:
+          $ref: '#/components/schemas/market_HolderType'
+        buyerId:
+          type: string
+          format: uuid
+        sellerType:
+          $ref: '#/components/schemas/market_HolderType'
+        sellerId:
+          type: string
+          format: uuid
+        buyOrderId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        sellOrderId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        demandId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        status:
+          $ref: '#/components/schemas/market_TradeStatus'
+        goodsMoved:
+          type: boolean
+          description: Inventory ownership has been transferred
+        moneyMoved:
+          type: boolean
+          description: Credits have been moved between the wallets
+        failureReason:
+          type:
+          - string
+          - 'null'
+        createdAt:
+          type: string
+          format: date-time
+        settledAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    market_OrderBody:
+      type: object
+      required:
+      - side
+      - goodType
+      - kind
+      - quantity
+      - price
+      properties:
+        side:
+          $ref: '#/components/schemas/market_OrderSide'
+        goodType:
+          type: string
+          maxLength: 128
+        kind:
+          $ref: '#/components/schemas/market_GoodKind'
+        instanceId:
+          type: string
+          format: uuid
+          description: Required for instance sell orders
+        quantity:
+          type: integer
+          minimum: 1
+        price:
+          type: integer
+          minimum: 0
+          description: Credits per unit (stack) or total price (instance)
+        currency:
+          type: string
+          maxLength: 16
+          default: credits
+        corporationId:
+          type: string
+          format: uuid
+          description: Trade from a corporation the caller belongs to
+    market_DemandBody:
+      type: object
+      required:
+      - goodType
+      - kind
+      - quantity
+      - maxPrice
+      properties:
+        goodType:
+          type: string
+          maxLength: 128
+        kind:
+          $ref: '#/components/schemas/market_GoodKind'
+        instanceId:
+          type: string
+          format: uuid
+          description: Required for instance demands
+        quantity:
+          type: integer
+          minimum: 1
+        maxPrice:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          maxLength: 16
+          default: credits
+        message:
+          type: string
+          maxLength: 500
+        corporationId:
+          type: string
+          format: uuid
+    market_FulfillBody:
+      type: object
+      required:
+      - unitPrice
+      properties:
+        unitPrice:
+          type: integer
+          minimum: 0
+        corporationId:
+          type: string
+          format: uuid
+          description: Fulfil from a corporation the caller belongs to
+    market_CatalogBody:
+      type: object
+      required:
+      - kind
+      properties:
+        kind:
+          $ref: '#/components/schemas/market_GoodKind'
+        unit:
+          type:
+          - string
+          - 'null'
+          maxLength: 32
+        displayName:
+          type:
+          - string
+          - 'null'
+          maxLength: 128
+        enabled:
+          type: boolean
+          default: true
+  parameters:
+    mission_MissionId:
+      name: missionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    mission_ObjectiveId:
+      name: objectiveId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    mission_PlayerId:
+      name: playerId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    mission_Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    mission_MissionStatus:
+      name: status
+      in: query
+      schema:
+        $ref: '#/components/schemas/mission_MissionStatus'
+    mission_MissionKind:
+      name: kind
+      in: query
+      schema:
+        $ref: '#/components/schemas/mission_MissionKind'
+    mission_MissionCategory:
+      name: category
+      in: query
+      schema:
+        $ref: '#/components/schemas/mission_MissionCategory'
+    mission_IssuerType:
+      name: issuerType
+      in: query
+      schema:
+        $ref: '#/components/schemas/mission_IssuerType'
+    mission_IssuerId:
+      name: issuerId
+      in: query
+      schema:
+        type: string
+        format: uuid
+    mission_Visibility:
+      name: visibility
+      in: query
+      schema:
+        $ref: '#/components/schemas/mission_MissionVisibility'
+    mission_AssignmentStatus:
+      name: status
+      in: query
+      schema:
+        $ref: '#/components/schemas/mission_AssignmentStatus'
+    social_playerId:
+      name: playerId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    social_corporationId:
+      name: corporationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    social_requestId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    social_reportId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    social_limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    social_search:
+      name: search
+      in: query
+      description: Case-insensitive substring; empty lists everything
+      schema:
+        type: string
+        maxLength: 64
+        default: ''
+    economie_playerId:
+      name: playerId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    economie_corporationId:
+      name: corporationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    economie_role:
+      name: role
+      in: path
+      required: true
+      description: Treasury role the salary applies to
+      schema:
+        $ref: '#/components/schemas/economie_CorporationRole'
+    economie_currencyQuery:
+      name: currency
+      in: query
+      description: Currency to pay in (defaults to `credits`)
+      schema:
+        type: string
+        maxLength: 16
+        default: credits
+    economie_days:
+      name: days
+      in: query
+      description: Length of the analytics window and time series, in days
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 365
+        default: 30
+    economie_top:
+      name: top
+      in: query
+      description: Number of richest holders returned per ranking
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    economie_limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    economie_from:
+      name: from
+      in: query
+      description: Start of the report period (ISO date/time, inclusive)
+      schema:
+        type: string
+        format: date-time
+    economie_to:
+      name: to
+      in: query
+      description: End of the report period (ISO date/time, inclusive)
+      schema:
+        type: string
+        format: date-time
+    inventory_holderType:
+      name: holderType
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/inventory_HolderType'
+    inventory_holderId:
+      name: holderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    inventory_corporationId:
+      name: corporationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    inventory_goodType:
+      name: goodType
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 128
+    inventory_instanceId:
+      name: instanceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    inventory_holdId:
+      name: holdId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    market_id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    market_goodType:
+      name: goodType
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 128
+    market_goodTypeOptional:
+      name: goodType
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 128
+    market_holderType:
+      name: holderType
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/market_HolderType'
+    market_holderId:
+      name: holderId
+      in: query
+      required: false
+      schema:
+        type: string
+        format: uuid
+    market_orderSide:
+      name: side
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/market_OrderSide'
+    market_orderStatus:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/market_OrderStatus'
+    market_demandStatus:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/market_DemandStatus'
+    market_tradeStatus:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/market_TradeStatus'
+    market_limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  responses:
+    mission_Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/mission_Error'
+    mission_Forbidden:
+      description: Authenticated but missing the required role
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/mission_Error'
+    mission_NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/mission_Error'
+    mission_ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/mission_Error'
+          examples:
+            invalid:
+              value:
+                error: VALIDATION_ERROR
+                message: 'objectives: Array must contain at least 1 element(s)'
+                status: 400
+    social_ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/social_Error'
+    social_Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/social_Error'
+    social_Forbidden:
+      description: Missing role or corporation permission (`FORBIDDEN`), or caller is suspended/banned (`SANCTIONED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/social_Error'
+    social_Sanctioned:
+      description: Caller is under an active suspension or ban (`SANCTIONED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/social_Error'
+    social_NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/social_Error'
+    social_Conflict:
+      description: State conflict (`CONFLICT`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/social_Error'
+    social_ServiceForbidden:
+      description: 'The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or the service account lacks the
+        route''s capability role (`FORBIDDEN`)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/social_Error'
+    economie_ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/economie_Error'
+    economie_Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/economie_Error'
+    economie_Forbidden:
+      description: 'Missing role / not a corporation member (`FORBIDDEN`, `NOT_CORPORATION_MEMBER`), account is locked/frozen
+        (`ACCOUNT_LOCKED`), or donations disabled (`DONATIONS_DISABLED`)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/economie_Error'
+    economie_NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/economie_Error'
+    economie_Conflict:
+      description: State conflict (`CONFLICT`, `INSUFFICIENT_FUNDS`, `DUPLICATE_EXTERNAL_ID`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/economie_Error'
+    economie_ServiceForbidden:
+      description: 'The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or the service account lacks the
+        route''s capability role (`FORBIDDEN`)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/economie_Error'
+    inventory_ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_Forbidden:
+      description: Not a corporation member (`NOT_CORPORATION_MEMBER`) or missing role (`FORBIDDEN`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_Conflict:
+      description: 'State conflict (`CONFLICT`, `INSUFFICIENT_GOODS`): good-type nature mismatch, held or insufficient goods,
+        instance already owned/held.
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_ServiceForbidden:
+      description: 'The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or the service account lacks the
+        route''s capability role (`FORBIDDEN`)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    market_ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/market_Error'
+    market_Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/market_Error'
+    market_Forbidden:
+      description: Not the resource owner (`FORBIDDEN`) or not a corporation member (`NOT_CORPORATION_MEMBER`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/market_Error'
+    market_NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/market_Error'
+    market_Conflict:
+      description: State conflict (`CONFLICT`, `INSUFFICIENT_GOODS`, `INSUFFICIENT_FUNDS`, unknown/disabled good)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/market_Error'
+    market_ServiceForbidden:
+      description: 'The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or lacks the route''s capability
+        role (`FORBIDDEN`)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/market_Error'

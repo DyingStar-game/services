@@ -13,15 +13,26 @@ import { recordEncounter } from '../services/encounters.service.js';
 import {
   addNpcCorporationMember,
   getCorporationMembership,
+  listCorporationMemberships,
   removeNpcCorporationMember,
 } from '../services/corporations.service.js';
 import { setPresence } from '../services/presence.service.js';
-import { applyStats, ensureNpcProfile, ensureProfile, getProfile } from '../services/profiles.service.js';
+import {
+  applyStats,
+  ensureNpcProfile,
+  ensureProfile,
+  getProfile,
+  getProfilesByIds,
+  searchProfiles,
+} from '../services/profiles.service.js';
 import { adjustReputation, rehabilitate } from '../services/reputation.service.js';
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
   activityBody,
+  corporationQueryOptional,
+  corporationQueryRequired,
   encounterBody,
+  internalProfileQuery,
   npcCorporationBody,
   npcProfileBody,
   playerIdParams,
@@ -83,23 +94,19 @@ internalRoutes.put(
   }),
 );
 
-/** DELETE /players/:playerId/corporation — Remove an NPC from its corporation. */
+/** DELETE /players/:playerId/corporation?corporationId= — Remove an NPC from one corporation. */
 internalRoutes.delete(
   '/players/:playerId/corporation',
   requireServiceRole(SERVICE_ROLES.corporationWrite),
   validate(playerIdParams, 'params'),
+  validate(corporationQueryRequired, 'query'),
   asyncHandler(async (req, res) => {
-    const membership = await getCorporationMembership(req.params.playerId);
-    if (!membership) {
-      res.status(404).json({ error: 'NOT_FOUND', message: 'NPC is not a member of any corporation', status: 404 });
-      return;
-    }
-    await removeNpcCorporationMember(membership.corporation.id, req.params.playerId);
+    await removeNpcCorporationMember(req.query.corporationId as string, req.params.playerId);
     res.status(204).send();
   }),
 );
 
-/** POST /players/:playerId/stats — Apply playtime/reputation deltas, level and role. */
+/** POST /players/:playerId/stats — Apply playtime/reputation deltas and role. */
 internalRoutes.post(
   '/players/:playerId/stats',
   requireServiceRole(SERVICE_ROLES.playerWrite),
@@ -129,14 +136,45 @@ internalRoutes.post(
   }),
 );
 
-/** GET /players/:playerId/corporation — Corporation and rank of a player (null if corporationless). */
+/**
+ * GET /players/:playerId/corporation[?corporationId=] — Corporation(s) and rank of a player.
+ * With `corporationId`, returns that membership or null; without, the list of memberships.
+ */
 internalRoutes.get(
   '/players/:playerId/corporation',
   requireServiceRole(SERVICE_ROLES.corporationRead),
   validate(playerIdParams, 'params'),
+  validate(corporationQueryOptional, 'query'),
   asyncHandler(async (req, res) => {
-    const membership = await getCorporationMembership(req.params.playerId);
-    res.json(membership ? { ...membership.corporation, rank: membership.rank } : null);
+    const corporationId = req.query.corporationId as string | undefined;
+    if (corporationId) {
+      const membership = await getCorporationMembership(corporationId, req.params.playerId);
+      res.json(membership ? { ...membership.corporation, rank: membership.rank } : null);
+      return;
+    }
+    const memberships = await listCorporationMemberships(req.params.playerId);
+    res.json(memberships.map((m) => ({ ...m.corporation, rank: m.rank })));
+  }),
+);
+
+/**
+ * GET /players?search=&playerIds=&limit= — Resolve profiles by display-name substring
+ * and/or explicit ids (trusted services that only store opaque player ids). When `search`
+ * is empty, only the given ids are resolved.
+ */
+internalRoutes.get(
+  '/players',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(internalProfileQuery, 'query'),
+  asyncHandler(async (req, res) => {
+    const search = String(req.query.search ?? '');
+    const playerIds = req.query.playerIds as string[];
+    if (!search) {
+      res.json(await getProfilesByIds(playerIds));
+      return;
+    }
+    const results = await searchProfiles(search, Number(req.query.limit));
+    res.json(results.map((p) => ({ playerId: p.playerId, displayName: p.displayName, entityType: p.entityType })));
   }),
 );
 

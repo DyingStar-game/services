@@ -13,6 +13,7 @@ import * as corporations from '../services/corporations.service.js';
 import {
   corporationIdParams,
   corporationMemberParams,
+  corporationParentBody,
   corporationPatchBody,
   corporationRankParams,
   corporationRequestParams,
@@ -73,6 +74,32 @@ corporationsRoutes.delete(
   asyncHandler(async (req, res) => {
     await corporations.disbandCorporation(req.params.corporationId, requirePlayer(req).id);
     res.status(204).send();
+  }),
+);
+
+/** GET /:corporationId/subsidiaries — Direct subsidiaries (public). */
+corporationsRoutes.get(
+  '/:corporationId/subsidiaries',
+  validate(corporationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    await corporations.requireCorporation(req.params.corporationId);
+    res.json(await corporations.listSubsidiaries(req.params.corporationId));
+  }),
+);
+
+/** PUT /:corporationId/parent — Attach to a holding company, or detach (manage_corporation). */
+corporationsRoutes.put(
+  '/:corporationId/parent',
+  validate(corporationIdParams, 'params'),
+  validate(corporationParentBody),
+  asyncHandler(async (req, res) => {
+    res.json(
+      await corporations.setCorporationParent(
+        req.params.corporationId,
+        requirePlayer(req).id,
+        req.body.parentId ?? null,
+      ),
+    );
   }),
 );
 

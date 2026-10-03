@@ -1,7 +1,7 @@
 /**
  * Corporation lifecycle and membership: creation, public page, members, ranks assignment, ceo.
  */
-import { and, count, desc, eq, ilike, inArray, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, or } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
 import {
@@ -98,19 +98,38 @@ export async function requireCorporation(corporationId: string): Promise<Corpora
 }
 
 /**
- * Membership context of a player, or null if corporationless.
+ * Membership context of a player in a given corporation, or null.
+ * @param corporationId - Corporation id.
  * @param playerId - Player id.
  * @returns Corporation, member row and rank.
  */
-export async function getCorporationMembership(playerId: string): Promise<CorporationMembership | null> {
+export async function getCorporationMembership(
+  corporationId: string,
+  playerId: string,
+): Promise<CorporationMembership | null> {
   const rows = await db
     .select({ corporation: corporations, member: corporationMembers, rank: corporationRanks })
     .from(corporationMembers)
     .innerJoin(corporations, eq(corporations.id, corporationMembers.corporationId))
     .innerJoin(corporationRanks, eq(corporationRanks.id, corporationMembers.rankId))
-    .where(eq(corporationMembers.playerId, playerId))
+    .where(and(eq(corporationMembers.corporationId, corporationId), eq(corporationMembers.playerId, playerId)))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Every membership of a player (a player may belong to several corporations).
+ * @param playerId - Player id.
+ * @returns Memberships, ordered by corporation name.
+ */
+export async function listCorporationMemberships(playerId: string): Promise<CorporationMembership[]> {
+  return db
+    .select({ corporation: corporations, member: corporationMembers, rank: corporationRanks })
+    .from(corporationMembers)
+    .innerJoin(corporations, eq(corporations.id, corporationMembers.corporationId))
+    .innerJoin(corporationRanks, eq(corporationRanks.id, corporationMembers.rankId))
+    .where(eq(corporationMembers.playerId, playerId))
+    .orderBy(asc(corporations.name));
 }
 
 /**
@@ -121,8 +140,8 @@ export async function getCorporationMembership(playerId: string): Promise<Corpor
  */
 export async function requireCorporationMember(corporationId: string, playerId: string): Promise<CorporationMembership> {
   await requireCorporation(corporationId);
-  const membership = await getCorporationMembership(playerId);
-  if (!membership || membership.corporation.id !== corporationId) throw forbidden('Not a member of this corporation');
+  const membership = await getCorporationMembership(corporationId, playerId);
+  if (!membership) throw forbidden('Not a member of this corporation');
   return membership;
 }
 
@@ -146,18 +165,26 @@ export async function requireCorporationPermission(
 }
 
 /**
- * Corporation references for several players, keyed by player id.
+ * Corporation references for several players, keyed by player id. A player may belong to
+ * several corporations, so each entry is a list.
  * @param playerIds - Player ids.
- * @returns Map of corporation refs.
+ * @returns Map of player id to corporation refs.
  */
-export async function getCorporationRefMap(playerIds: string[]): Promise<Map<string, CorporationRef>> {
+export async function getCorporationRefMap(playerIds: string[]): Promise<Map<string, CorporationRef[]>> {
   if (playerIds.length === 0) return new Map();
   const rows = await db
     .select({ playerId: corporationMembers.playerId, id: corporations.id, name: corporations.name, ticker: corporations.ticker })
     .from(corporationMembers)
     .innerJoin(corporations, eq(corporations.id, corporationMembers.corporationId))
-    .where(inArray(corporationMembers.playerId, playerIds));
-  return new Map(rows.map((r) => [r.playerId, { id: r.id, name: r.name, ticker: r.ticker }]));
+    .where(inArray(corporationMembers.playerId, playerIds))
+    .orderBy(asc(corporations.name));
+  const map = new Map<string, CorporationRef[]>();
+  for (const r of rows) {
+    const list = map.get(r.playerId) ?? [];
+    list.push({ id: r.id, name: r.name, ticker: r.ticker });
+    map.set(r.playerId, list);
+  }
+  return map;
 }
 
 /**
@@ -182,7 +209,8 @@ export async function listCorporations(search: string, limit: number): Promise<C
 
 /**
  * Creates a corporation with default ranks (CEO / Director / Member) and the creator as CEO.
- * @param ceoId - Creating player (must be corporationless).
+ * A player may create and lead several corporations.
+ * @param ceoId - Creating player.
  * @param data - Corporation fields.
  * @returns Created corporation.
  */
@@ -191,7 +219,6 @@ export async function createCorporation(
   data: { name: string; ticker: string; description?: string | null; logoUrl?: string | null; recruitment?: CorporationRecruitmentMode },
 ): Promise<Corporation> {
   await requireProfile(ceoId);
-  if (await getCorporationMembership(ceoId)) throw conflict('Already a member of a corporation');
 
   try {
     const corporation = await db.transaction(async (tx) => {
@@ -259,17 +286,117 @@ export async function disbandCorporation(corporationId: string, actorId: string)
   );
 }
 
+/** Public corporation page: corporation, members, ranks and its place in the hierarchy. */
+export interface CorporationPage extends CorporationSummary {
+  ranks: CorporationRank[];
+  members: CorporationMemberView[];
+  /** Holding company, or null when independent. */
+  parent: CorporationRef | null;
+  /** Direct subsidiaries of this corporation. */
+  subsidiaries: CorporationSummary[];
+}
+
 /**
- * Public corporation page: corporation, member count, ranks and members.
+ * Public corporation page: corporation, member count, ranks, members and hierarchy.
  * @param corporationId - Corporation id.
  * @returns Corporation page payload.
  */
-export async function getCorporationPage(
-  corporationId: string,
-): Promise<CorporationSummary & { ranks: CorporationRank[]; members: CorporationMemberView[] }> {
+export async function getCorporationPage(corporationId: string): Promise<CorporationPage> {
   const corporation = await requireCorporation(corporationId);
-  const [ranks, members] = await Promise.all([listCorporationRanks(corporationId), listCorporationMembers(corporationId)]);
-  return { ...corporation, memberCount: members.length, ranks, members };
+  const [ranks, members, parent, subsidiaries] = await Promise.all([
+    listCorporationRanks(corporationId),
+    listCorporationMembers(corporationId),
+    getCorporationRef(corporation.parentId),
+    listSubsidiaries(corporationId),
+  ]);
+  return { ...corporation, memberCount: members.length, ranks, members, parent, subsidiaries };
+}
+
+/**
+ * Minimal corporation reference, or null for a null/unknown id.
+ * @param corporationId - Corporation id or null.
+ * @returns Corporation ref or null.
+ */
+export async function getCorporationRef(corporationId: string | null): Promise<CorporationRef | null> {
+  if (!corporationId) return null;
+  const [row] = await db
+    .select({ id: corporations.id, name: corporations.name, ticker: corporations.ticker })
+    .from(corporations)
+    .where(eq(corporations.id, corporationId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Direct subsidiaries of a corporation (corporations whose `parentId` is this id).
+ * @param corporationId - Holding company id.
+ * @returns Subsidiary summaries with member counts.
+ */
+export async function listSubsidiaries(corporationId: string): Promise<CorporationSummary[]> {
+  const memberCount = count(corporationMembers.playerId);
+  const rows = await db
+    .select({ corporation: corporations, memberCount })
+    .from(corporations)
+    .leftJoin(corporationMembers, eq(corporationMembers.corporationId, corporations.id))
+    .where(eq(corporations.parentId, corporationId))
+    .groupBy(corporations.id)
+    .orderBy(asc(corporations.name));
+  return rows.map((r) => ({ ...r.corporation, memberCount: r.memberCount }));
+}
+
+/**
+ * True when setting `parentId` as the parent of `corporationId` would create a cycle
+ * (a corporation cannot be its own ancestor).
+ * @param corporationId - Child corporation id.
+ * @param parentId - Candidate parent id.
+ * @returns True when the link would be cyclic.
+ */
+async function wouldCreateCycle(corporationId: string, parentId: string): Promise<boolean> {
+  const seen = new Set<string>();
+  let current: string | null = parentId;
+  while (current) {
+    if (current === corporationId || seen.has(current)) return true;
+    seen.add(current);
+    const [row] = await db
+      .select({ parentId: corporations.parentId })
+      .from(corporations)
+      .where(eq(corporations.id, current))
+      .limit(1);
+    current = row?.parentId ?? null;
+  }
+  return false;
+}
+
+/**
+ * Attaches a corporation to a holding company, or detaches it (`parentId = null`).
+ * Requires `manage_corporation` on the child and refuses cycles.
+ * @param corporationId - Child corporation id.
+ * @param actorId - Acting member.
+ * @param parentId - New parent id, or null to detach.
+ * @returns Updated corporation.
+ */
+export async function setCorporationParent(
+  corporationId: string,
+  actorId: string,
+  parentId: string | null,
+): Promise<Corporation> {
+  await requireCorporationPermission(corporationId, actorId, 'manage_corporation');
+  if (parentId) {
+    if (parentId === corporationId) {
+      throw new HttpError(400, 'INVALID_PARENT', 'A corporation cannot be its own parent');
+    }
+    await requireCorporation(parentId);
+    if (await wouldCreateCycle(corporationId, parentId)) {
+      throw new HttpError(409, 'CORPORATION_CYCLE', 'This link would create a cycle in the hierarchy');
+    }
+  }
+  const [updated] = await db
+    .update(corporations)
+    .set({ parentId, updatedAt: new Date() })
+    .where(eq(corporations.id, corporationId))
+    .returning();
+  await recordCorporationActivity(corporationId, actorId, parentId ? 'parent_set' : 'parent_cleared', { parentId });
+  return updated;
 }
 
 /**
@@ -327,7 +454,10 @@ async function requireMemberRow(
  * @param actorId - Player responsible for the join (self, recruiter or inviter).
  */
 export async function addCorporationMember(corporationId: string, playerId: string, actorId: string): Promise<void> {
-  if (await getCorporationMembership(playerId)) throw conflict('Player is already a member of a corporation');
+  await requireCorporation(corporationId);
+  if (await getCorporationMembership(corporationId, playerId)) {
+    throw conflict('Player is already a member of this corporation');
+  }
   const [defaultRank] = await db
     .select()
     .from(corporationRanks)
@@ -336,7 +466,14 @@ export async function addCorporationMember(corporationId: string, playerId: stri
   if (!defaultRank) throw new HttpError(500, 'INTERNAL_ERROR', 'Corporation has no default rank');
   await db.transaction(async (tx) => {
     await tx.insert(corporationMembers).values({ corporationId, playerId, rankId: defaultRank.id });
-    await tx.delete(corporationJoinRequests).where(eq(corporationJoinRequests.playerId, playerId));
+    await tx
+      .delete(corporationJoinRequests)
+      .where(
+        and(
+          eq(corporationJoinRequests.corporationId, corporationId),
+          eq(corporationJoinRequests.playerId, playerId),
+        ),
+      );
     await recordCorporationActivity(corporationId, actorId, 'member_joined', { playerId }, tx);
   });
   await recordActivity(playerId, 'corporation_joined', { corporationId });
@@ -355,7 +492,9 @@ export async function addNpcCorporationMember(corporationId: string, playerId: s
   await requireProfile(playerId);
   if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', 'Only NPC profiles can be added this way');
   if (playerId === corporation.ceoId) throw forbidden('An NPC cannot be the corporation CEO');
-  if (await getCorporationMembership(playerId)) throw conflict('NPC is already a member of a corporation');
+  if (await getCorporationMembership(corporationId, playerId)) {
+    throw conflict('NPC is already a member of this corporation');
+  }
 
   let chosenRank: CorporationRank;
   if (rankId !== undefined) {

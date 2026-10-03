@@ -8,7 +8,7 @@ import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listActivity } from '../services/activity.service.js';
 import { listPlayerRequests, resolvePlayerRequest } from '../services/corporationRequests.service.js';
-import { getCorporationMembership, getCorporationRefMap } from '../services/corporations.service.js';
+import { getCorporationRefMap, listCorporationMemberships } from '../services/corporations.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { ensureProfile, updateProfile } from '../services/profiles.service.js';
 import { listReputationEvents } from '../services/reputation.service.js';
@@ -28,7 +28,7 @@ meRoutes.get(
       getPresence(player.id),
       getCorporationRefMap([player.id]),
     ]);
-    res.json({ ...profile, presence, corporation: corporationRefs.get(player.id) ?? null });
+    res.json({ ...profile, presence, corporations: corporationRefs.get(player.id) ?? [] });
   }),
 );
 
@@ -55,15 +55,13 @@ meRoutes.get(
 
 // ── Corporation ─────────────────────────────────────────────────────────────
 
-/** GET /corporation — Own corporation with rank, or null. */
+/** GET /corporations — Every corporation the player belongs to, with rank. */
 meRoutes.get(
-  '/corporation',
+  '/corporations',
   asyncHandler(async (req, res) => {
-    const membership = await getCorporationMembership(requirePlayer(req).id);
+    const memberships = await listCorporationMemberships(requirePlayer(req).id);
     res.json(
-      membership
-        ? { ...membership.corporation, joinedAt: membership.member.joinedAt, rank: membership.rank }
-        : null,
+      memberships.map((m) => ({ ...m.corporation, joinedAt: m.member.joinedAt, rank: m.rank })),
     );
   }),
 );

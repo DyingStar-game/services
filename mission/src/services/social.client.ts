@@ -62,25 +62,42 @@ async function authHeaders(): Promise<Record<string, string>> {
   );
 }
 
-/**
- * Returns a player's corporation membership (corporation + rank), or null when the player
- * belongs to no corporation.
- * @param playerId - Player id.
- * @returns Corporation context, or null.
- */
-export async function getPlayerCorporation(playerId: string): Promise<PlayerCorporation | null> {
+/** Calls the Social internal corporation endpoint and returns the parsed body. */
+async function fetchMappings<T>(playerId: string, corporationId?: string): Promise<T> {
   if (!env.social.apiUrl) {
     throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
   }
-  const res = await fetch(`${env.social.apiUrl}/api/internal/players/${playerId}/corporation`, {
+  const query = corporationId ? `?corporationId=${encodeURIComponent(corporationId)}` : '';
+  const res = await fetch(`${env.social.apiUrl}/api/internal/players/${playerId}/corporation${query}`, {
     headers: { ...(await authHeaders()) },
   });
   if (res.ok) {
-    const body = (await res.json()) as PlayerCorporation | null;
-    return body ?? null;
+    return (await res.json()) as T;
   }
   const text = await res.text().catch(() => '');
   throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`);
+}
+
+/**
+ * Every corporation membership of a player (a player may belong to several corporations).
+ * @param playerId - Player id.
+ * @returns Corporation contexts.
+ */
+export async function listPlayerCorporations(playerId: string): Promise<PlayerCorporation[]> {
+  return (await fetchMappings<PlayerCorporation[] | null>(playerId)) ?? [];
+}
+
+/**
+ * A player's membership in one corporation, or null.
+ * @param playerId - Player id.
+ * @param corporationId - Corporation id.
+ * @returns Corporation context, or null.
+ */
+export async function getPlayerCorporationIn(
+  playerId: string,
+  corporationId: string,
+): Promise<PlayerCorporation | null> {
+  return fetchMappings<PlayerCorporation | null>(playerId, corporationId);
 }
 
 /**
@@ -90,6 +107,5 @@ export async function getPlayerCorporation(playerId: string): Promise<PlayerCorp
  * @returns True when the player belongs to that corporation.
  */
 export async function isCorporationMember(playerId: string, corporationId: string): Promise<boolean> {
-  const membership = await getPlayerCorporation(playerId);
-  return membership !== null && membership.id === corporationId;
+  return (await getPlayerCorporationIn(playerId, corporationId)) !== null;
 }

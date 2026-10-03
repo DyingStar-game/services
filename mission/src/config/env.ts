@@ -66,6 +66,15 @@ export const env = {
     /** Dev-only fallback: shared key sent as `X-Internal-Key` when no secret is set. */
     internalApiKey: process.env.SOCIAL_INTERNAL_API_KEY ?? '',
   },
+  /** Inventory integration used to escrow and grant item rewards. Empty URL disables item rewards. */
+  inventory: {
+    apiUrl: (process.env.INVENTORY_API_URL ?? '').replace(/\/$/, ''),
+    serviceClientId: process.env.INVENTORY_SERVICE_CLIENT_ID ?? process.env.ECONOMY_SERVICE_CLIENT_ID ?? 'svc-mission',
+    serviceClientSecret: process.env.INVENTORY_SERVICE_CLIENT_SECRET ?? '',
+    internalApiKey: process.env.INVENTORY_INTERNAL_API_KEY ?? '',
+    /** Holder owning the game's item faucet, source of non-escrowed item rewards. */
+    systemHolderId: process.env.INVENTORY_SYSTEM_HOLDER_ID ?? '00000000-0000-0000-0000-000000000001',
+  },
   /** Mission rules. */
   mission: {
     /** Pay economic rewards automatically on completion. */

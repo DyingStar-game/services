@@ -5,6 +5,7 @@
 import { Router, type IRouter } from 'express';
 
 import { playerAuth } from '../middleware/auth.js';
+import { adminRoutes } from './admin.routes.js';
 import { corporationsRoutes } from './corporations.routes.js';
 import { meRoutes } from './me.routes.js';
 import { publicRoutes } from './public.routes.js';
@@ -19,3 +20,4 @@ apiRouter.use(publicRoutes);
 apiRouter.use('/me', playerAuth, meRoutes);
 apiRouter.use('/transfers', playerAuth, transfersRoutes);
 apiRouter.use('/corporations', playerAuth, corporationsRoutes);
+apiRouter.use('/admin', playerAuth, adminRoutes);

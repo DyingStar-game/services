@@ -8,6 +8,7 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { testConnection } from './db/connection.js';
 import { runMigrations } from './db/migrate.js';
+import { serveOpenapi } from './lib/openapi.js';
 import { serviceAuth } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { apiRouter } from './routes/index.js';
@@ -22,8 +23,11 @@ app.use(express.json({ limit: '1mb' }));
 
 /** Root discovery endpoint. */
 app.get('/', (_req, res) => {
-  res.json({ name: 'DyingStar Social API', health: '/api/health' });
+  res.json({ name: 'DyingStar Social API', health: '/api/health', openapi: '/openapi.yaml' });
 });
+
+/** OpenAPI document (also served under `/api/openapi.yaml`). */
+app.get('/openapi.yaml', serveOpenapi);
 
 // The service guard sits on the mount point, not on the inner route list: any route
 // added later under /api/internal is protected without touching the router.

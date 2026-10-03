@@ -36,6 +36,24 @@ export const profileSearchQuery = searchQuery.extend({
   entityType: z.enum(ENTITY_TYPES).optional(),
 });
 
+/** Internal service-facing profile lookup: by name substring and/or explicit ids. */
+export const internalProfileQuery = limitQuery.extend({
+  search: z.string().trim().max(64).default(''),
+  playerIds: z
+    .string()
+    .trim()
+    .max(8000)
+    .optional()
+    .transform((v) =>
+      v
+        ? v
+            .split(',')
+            .map((id) => id.trim())
+            .filter((id) => uuidSchema.safeParse(id).success)
+        : [],
+    ),
+});
+
 const nullableText = (max: number) => z.string().trim().max(max).nullable().optional();
 
 export const rpSheetSchema = z.object({
@@ -70,7 +88,6 @@ export const statsBody = z
     playtimeSecondsDelta: z.number().int().min(0).optional(),
     reputationDelta: z.number().int().optional(),
     reputationReason: z.string().trim().max(128).optional(),
-    level: z.number().int().min(0).optional(),
     role: nullableText(64),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
@@ -96,7 +113,6 @@ export const npcProfileBody = z.object({
   faction: nullableText(64),
   biography: nullableText(2000),
   role: nullableText(64),
-  level: z.number().int().min(0).optional(),
 });
 
 export const npcCorporationBody = z.object({
@@ -104,9 +120,15 @@ export const npcCorporationBody = z.object({
   rankId: z.number().int().positive().optional(),
 });
 
+/** Internal: target a specific corporation (a player may belong to several). */
+export const corporationQueryRequired = z.object({ corporationId: uuidSchema });
+export const corporationQueryOptional = z.object({ corporationId: uuidSchema.optional() });
+
 // ── Corporations ────────────────────────────────────────────────────────────
 
 export const corporationIdParams = z.object({ corporationId: uuidSchema });
+/** Attach to a holding company (`parentId`), or detach with `null`. */
+export const corporationParentBody = z.object({ parentId: uuidSchema.nullable() });
 export const corporationMemberParams = corporationIdParams.extend({ playerId: uuidSchema });
 export const corporationRankParams = corporationIdParams.extend({ rankId: z.coerce.number().int().positive() });
 export const corporationRequestParams = corporationIdParams.extend({ id: z.coerce.number().int().positive() });

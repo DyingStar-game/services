@@ -35,7 +35,9 @@ tags:
   - name: transfers
     description: Direct player-to-player transfers (automatic tax)
   - name: corporations
-    description: Corporate treasuries, members, donations and financial reports
+    description: Corporate treasuries, members, donations, payroll and financial reports
+  - name: admin
+    description: Admin/moderation dashboard analytics (requires role `moderator` at least)
   - name: internal
     description: Game-server integration (Keycloak service accounts, capability roles)
 
@@ -59,6 +61,30 @@ paths:
                   status: { type: string, example: ok }
                   service: { type: string, example: economie }
                   version: { type: string, example: 0.1.0 }
+
+  /openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document (alias under /api)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
 
   # ── Me (own wallet) ────────────────────────────────────────────────────────
   /api/me/wallet:
@@ -229,6 +255,187 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Payroll (salaries & primes) ────────────────────────────────────────────
+  /api/corporations/{corporationId}/salaries:
+    get:
+      tags: [corporations]
+      summary: Role defaults and per-member salary overrides (leader/treasurer only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Salary configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSalaries' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/salaries/roles/{role}:
+    put:
+      tags: [corporations]
+      summary: Set the default salary for a role (leader/treasurer only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/role'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SalaryBody' }
+      responses:
+        '200':
+          description: Stored role salary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSalaryRole' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/salaries/members/{playerId}:
+    put:
+      tags: [corporations]
+      summary: Set a per-member salary override (leader/treasurer only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SalaryBody' }
+      responses:
+        '200':
+          description: Stored member salary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationMemberSalary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: The player is not a member of this corporation (`NOT_FOUND`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [corporations]
+      summary: Remove a per-member salary override (leader/treasurer only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Override removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/payroll:
+    post:
+      tags: [corporations]
+      summary: Pay every member's salary now from the treasury (leader/treasurer only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/currencyQuery'
+      responses:
+        '200':
+          description: Payout summary (atomic, aborted if the treasury is short)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PayrollResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Treasury balance too low for the whole run (`INSUFFICIENT_FUNDS`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/corporations/{corporationId}/members/{playerId}/prime:
+    post:
+      tags: [corporations]
+      summary: Pay a one-off prime to a member from the treasury (leader/treasurer only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrimeBody' }
+      responses:
+        '201':
+          description: Prime recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrimeResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: The player is not a member of this corporation (`NOT_FOUND`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Admin dashboard ────────────────────────────────────────────────────────
+  /api/admin/stats:
+    get:
+      tags: [admin]
+      summary: Economic analytics for the admin dashboard (role `moderator` at least)
+      parameters:
+        - $ref: '#/components/parameters/days'
+        - $ref: '#/components/parameters/top'
+      responses:
+        '200':
+          description: Money supply, transaction volume, rankings and daily series
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EconomyStats' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Missing `moderator` role (`FORBIDDEN`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/players:
+    get:
+      tags: [admin]
+      summary: Search players by pseudonym, with their wallet balances (role `moderator` at least)
+      description: >
+        Pseudonyms live in the Social service; this resolves the search through Social's
+        internal API and attaches each player's Economy wallet accounts. Returns an empty
+        array when the Social integration is not configured.
+      parameters:
+        - name: search
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Matching players with their wallet accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdminPlayer' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Missing `moderator` role (`FORBIDDEN`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: The Social lookup failed (`SOCIAL_LOOKUP_FAILED`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   # ── Internal (game server) ─────────────────────────────────────────────────
   /api/internal/players/{playerId}/wallet:
@@ -553,6 +760,27 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    role:
+      name: role
+      in: path
+      required: true
+      description: Treasury role the salary applies to
+      schema: { $ref: '#/components/schemas/CorporationRole' }
+    currencyQuery:
+      name: currency
+      in: query
+      description: Currency to pay in (defaults to `credits`)
+      schema: { type: string, maxLength: 16, default: credits }
+    days:
+      name: days
+      in: query
+      description: Length of the analytics window and time series, in days
+      schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+    top:
+      name: top
+      in: query
+      description: Number of richest holders returned per ranking
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
     limit:
       name: limit
       in: query
@@ -625,7 +853,7 @@ components:
       enum: [active, locked, frozen]
     TransactionType:
       type: string
-      enum: [transfer, deposit, withdrawal, tax, fee, mission_reward, salary, donation, corporation_fund, system]
+      enum: [transfer, deposit, withdrawal, tax, fee, mission_reward, salary, prime, donation, corporation_fund, system]
     CorporationRole:
       type: string
       enum: [leader, treasurer, member]
@@ -766,3 +994,155 @@ components:
               count: { type: integer }
               inflow: { type: integer }
               outflow: { type: integer }
+
+    # ── Payroll ──
+    CorporationSalaryRole:
+      type: object
+      required: [corporationId, role, currency, amount, enabled, updatedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        role: { $ref: '#/components/schemas/CorporationRole' }
+        currency: { type: string, default: credits }
+        amount: { type: integer, minimum: 0, description: Integer minor units paid per period }
+        enabled: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    CorporationMemberSalary:
+      type: object
+      required: [corporationId, playerId, currency, amount, enabled, updatedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        currency: { type: string, default: credits }
+        amount: { type: integer, minimum: 0, description: Overrides the role default }
+        enabled: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    CorporationSalaries:
+      type: object
+      required: [corporationId, roleDefaults, memberOverrides]
+      properties:
+        corporationId: { type: string, format: uuid }
+        roleDefaults:
+          type: array
+          items: { $ref: '#/components/schemas/CorporationSalaryRole' }
+        memberOverrides:
+          type: array
+          items: { $ref: '#/components/schemas/CorporationMemberSalary' }
+
+    SalaryBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 0, description: Integer minor units; 0 disables the payout }
+        currency: { type: string, maxLength: 16, default: credits }
+        enabled: { type: boolean, default: true }
+
+    PayrollResult:
+      type: object
+      required: [corporationId, currency, paid, skipped, total]
+      properties:
+        corporationId: { type: string, format: uuid }
+        currency: { type: string }
+        paid:
+          type: array
+          items:
+            type: object
+            required: [playerId, amount, source]
+            properties:
+              playerId: { type: string, format: uuid }
+              amount: { type: integer }
+              source:
+                type: string
+                enum: [member, role]
+                description: Whether the amount came from a per-member override or the role default
+        skipped:
+          type: array
+          description: Members with no enabled salary
+          items: { type: string, format: uuid }
+        total: { type: integer, description: Total debited from the treasury }
+
+    PrimeBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 1, description: Integer minor units }
+        currency: { type: string, maxLength: 16, default: credits }
+        memo: { type: string, maxLength: 256 }
+
+    PrimeResult:
+      type: object
+      required: [transaction, treasuryBalance, memberBalance]
+      properties:
+        transaction: { $ref: '#/components/schemas/Transaction' }
+        treasuryBalance: { type: integer }
+        memberBalance: { type: integer }
+
+    # ── Admin analytics ──
+    EconomyStats:
+      type: object
+      required: [moneySupply, transactions, richestPlayers, richestCorporations, series]
+      properties:
+        moneySupply:
+          type: array
+          description: Total balance and account count per currency
+          items:
+            type: object
+            required: [currency, total, accounts]
+            properties:
+              currency: { type: string }
+              total: { type: integer }
+              accounts: { type: integer }
+        transactions:
+          type: object
+          required: [total, period]
+          properties:
+            total: { $ref: '#/components/schemas/TransactionTotals' }
+            period: { $ref: '#/components/schemas/TransactionTotals' }
+        richestPlayers:
+          type: array
+          description: Holder ids only; the admin UI resolves display names through the Social service
+          items: { $ref: '#/components/schemas/RichestHolder' }
+        richestCorporations:
+          type: array
+          items: { $ref: '#/components/schemas/RichestHolder' }
+        series:
+          type: array
+          description: Daily transaction count, volume and tax collected
+          items:
+            type: object
+            required: [date, transactions, volume, tax]
+            properties:
+              date: { type: string, description: 'Day in YYYY-MM-DD' }
+              transactions: { type: integer }
+              volume: { type: integer }
+              tax: { type: integer }
+
+    TransactionTotals:
+      type: object
+      required: [count, volume, tax, fee]
+      properties:
+        count: { type: integer }
+        volume: { type: integer, description: Sum of credited amounts }
+        tax: { type: integer }
+        fee: { type: integer }
+
+    RichestHolder:
+      type: object
+      required: [holderId, currency, balance]
+      properties:
+        holderId: { type: string, format: uuid, description: Player id (Keycloak subject) or corporation id }
+        currency: { type: string }
+        balance: { type: integer }
+        displayName: { type: [string, 'null'], description: Player pseudonym resolved through Social (null when unknown or for corporations) }
+
+    AdminPlayer:
+      type: object
+      required: [playerId, displayName, entityType, accounts]
+      properties:
+        playerId: { type: string, format: uuid }
+        displayName: { type: string }
+        entityType: { type: string, enum: [player, npc] }
+        accounts:
+          type: array
+          items: { $ref: '#/components/schemas/Account' }

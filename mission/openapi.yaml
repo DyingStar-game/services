@@ -59,6 +59,30 @@ paths:
                   service: { type: string, example: mission }
                   version: { type: string, example: 0.1.0 }
 
+  /openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document (alias under /api)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
   # ── Me ─────────────────────────────────────────────────────────────────────
   /api/me/missions:
     get:
@@ -690,8 +714,9 @@ components:
           type: object
           required: [itemId, quantity]
           properties:
-            itemId: { type: string }
+            itemId: { type: string, description: Inventory good type }
             quantity: { type: integer, minimum: 1 }
+            instanceId: { type: string, format: uuid, description: Unique-instance reward (single assignee only) }
 
     Mission:
       type: object
@@ -814,7 +839,10 @@ components:
 
     PlayerReward:
       type: object
-      required: [economic]
+      description: >
+        At least one of `economic` or `item` is required. The economic reward is escrowed
+        (debited) from the creator's wallet; the item reward is escrowed (held) from the
+        creator's inventory.
       properties:
         economic:
           type: object
@@ -822,6 +850,13 @@ components:
           properties:
             currency: { type: string, default: credits }
             amount: { type: integer, minimum: 1 }
+        item:
+          type: object
+          required: [itemId, quantity]
+          properties:
+            itemId: { type: string, description: Inventory good type }
+            quantity: { type: integer, minimum: 1 }
+            instanceId: { type: string, format: uuid, description: Unique-instance reward (single assignee only) }
 
     CreatePlayerMission:
       type: object

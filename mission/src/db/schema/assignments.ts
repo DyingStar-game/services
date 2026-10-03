@@ -34,6 +34,13 @@ export const missionAssignments = pgTable(
     rewardSettledAt: timestamp('reward_settled_at', { withTimezone: true }),
     /** Raw result/error of the last settlement attempt. */
     rewardDetails: jsonb('reward_details').$type<Record<string, unknown>>(),
+    /** Item reward share frozen at completion (fungible goods split like the economic share). */
+    rewardItemQuantity: integer('reward_item_quantity'),
+    /** True once the item reward has been transferred by the Inventory service. */
+    itemSettled: boolean('item_settled').notNull().default(false),
+    itemSettledAt: timestamp('item_settled_at', { withTimezone: true }),
+    /** Raw result/error of the last item settlement attempt. */
+    itemDetails: jsonb('item_details').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

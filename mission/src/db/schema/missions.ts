@@ -41,13 +41,18 @@ export const OBJECTIVE_STATUSES = ['pending', 'in_progress', 'completed', 'faile
 export type ObjectiveStatus = (typeof OBJECTIVE_STATUSES)[number];
 
 /**
- * Reward attached to a mission. `economic` is settled by the Economy service, `item` is a
- * reference kept for the future inventory service (see the roadmap).
+ * Reward attached to a mission. `economic` is settled by the Economy service, `item` by the
+ * Inventory service (ownership transfer from the escrow payer or the system faucet).
+ * `instanceId` marks a unique-instance reward (single assignee only).
  */
 export interface MissionReward {
   economic?: { currency: string; amount: number };
-  item?: { itemId: string; quantity: number };
+  item?: { itemId: string; quantity: number; instanceId?: string };
 }
+
+/** Item escrow lifecycle for player-funded item rewards. */
+export const ITEM_ESCROW_STATUSES = ['none', 'held', 'claimed', 'released'] as const;
+export type ItemEscrowStatus = (typeof ITEM_ESCROW_STATUSES)[number];
 
 export const missions = pgTable(
   'missions',
@@ -76,6 +81,10 @@ export const missions = pgTable(
     escrowPayerId: uuid('escrow_payer_id'),
     /** Idempotency key of the Economy escrow debit (`mission-escrow:<missionId>`). */
     escrowExternalId: text('escrow_external_id'),
+    /** Item escrow lifecycle for a player-funded item reward. */
+    escrowItemStatus: text('escrow_item_status').$type<ItemEscrowStatus>().notNull().default('none'),
+    /** Inventory hold reserving the escrowed item (`refType: mission_escrow`). */
+    escrowItemHoldId: uuid('escrow_item_hold_id'),
     /** Scenarized missions reference their script/chain here. */
     scriptId: text('script_id'),
     /** When set and passed, the mission is no longer acceptable nor completable. */

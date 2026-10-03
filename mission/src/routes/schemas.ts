@@ -58,6 +58,8 @@ export const rewardSchema = z
       .object({
         itemId: z.string().trim().min(1).max(128),
         quantity: z.number().int().min(1).max(1_000_000),
+        /** Unique-instance reward (single assignee); omitted for fungible goods. */
+        instanceId: uuidSchema.optional(),
       })
       .optional(),
   })
@@ -91,13 +93,26 @@ export const createMissionBody = z.object({
   objectives: z.array(objectiveInput).min(1).max(100),
 });
 
-/** Player-sponsored reward: economic only (item rewards need an inventory service). */
-export const playerRewardSchema = z.object({
-  economic: z.object({
-    currency: z.string().trim().min(1).max(16).default('credits'),
-    amount: z.number().int().min(1).max(10_000_000_000_000),
-  }),
-});
+/** Player-sponsored reward: economic and/or item (the item is escrowed from the creator). */
+export const playerRewardSchema = z
+  .object({
+    economic: z
+      .object({
+        currency: z.string().trim().min(1).max(16).default('credits'),
+        amount: z.number().int().min(1).max(10_000_000_000_000),
+      })
+      .optional(),
+    item: z
+      .object({
+        itemId: z.string().trim().min(1).max(128),
+        quantity: z.number().int().min(1).max(1_000_000),
+        instanceId: uuidSchema.optional(),
+      })
+      .optional(),
+  })
+  .refine((v) => v.economic !== undefined || v.item !== undefined, {
+    message: 'A reward requires an economic or item component',
+  });
 
 export const createPlayerMissionBody = z
   .object({

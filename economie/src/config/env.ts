@@ -22,6 +22,8 @@ export const env = {
   oidc: {
     issuer,
     jwksUrl: process.env.OIDC_JWKS_URL || `${issuer}/protocol/openid-connect/certs`,
+    /** Defaults to `${OIDC_ISSUER}/protocol/openid-connect/token` (client_credentials). */
+    tokenUrl: process.env.OIDC_TOKEN_URL || `${issuer}/protocol/openid-connect/token`,
     /** Optional expected `aud` claim for player tokens; empty disables the audience check. */
     audience: process.env.OIDC_AUDIENCE || undefined,
     /** Expected `aud` of service-account tokens (client_credentials) on `/api/internal/*`. */
@@ -52,5 +54,14 @@ export const env = {
     maxTransfer: int('ECONOMY_MAX_TRANSFER', 0),
     /** Upsert key of the reserved system account that collects automatic taxes. */
     taxVaultUuid: process.env.ECONOMY_TAX_VAULT_UUID ?? '00000000-0000-0000-0000-000000000001',
+  },
+  /** Social integration used to resolve player pseudonyms (empty URL disables it). */
+  social: {
+    apiUrl: (process.env.SOCIAL_API_URL ?? '').replace(/\/$/, ''),
+    /** Service account used for `client_credentials` (defaults to the economie service client). */
+    serviceClientId: process.env.SOCIAL_SERVICE_CLIENT_ID ?? 'svc-economie',
+    serviceClientSecret: process.env.SOCIAL_SERVICE_CLIENT_SECRET ?? '',
+    /** Dev-only fallback: shared key sent as `X-Internal-Key` when no secret is set. */
+    internalApiKey: process.env.SOCIAL_INTERNAL_API_KEY ?? '',
   },
 };

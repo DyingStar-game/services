@@ -1,0 +1,643 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Inventory API
+  version: 0.1.0
+  description: >
+    Ownership registry of DyingStar: who owns which goods. Goods are either **fungible**
+    (a stack: type + quantity, e.g. 500 t of ore) or **unique** (an instance with a stable
+    UUID, e.g. a specific truck). This service stores ownership and reservations only — it
+    never tracks physical location and never moves goods by itself: the game server (or the
+    market/mission service) confirms that an exchange really happened, then ownership moves.
+
+    Three kinds of callers:
+
+    * **Players** send a Keycloak JWT (`Authorization: Bearer`). With `AUTH_DEV_BYPASS=true`
+      (never in production) the `X-Player-Id` / `X-Player-Name` headers are accepted instead.
+    * **The game server, the market and the mission service** authenticate with a Keycloak
+      service-account token (`client_credentials`) whose `azp` is an allowed client and whose
+      `aud` targets `inventory-api`. Each `/api/internal/*` route requires a capability role
+      (e.g. `inventory:hold`). Dev only (`INTERNAL_DEV_BYPASS=true`): the legacy
+      `X-Internal-Key` header is accepted.
+
+    Every error is `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: public
+    description: Unauthenticated endpoints
+  - name: me
+    description: The authenticated player's own inventory
+  - name: corporations
+    description: Corporation inventories (membership delegated to the Social service)
+  - name: internal
+    description: Game-server / market / mission integration (service accounts, capability roles)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ── Public ─────────────────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [public]
+      summary: Liveness check
+      responses:
+        '200':
+          description: API is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: inventory }
+                  version: { type: string, example: 0.1.0 }
+
+  /openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document (alias under /api)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  # ── Me (own inventory) ─────────────────────────────────────────────────────
+  /api/me/inventory:
+    get:
+      tags: [me]
+      summary: The caller's inventory (stacks with held/available, and owned instances)
+      responses:
+        '200':
+          description: Inventory of the caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HolderInventory' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/me/inventory/stacks/{goodType}:
+    get:
+      tags: [me]
+      summary: One stack of the caller, with held and available quantities
+      parameters:
+        - $ref: '#/components/parameters/goodType'
+      responses:
+        '200':
+          description: The stack
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StackView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Corporations ───────────────────────────────────────────────────────────
+  /api/corporations/{corporationId}/inventory:
+    get:
+      tags: [corporations]
+      summary: Corporation inventory (member only, membership checked in Social)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Inventory of the corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HolderInventory' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not a member of this corporation (`NOT_CORPORATION_MEMBER`), or Social not configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/corporations/{corporationId}/inventory/stacks/{goodType}:
+    get:
+      tags: [corporations]
+      summary: One corporation stack (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/goodType'
+      responses:
+        '200':
+          description: The stack
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StackView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Internal (game server / market / mission) ──────────────────────────────
+  /api/internal/holders/{holderType}/{holderId}:
+    get:
+      tags: [internal]
+      summary: Full inventory of a holder
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+      responses:
+        '200':
+          description: Stacks (with held/available) and instances
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HolderInventory' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/holders/{holderType}/{holderId}/stacks/{goodType}:
+    get:
+      tags: [internal]
+      summary: One stack with held and available quantities
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+        - $ref: '#/components/parameters/goodType'
+      responses:
+        '200':
+          description: The stack
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StackView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/holders/{holderType}/{holderId}/credit:
+    post:
+      tags: [internal]
+      summary: Grant fungible goods to a holder
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoodQuantityBody' }
+      responses:
+        '201':
+          description: Updated stack
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stack' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/holders/{holderType}/{holderId}/debit:
+    post:
+      tags: [internal]
+      summary: Consume available (non-held) fungible goods
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoodQuantityBody' }
+      responses:
+        '201':
+          description: Updated stack
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stack' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/holders/{holderType}/{holderId}/instances:
+    post:
+      tags: [internal]
+      summary: Register (or re-affirm) a unique instance owned by a holder
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterInstanceBody' }
+      responses:
+        '201':
+          description: The instance
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Instance' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/holders/{holderType}/{holderId}/instances/{instanceId}:
+    patch:
+      tags: [internal]
+      summary: Set the physical status (`stored` / `in_world`) of an owned instance
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+        - $ref: '#/components/parameters/instanceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/InstanceStatus' }
+      responses:
+        '200':
+          description: Updated instance
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Instance' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/transfers:
+    post:
+      tags: [internal]
+      summary: Move available fungible goods between holders (no hold)
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferStackBody' }
+      responses:
+        '201':
+          description: Destination stack
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stack' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/transfers/instance:
+    post:
+      tags: [internal]
+      summary: Move a unique instance between holders (must not be held)
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferInstanceBody' }
+      responses:
+        '201':
+          description: The transferred instance
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Instance' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/holders/{holderType}/{holderId}/holds:
+    post:
+      tags: [internal]
+      summary: Reserve available goods for a pending operation
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateHoldBody' }
+      responses:
+        '201':
+          description: The created hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hold' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/holds/{holdId}/release:
+    post:
+      tags: [internal]
+      summary: Release a hold (goods become available again, no ownership change)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holdId'
+      responses:
+        '200':
+          description: The released hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hold' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/holds/{holdId}/consume:
+    post:
+      tags: [internal]
+      summary: Consume a hold by transferring its reserved goods to a holder
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holdId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to: { $ref: '#/components/schemas/Holder' }
+      responses:
+        '200':
+          description: The consumed hold and the transferred goods
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hold]
+                properties:
+                  hold: { $ref: '#/components/schemas/Hold' }
+                  stack: { $ref: '#/components/schemas/Stack' }
+                  instance: { $ref: '#/components/schemas/Instance' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak access token (RS256, validated against the realm JWKS). The player id is the
+        `sub` claim. Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id`, `X-Player-Name`,
+        `X-Player-Roles` headers may replace the token.
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak service-account access token (client_credentials, RS256). `azp` must be an
+        allowed client (`INTERNAL_SERVICE_CLIENTS`) and `aud` must contain `inventory-api`;
+        each route then needs its capability role. Dev only (`INTERNAL_DEV_BYPASS=true`): the
+        legacy `X-Internal-Key` header is accepted instead.
+
+  parameters:
+    holderType:
+      name: holderType
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/HolderType' }
+    holderId:
+      name: holderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    corporationId:
+      name: corporationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    goodType:
+      name: goodType
+      in: path
+      required: true
+      schema: { type: string, maxLength: 128 }
+    instanceId:
+      name: instanceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    holdId:
+      name: holdId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Not a corporation member (`NOT_CORPORATION_MEMBER`) or missing role (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: >
+        State conflict (`CONFLICT`, `INSUFFICIENT_GOODS`): good-type nature mismatch, held or
+        insufficient goods, instance already owned/held.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServiceForbidden:
+      description: >
+        The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or the service
+        account lacks the route's capability role (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, status]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, INTERNAL_ERROR]
+        message: { type: string }
+        status: { type: integer }
+
+    # ── Enums ──
+    HolderType:
+      type: string
+      enum: [player, npc, corporation, system]
+    GoodKind:
+      type: string
+      enum: [stack, instance]
+    InstanceStatus:
+      type: string
+      enum: [stored, in_world]
+    HoldKind:
+      type: string
+      enum: [stack, instance]
+    HoldStatus:
+      type: string
+      enum: [active, consumed, released]
+    HoldRefType:
+      type: string
+      enum: [market_order, mission_escrow, manual]
+
+    # ── Model ──
+    Holder:
+      type: object
+      required: [holderType, holderId]
+      properties:
+        holderType: { $ref: '#/components/schemas/HolderType' }
+        holderId: { type: string, format: uuid, description: Player/NPC Keycloak subject, or corporation id (both owned by Social) }
+
+    Stack:
+      type: object
+      required: [holderType, holderId, goodType, quantity, updatedAt]
+      properties:
+        holderType: { $ref: '#/components/schemas/HolderType' }
+        holderId: { type: string, format: uuid }
+        goodType: { type: string }
+        quantity: { type: integer, description: Total owned quantity (integer units) }
+        updatedAt: { type: string, format: date-time }
+
+    StackView:
+      allOf:
+        - $ref: '#/components/schemas/Stack'
+        - type: object
+          required: [held, available]
+          properties:
+            held: { type: integer, description: Quantity reserved by active holds }
+            available: { type: integer, description: "`quantity - held`, the tradable/consumable part" }
+
+    Instance:
+      type: object
+      required: [id, goodType, holderType, holderId, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid, description: Stable instance UUID }
+        goodType: { type: string }
+        holderType: { $ref: '#/components/schemas/HolderType' }
+        holderId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/InstanceStatus' }
+        metadata: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    HolderInventory:
+      type: object
+      required: [holderType, holderId, stacks, instances]
+      properties:
+        holderType: { $ref: '#/components/schemas/HolderType' }
+        holderId: { type: string, format: uuid }
+        stacks:
+          type: array
+          items: { $ref: '#/components/schemas/StackView' }
+        instances:
+          type: array
+          items: { $ref: '#/components/schemas/Instance' }
+
+    Hold:
+      type: object
+      required: [id, holderType, holderId, kind, goodType, quantity, refType, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        holderType: { $ref: '#/components/schemas/HolderType' }
+        holderId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/HoldKind' }
+        goodType: { type: string }
+        quantity: { type: integer }
+        instanceId: { type: [string, 'null'], format: uuid }
+        refType: { $ref: '#/components/schemas/HoldRefType' }
+        refId: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/HoldStatus' }
+        details: { type: [object, 'null'], additionalProperties: true }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    # ── Bodies ──
+    GoodQuantityBody:
+      type: object
+      required: [goodType, quantity]
+      properties:
+        goodType: { type: string, maxLength: 128 }
+        quantity: { type: integer, minimum: 1 }
+
+    RegisterInstanceBody:
+      type: object
+      required: [instanceId, goodType]
+      properties:
+        instanceId: { type: string, format: uuid }
+        goodType: { type: string, maxLength: 128 }
+        metadata: { type: object, additionalProperties: true }
+
+    TransferStackBody:
+      type: object
+      required: [from, to, goodType, quantity]
+      properties:
+        from: { $ref: '#/components/schemas/Holder' }
+        to: { $ref: '#/components/schemas/Holder' }
+        goodType: { type: string, maxLength: 128 }
+        quantity: { type: integer, minimum: 1 }
+
+    TransferInstanceBody:
+      type: object
+      required: [from, to, instanceId]
+      properties:
+        from: { $ref: '#/components/schemas/Holder' }
+        to: { $ref: '#/components/schemas/Holder' }
+        instanceId: { type: string, format: uuid }
+
+    CreateHoldBody:
+      type: object
+      required: [kind, goodType, refType]
+      properties:
+        kind: { $ref: '#/components/schemas/HoldKind' }
+        goodType: { type: string, maxLength: 128 }
+        quantity: { type: integer, minimum: 1, description: Required for stack holds }
+        instanceId: { type: string, format: uuid, description: Required for instance holds }
+        refType: { $ref: '#/components/schemas/HoldRefType' }
+        refId: { type: string, maxLength: 128, description: Required for non-manual holds }
+        expiresAt: { type: string, format: date-time }
+        details: { type: object, additionalProperties: true }

@@ -261,6 +261,7 @@ export async function completeMission(
     .from(missionAssignments)
     .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, 'active')));
   const shares = splitReward(mission.reward?.economic?.amount ?? 0, participants);
+  const itemShares = splitReward(mission.reward?.item?.quantity ?? 0, participants);
   const now = new Date();
 
   const { assignments: completedAssignments, mission: updatedMission } = await db.transaction(
@@ -273,6 +274,7 @@ export async function completeMission(
             status: 'completed',
             completedAt: now,
             rewardAmount: shares.get(participant.id) ?? 0,
+            rewardItemQuantity: mission.reward?.item ? (itemShares.get(participant.id) ?? 0) : null,
             updatedAt: now,
           })
           .where(eq(missionAssignments.id, participant.id))
