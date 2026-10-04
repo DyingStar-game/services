@@ -73,7 +73,18 @@ export interface PlayerMovement {
 }
 
 /** Holder kinds whose wallets Economy exposes on its internal API. */
-export type WalletHolderType = 'player' | 'npc' | 'corporation';
+export type WalletHolderType = 'player' | 'npc' | 'corporation' | 'politics';
+
+/** URL segment of a holder's wallet routes (`/api/internal/<segment>/:id/wallet…`). */
+function walletSegment(holderType: WalletHolderType): string {
+  return holderType === 'player'
+    ? 'players'
+    : holderType === 'npc'
+      ? 'npcs'
+      : holderType === 'corporation'
+        ? 'corporations'
+        : 'politics';
+}
 
 /** Shared credit/debit call to the Economy internal API. */
 async function holderMovement(
@@ -82,7 +93,7 @@ async function holderMovement(
   holderId: string,
   opts: PlayerMovement,
 ): Promise<EconomyMovement | null> {
-  const segment = holderType === 'player' ? 'players' : holderType === 'npc' ? 'npcs' : 'corporations';
+  const segment = walletSegment(holderType);
   const res = await fetch(`${env.economy.apiUrl}/api/internal/${segment}/${holderId}/wallet/${direction}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
@@ -190,7 +201,7 @@ export async function getWalletAccounts(holderType: WalletHolderType, holderId: 
   if (!env.economy.apiUrl) {
     throw new HttpError(503, 'ECONOMY_NOT_CONFIGURED', 'ECONOMY_API_URL is not configured');
   }
-  const segment = holderType === 'player' ? 'players' : holderType === 'npc' ? 'npcs' : 'corporations';
+  const segment = walletSegment(holderType);
   const res = await fetch(`${env.economy.apiUrl}/api/internal/${segment}/${holderId}/wallet`, {
     headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) },
   });

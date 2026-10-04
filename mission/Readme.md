@@ -107,6 +107,8 @@ Filtrée au **listing** (SQL, joueur sans position = ne voit que les globales ; 
 
 **Missions joueurs** (`POST /api/missions`) : `rewards[]` **séquestrés à la création** — le composant crédits est débité du portefeuille du créateur (`economie:wallet:debit`, `externalId = mission-escrow:<missionId>`), **chaque** composant item est réservé en hold (`escrowItemHoldIds[]`, un par item). Remboursé si annulation/expiration (`mission-refund:<missionId>`). `visibility: corporation` vérifiée via social.
 
+**Financement par un trésor d'organisation** (`escrowSource`) : une mission émise par une **corporation** (`corporationId`) ou une **entité politique** (`politicalEntityId`, commune → fédération ; `issuerType: politics`) peut être prélevée sur **le compte bancaire de l'organisation** plutôt que sur le portefeuille du créateur : `escrowSource: 'issuer'` (défaut `'creator'` = comportement classuel, le joueur paie de sa poche). Garde-fous : le créateur doit être **membre de l'émetteur** et détenir la permission de dépense — **CEO ou `manage_corporation`** pour une corporation, **office chef ou `manage_treasury`** pour une entité politique (`403 TREASURY_FORBIDDEN`, `400 ESCROW_SOURCE_INVALID` si émetteur absent). Le remboursement (annulation/expiration) revient sur le même compte (`escrowPayerType` : `player|corporation|politics`, clés `mission-refund:<id>` identiques).
+
 **Règlement** : à la complétion, **revérification** des objectifs `service` (sauf `force`) puis paiement composant par composant : crédits idempotents via `externalId = mission:<missionId>:<playerId>` ; items = **claim atomique** dans `settledComponents` (`item:<itemId>`) *avant* le transfert (hold séquestré consommé, sinon faucet `system`) — un échec partiel se rejoue sans jamais double-payer. Rejouer via `POST /api/internal/missions/:missionId/settle`.
 
 ## Endpoints
@@ -129,7 +131,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/missions/kinds` | Catalogue des kinds (catégories, objectifs, prérequis, forme des récompenses) pour les builders |
 | POST | `/api/missions/validate` `{mode?, mission}` | Dry-run d'une spec (aucune persistance, aucun séquestre) |
 | GET | `/api/missions?status=&kind=&category=&issuerType=&issuerId=&visibility=&groupClaimable=&isEvent=&limit=` | Missions **avec une place libre** (statuts `available` + `active` par défaut ; groupes partagés visibles membres uniquement ; **zones** : sans position connue, seules les missions globales sont listées) |
-| POST | `/api/missions` `{title, rewards[], prerequisites?, zones?, visibility?, corporationId?, maxAssignees?, groupClaimable?, objectives[{type(kind), params?…}]}` | Créer une mission (récompenses **séquestrées** à la création) |
+| POST | `/api/missions` `{title, rewards[], prerequisites?, zones?, visibility?, corporationId?, politicalEntityId?, escrowSource?, maxAssignees?, groupClaimable?, objectives[{type(kind), params?…}]}` | Créer une mission (récompenses séquestrées ; `escrowSource: 'issuer'` = prélevé sur le **trésor corpo/politique**) |
 | GET | `/api/missions/:missionId` | Détail + objectifs + mon assignation (404 si partagée à un groupe dont je ne suis pas membre) |
 | POST | `/api/missions/:missionId/accept` | Accepter : corp + **zone** (`403 OUT_OF_ZONE`) + **prérequis** (`403 PREREQ_FAILED`) + groupe (`NOT_GROUP_MEMBER`, `NO_GROUP`, `GROUP_ALREADY_CLAIMED`) |
 | POST | `/api/missions/:missionId/verify` | Re-mesurer les objectifs `service` (effectue les livraisons `deliver_items`) |
@@ -168,7 +170,8 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 - Compte de service **`svc-mission`** (celui de ce service) — rôles à accorder sur les clients cibles :
   - **economie** (`INTERNAL_SERVICE_CLIENTS`) : `economie:wallet:credit`, `economie:wallet:debit` (séquestre) **et `economie:wallet:read`** (prérequis/objet `has_credits`) ;
   - **inventory** : **`inventory:read`** (mesure `owns_items`/`deliver_items` + prérequis) — les rôles de hold/transfer/credit utilisés par le règlement doivent aussi être accordés ;
-  - **social** : `social:corporation:read` (missions corporation), `social:group:read` (partage/claim de groupes) **et `social:profile:read`** (prérequis `min_reputation`).
+  - **social** : `social:corporation:read` (missions corporation), `social:group:read` (partage/claim de groupes), `social:profile:read` (prérequis `min_reputation`) **et `social:politics:read`** (appartenance politique pour `escrowSource: issuer`) ;
+  - **economie** : **`economie:politics:manage`** (débit/crédit du trésor politique — le trésor corporation n'a besoin d'aucun rôle supplémentaire, `economie:wallet:*` suffit).
 - Création des clients/secrets/rôles gérée côté Keycloak (realm `dyingstar`, clients `svc-*`), hors realm JSON.
 
 ## Structure
@@ -214,6 +217,7 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Livraison vérifiée avant paiement : kind `deliver_items` (transfert au verify vers la cible)
 - [x] Kind `manual` : confirmation par l'émetteur (contrat type Eco)
 - [x] Catégories ouvertes (enum élargie : mining, farming, crafting, …)
+- [x] Missions financées par un **trésor d'organisation** (`escrowSource: 'issuer'` : corporation → CEO/`manage_corporation`, entité politique → chef/`manage_treasury`)
 - [x] Missions **zonées** : dispo par système / scène hiérarchique (`scene` en chemin) / area (rayon) — filtrées au listing et à l'acceptation (`403 OUT_OF_ZONE`) selon la présence social
 - [x] Spec immuable après création (précédent FTB : le séquestre est pris dessus)
 - [x] **Break propre** : ancienne forme `reward` retirée, serveur de jeu à adapter (corps `rewards[]`, `params`, verify/confirm)

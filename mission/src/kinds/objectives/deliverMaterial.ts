@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { d } from '../schemaI18n.js';
 import type { ObjectiveKind } from '../types.js';
 
 /** Deliver a material at a place: reported by the game server. */
@@ -11,7 +12,7 @@ export const deliverMaterialKind: ObjectiveKind = {
   paramsJsonSchema: {
     type: 'object',
     required: ['itemId'],
-    properties: { itemId: { type: 'string', maxLength: 128, description: 'Inventory good type to deliver' } },
+    properties: { itemId: { type: 'string', maxLength: 128, description: d('Inventory good type to deliver', 'Type de bien Inventory à livrer') } },
     additionalProperties: false,
   },
   summary: { en: 'Deliver a quantity of {itemId} at {locationTo} (progress reported by the game server)', fr: 'Livrer une quantité de {itemId} à {locationTo} (progression rapportée par le serveur de jeu)' },

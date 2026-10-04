@@ -523,6 +523,19 @@ console.log('\n# validation');
     asPlayer(A),
   );
   check('zero progress', [zeroProgress.status, zeroProgress.json.error], [400, 'VALIDATION_ERROR']);
+
+  const issuerNoOrg = await req(
+    'POST',
+    '/api/missions',
+    {
+      title: 'Trésor sans émetteur',
+      escrowSource: 'issuer',
+      rewards: [{ type: 'credits', currency: 'credits', amount: 10 }],
+      objectives: [{ type: 'custom', title: 'x' }],
+    },
+    asPlayer(A, 'alice'),
+  );
+  check('issuer escrow without organization rejected', [issuerNoOrg.status, issuerNoOrg.json.error], [400, 'VALIDATION_ERROR']);
 }
 
 // ── Economic reward settlement (optional, needs a running Economy) ────────────
@@ -656,6 +669,122 @@ if (ECONOMY_BASE) {
   check('prerequisite satisfied', [richAccept.status, richAccept.json.assignment?.status], [201, 'active']);
 } else {
   console.log('  skip real Economy credit (set ECONOMY_BASE to assert the wallet movement and prereqs)');
+}
+
+// ── Organization treasuries: corporation & political entity funding ──────────
+
+console.log('\n# organization treasuries (corporation / politics)');
+if (ECONOMY_BASE && SOCIAL_BASE) {
+  const suffix = Date.now().toString(36).toUpperCase().slice(-4);
+  /** Credits balance of a treasury (corporation or political entity). */
+  const treasury = async (kind, id) => {
+    const { json } = await req(
+      'GET',
+      `${ECONOMY_BASE}/api/internal/${kind}/${id}/wallet`,
+      undefined,
+      { 'X-Internal-Key': ECONOMY_KEY },
+      ECONOMY_BASE,
+    );
+    return json.accounts?.find((a) => a.currency === 'credits')?.balance ?? 0;
+  };
+
+  // ── Corporation: CEO A funds a mission from the corporation treasury ───────
+  const corp = await req(
+    'POST',
+    `${SOCIAL_BASE}/api/internal/corporations`,
+    { ceoId: A, name: `Tresor ${suffix}`, ticker: `T${suffix}` },
+    socialAuth,
+    SOCIAL_BASE,
+  );
+  check('corporation created (CEO = A)', [corp.status, corp.json.ceoId], [201, A]);
+  const corpId = corp.json.id;
+  const fund = await req(
+    'POST',
+    `${ECONOMY_BASE}/api/internal/corporations/${corpId}/wallet/credit`,
+    { amount: 5000, currency: 'credits', reference: 'smoke_treasury', externalId: `smoke-treasury:${corpId}` },
+    { 'X-Internal-Key': ECONOMY_KEY },
+    ECONOMY_BASE,
+  );
+  check('corporation treasury funded', [fund.status, await treasury('corporations', corpId)], [201, 5000]);
+
+  const corpMission = await req(
+    'POST',
+    '/api/missions',
+    {
+      title: `Contrat corpo ${suffix}`,
+      escrowSource: 'issuer',
+      corporationId: corpId,
+      rewards: [{ type: 'credits', currency: 'credits', amount: 500 }],
+      objectives: [{ type: 'custom', title: 'Travail' }],
+    },
+    asPlayer(A, 'alice'),
+  );
+  check(
+    'mission funded by the corporation treasury',
+    [corpMission.status, corpMission.json.mission?.escrowStatus, corpMission.json.mission?.escrowPayerType],
+    [201, 'held', 'corporation'],
+  );
+  check('corporation treasury debited', 5000 - (await treasury('corporations', corpId)), 500);
+
+  const outsider = await req(
+    'POST',
+    '/api/missions',
+    {
+      title: `Contrat volé ${suffix}`,
+      escrowSource: 'issuer',
+      corporationId: corpId,
+      rewards: [{ type: 'credits', currency: 'credits', amount: 100 }],
+      objectives: [{ type: 'custom', title: 'x' }],
+    },
+    asPlayer(B, 'bob'),
+  );
+  check('non-member cannot commit the treasury', [outsider.status, outsider.json.error], [403, 'TREASURY_FORBIDDEN']);
+
+  await req('POST', `/api/internal/missions/${corpMission.json.mission.id}/cancel`, undefined, internal);
+  check('corporation treasury refunded on cancel', await treasury('corporations', corpId), 5000);
+
+  // ── Political entity: head A funds a mission from the commune treasury ─────
+  const entity = await req(
+    'POST',
+    `${SOCIAL_BASE}/api/internal/politics`,
+    { headId: A, type: 'commune', name: `Smokeville ${suffix}` },
+    socialAuth,
+    SOCIAL_BASE,
+  );
+  check('political entity created (head = A)', [entity.status, entity.json.headId], [201, A]);
+  const entityId = entity.json.id;
+  const fundP = await req(
+    'POST',
+    `${ECONOMY_BASE}/api/internal/politics/${entityId}/wallet/credit`,
+    { amount: 3000, currency: 'credits', reference: 'smoke_treasury', externalId: `smoke-treasury:${entityId}` },
+    { 'X-Internal-Key': ECONOMY_KEY },
+    ECONOMY_BASE,
+  );
+  check('political treasury funded', [fundP.status, await treasury('politics', entityId)], [201, 3000]);
+
+  const polMission = await req(
+    'POST',
+    '/api/missions',
+    {
+      title: `Travaux communaux ${suffix}`,
+      escrowSource: 'issuer',
+      politicalEntityId: entityId,
+      rewards: [{ type: 'credits', currency: 'credits', amount: 800 }],
+      objectives: [{ type: 'custom', title: 'Travaux' }],
+    },
+    asPlayer(A, 'alice'),
+  );
+  check(
+    'mission funded by the political treasury',
+    [polMission.status, polMission.json.mission?.escrowStatus, polMission.json.mission?.escrowPayerType],
+    [201, 'held', 'politics'],
+  );
+  check('political treasury debited', 3000 - (await treasury('politics', entityId)), 800);
+
+  await req('POST', `/api/internal/missions/${polMission.json.mission.id}/cancel`, undefined, internal);
+  check('political treasury refunded on cancel', await treasury('politics', entityId), 3000);
+} else {
+  console.log('  skip organization treasury flows (set ECONOMY_BASE + SOCIAL_BASE)');
 }
 
 console.log(`\n${failures.length === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failures.length} failed`);

@@ -201,3 +201,36 @@ export interface PlayerPresence {
 export async function getPlayerPresence(playerId: string): Promise<PlayerPresence> {
   return fetchInternal<PlayerPresence>(`/api/internal/players/${playerId}/presence`);
 }
+
+/** Political membership of a player in an entity, with their office (Social internal API). */
+export interface PoliticalMembership {
+  id: string;
+  type: string;
+  name: string;
+  office: {
+    id: number;
+    name: string;
+    priority: number;
+    permissions: string[];
+    isHead: boolean;
+    isDefault: boolean;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+/**
+ * A player's membership in a political entity (with their office and its permissions),
+ * or null. Used to gate missions funded by the entity's treasury (`manage_treasury`).
+ * @param playerId - Player id.
+ * @param entityId - Political entity id.
+ * @returns Membership, or null.
+ */
+export async function getPlayerPoliticalMembership(
+  playerId: string,
+  entityId: string,
+): Promise<PoliticalMembership | null> {
+  return fetchInternal<PoliticalMembership | null>(
+    `/api/internal/players/${playerId}/politics?entityId=${encodeURIComponent(entityId)}`,
+  );
+}

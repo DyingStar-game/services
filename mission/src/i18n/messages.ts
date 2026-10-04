@@ -60,6 +60,11 @@ export const en = {
   'prereq.detail.no_profile': 'profile not found',
   'prereq.detail.reputation': 'reputation {reputation} < {min}',
   'prereq.detail.not_corp': 'not a member of corporation {corporationId}',
+  // ── organization treasuries (corporation / political entity funding) ──
+  'treasury.not_corp_member': 'You are not a member of the corporation funding this mission',
+  'treasury.no_corp_permission': 'Requires the CEO role or the manage_corporation permission',
+  'treasury.not_politics_member': 'You are not a member of the political entity funding this mission',
+  'treasury.no_treasury_permission': 'Requires an office with the manage_treasury permission (or the head)',
 } as const;
 
 /** Keys of the construction-time catalog (typed from the English source). */
@@ -109,6 +114,11 @@ export const fr: Record<MessageKey, string> = {
   'prereq.detail.no_profile': 'profil introuvable',
   'prereq.detail.reputation': 'réputation {reputation} < {min}',
   'prereq.detail.not_corp': 'pas membre de la corporation {corporationId}',
+  // ── organization treasuries (corporation / political entity funding) ──
+  'treasury.not_corp_member': 'Vous n\'êtes pas membre de la corporation qui finance cette mission',
+  'treasury.no_corp_permission': 'Nécessite le rôle CEO ou la permission manage_corporation',
+  'treasury.not_politics_member': 'Vous n\'êtes pas membre de l\'entité politique qui finance cette mission',
+  'treasury.no_treasury_permission': 'Nécessite un office avec la permission manage_treasury (ou le chef)',
 };
 
 /**
@@ -161,6 +171,7 @@ export const frCodeMessages: Record<string, string> = {
   INVENTORY_CALL_FAILED: 'Échec de l’appel Inventory {method} {path} ({status}) : {message}',
   ITEM_REWARD_NOT_SPLITABLE: 'Récompense item non partageable entre plusieurs assignés (instance unique ou séquestrée)',
   EVENT_CAPACITY_REQUIRES_FLAG: 'Ramenez maxAssignees à 100 ou moins avant de retirer le flag event',
+  ESCROW_SOURCE_INVALID: 'escrowSource "issuer" nécessite un émetteur corporation ou politique',
   // ── HTTP plumbing ──
   INVALID_JSON: 'Corps JSON malformé',
   INTERNAL_ERROR: 'Erreur interne du serveur',

@@ -33,9 +33,16 @@ export const MISSION_CATEGORIES = [
 ] as const;
 export type MissionCategory = (typeof MISSION_CATEGORIES)[number];
 
-/** Who issued the mission. `corporation`/`city` ids are opaque (owned by Social / the game). */
-export const MISSION_ISSUER_TYPES = ['system', 'corporation', 'city', 'player'] as const;
+/**
+ * Who issued the mission. `corporation` ids are opaque (owned by Social); `politics` is a
+ * political entity (commune … federation, owned by Social); `city` kept for the game.
+ */
+export const MISSION_ISSUER_TYPES = ['system', 'corporation', 'city', 'politics', 'player'] as const;
 export type MissionIssuerType = (typeof MISSION_ISSUER_TYPES)[number];
+
+/** Whose account funded the escrow (drives the refund target on cancel/expire). */
+export const ESCROW_PAYER_TYPES = ['player', 'corporation', 'politics'] as const;
+export type EscrowPayerType = (typeof ESCROW_PAYER_TYPES)[number];
 
 /** Lifecycle of a mission as a whole. */
 export const MISSION_STATUSES = ['available', 'active', 'completed', 'cancelled', 'expired'] as const;
@@ -158,6 +165,8 @@ export const missions = pgTable(
     escrowCurrency: text('escrow_currency'),
     /** Player whose wallet funded the escrow (refunded on cancel/expire). */
     escrowPayerId: uuid('escrow_payer_id'),
+    /** Holder kind of `escrowPayerId`: who gets the refund (player wallet or org treasury). */
+    escrowPayerType: text('escrow_payer_type').$type<EscrowPayerType>().notNull().default('player'),
     /** Idempotency key of the Economy escrow debit (`mission-escrow:<missionId>`). */
     escrowExternalId: text('escrow_external_id'),
     /** Item escrow lifecycle for player-funded item rewards (all item components). */

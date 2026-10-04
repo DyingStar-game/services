@@ -1,0 +1,1 @@
+ALTER TABLE "missions" ADD COLUMN "escrow_payer_type" text DEFAULT 'player' NOT NULL;

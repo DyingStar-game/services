@@ -18,6 +18,7 @@ import {
   type MissionKind,
   type MissionObjective,
   type MissionStatus,
+  type EscrowPayerType,
   type MissionVisibility,
   type MissionZone,
   type PrerequisiteSpec,
@@ -26,10 +27,15 @@ import {
 } from '../db/schema/index.js';
 import { getObjectiveKind } from '../kinds/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
-import { debitPlayer, creditPlayer } from './economy.client.js';
+import { creditHolder, debitHolder, type WalletHolderType } from './economy.client.js';
 import { createHold, releaseHold } from './inventory.client.js';
 import { settledTotal } from './rewards.service.js';
-import { getGroup, isCorporationMember, getPlayerCorporationIn } from './social.client.js';
+import {
+  getGroup,
+  isCorporationMember,
+  getPlayerCorporationIn,
+  getPlayerPoliticalMembership,
+} from './social.client.js';
 import { validateMissionSpec, type SpecObjectiveInput } from './spec.service.js';
 import { zoneFilterSql } from './zones.service.js';
 
@@ -69,6 +75,13 @@ export interface CreatePlayerMissionInput {
   visibility?: MissionVisibility;
   /** Corporation id when `visibility` is `corporation`. */
   issuerId?: string | null;
+  /** Alternative issuer: political entity (commune … federation, owned by Social). */
+  politicalEntityId?: string | null;
+  /**
+   * Who funds the escrow: `creator` pays from their own wallet (default), `issuer` debits
+   * the issuing organization's treasury (requires the org issuer + its permission).
+   */
+  escrowSource?: 'creator' | 'issuer';
   rewards: RewardComponent[];
   prerequisites?: PrerequisiteSpec[];
   /** Availability zones (empty = global). */
@@ -293,6 +306,41 @@ export async function createMission(
  * @param playerId - Creating player (escrow payer).
  * @returns The created mission and objectives.
  */
+/**
+ * Whether the player may commit an organization's treasury (corporation or political
+ * entity) to fund a mission: membership plus the organization's spending permission —
+ * CEO/`manage_corporation` for a corporation, head office or `manage_treasury` for a
+ * political entity.
+ * @param issuerType - `corporation` or `politics`.
+ * @param issuerId - Organization id (opaque, owned by Social).
+ * @param playerId - Acting player.
+ * @throws 403 `TREASURY_FORBIDDEN` when the player may not commit the treasury.
+ */
+async function assertTreasuryAccess(
+  issuerType: 'corporation' | 'politics',
+  issuerId: string,
+  playerId: string,
+): Promise<void> {
+  if (issuerType === 'corporation') {
+    const membership = await getPlayerCorporationIn(playerId, issuerId);
+    if (!membership) {
+      throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.not_corp_member'));
+    }
+    if (!membership.rank.isCeo && !membership.rank.permissions.includes('manage_corporation')) {
+      throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.no_corp_permission'));
+    }
+    return;
+  }
+  const membership = await getPlayerPoliticalMembership(playerId, issuerId);
+  if (!membership) {
+    throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.not_politics_member'));
+  }
+  const office = membership.office;
+  if (!office.isHead && !(office.permissions ?? []).includes('manage_treasury')) {
+    throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.no_treasury_permission'));
+  }
+}
+
 export async function createPlayerMission(
   input: CreatePlayerMissionInput,
   playerId: string,
@@ -318,6 +366,30 @@ export async function createPlayerMission(
     }
   }
 
+  // Issuer resolution: a political entity issuer takes over the default player/corp issuer.
+  const politicalEntityId = input.politicalEntityId ?? null;
+  const issuerType: MissionIssuerType = politicalEntityId
+    ? 'politics'
+    : input.issuerId
+      ? 'corporation'
+      : 'player';
+  const issuerId: string | null = politicalEntityId ?? input.issuerId ?? null;
+  const escrowSource = input.escrowSource ?? 'creator';
+  if (escrowSource === 'issuer') {
+    if (!issuerId || (issuerType !== 'corporation' && issuerType !== 'politics')) {
+      throw new HttpError(
+        400,
+        'ESCROW_SOURCE_INVALID',
+        'escrowSource "issuer" requires a corporation or political entity issuer',
+      );
+    }
+    await assertTreasuryAccess(issuerType, issuerId, playerId);
+  }
+  const escrowPayerType: EscrowPayerType =
+    escrowSource === 'issuer' ? (issuerType === 'politics' ? 'politics' : 'corporation') : 'player';
+  // `issuerId` is non-null here: the `issuer` branch above throws otherwise.
+  const escrowPayerId: string = escrowSource === 'issuer' ? issuerId! : playerId;
+
   const economic = spec.rewards.find((component) => component.type === 'credits');
   const items = spec.rewards.filter((component): component is Extract<RewardComponent, { type: 'item' }> => component.type === 'item');
   const missionId = randomUUID();
@@ -332,8 +404,8 @@ export async function createPlayerMission(
         description: input.description,
         kind: 'player',
         category: input.category ?? 'generic',
-        issuerType: visibility === 'corporation' ? 'corporation' : 'player',
-        issuerId: input.issuerId ?? null,
+        issuerType,
+        issuerId,
         visibility,
         rewards: spec.rewards,
         prerequisites: spec.prerequisites,
@@ -344,7 +416,8 @@ export async function createPlayerMission(
         escrowStatus: economic ? 'pending' : 'none',
         escrowAmount: economic ? economic.amount : null,
         escrowCurrency: economic ? economic.currency : null,
-        escrowPayerId: playerId,
+        escrowPayerId,
+        escrowPayerType,
         escrowExternalId: economic ? escrowExternalId : null,
         escrowItemStatus: items.length > 0 ? 'held' : 'none',
         createdBy: playerId,
@@ -391,10 +464,11 @@ export async function createPlayerMission(
     }
   }
 
-  // Escrow the credits component (debit from the creator's wallet).
+  // Escrow the credits component (debited from the funding account: the creator's wallet
+  // or the issuing organization's treasury).
   if (economic) {
     try {
-      await debitPlayer(playerId, {
+      await debitHolder(escrowPayerType, escrowPayerId, {
         amount: economic.amount,
         currency: economic.currency,
         reference: 'mission_escrow',
@@ -435,7 +509,7 @@ export async function refundEscrow(mission: Mission): Promise<void> {
   if (mission.escrowStatus === 'held' && mission.escrowAmount && mission.escrowPayerId) {
     const refund = mission.escrowAmount - (await settledTotal(mission.id));
     if (refund > 0) {
-      await creditPlayer(mission.escrowPayerId, {
+      await creditHolder(mission.escrowPayerType ?? 'player', mission.escrowPayerId, {
         amount: refund,
         currency: mission.escrowCurrency ?? 'credits',
         reference: 'mission_refund',

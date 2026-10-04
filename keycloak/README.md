@@ -110,8 +110,11 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 > `economie:politics:*`, `inventory:*`, `mission:*` and `market:*`.
 > The mission service (`svc-mission`) needs, on top of the write roles it already uses:
 > `social:corporation:read`, `social:group:read`, `social:profile:read` (prereq `min_reputation`)
-> on `social-api`, `economie:wallet:read` on `economie-api` (prereq/objective `has_credits`),
-> and `inventory:read` on `inventory-api` (objectives `owns_items` / `deliver_items`).
+> on `social-api` (plus `social:politics:read` for `escrowSource: issuer` on political
+> entities), `economie:wallet:read` and `economie:politics:manage` on `economie-api`
+> (prereq `has_credits` + political treasury escrow), and `inventory:read` on
+> `inventory-api` (objectives `owns_items` / `deliver_items`). The corporation treasury
+> escrow only needs the wallet roles it already has.
 
 ## Required GitHub Secrets
 

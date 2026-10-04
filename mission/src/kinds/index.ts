@@ -6,6 +6,7 @@
  */
 import { MISSION_CATEGORIES, type MissionCategory } from '../db/schema/index.js';
 import { currentLang } from '../i18n/index.js';
+import { d, localizeJsonSchema } from './schemaI18n.js';
 import type { JsonSchema, KindCategories, MessageText, ObjectiveKind, PrerequisiteKind } from './types.js';
 import { customKind } from './objectives/custom.js';
 import { deliverItemsKind } from './objectives/deliverItems.js';
@@ -82,7 +83,10 @@ export function getPrerequisiteKind(kind: string): PrerequisiteKind | undefined 
 /** JSON Schema of a reward component list, served to mission builders. */
 const REWARDS_JSON_SCHEMA: JsonSchema = {
   type: 'array',
-  description: 'Reward components: at most one credits component, any number of item components (distinct items)',
+  description: d(
+    'Reward components: at most one credits component, any number of item components (distinct items)',
+    'Composants de récompense : au plus un composant crédits, un nombre quelconque de composants objets (biens distincts)',
+  ),
   items: {
     oneOf: [
       {
@@ -102,7 +106,7 @@ const REWARDS_JSON_SCHEMA: JsonSchema = {
           type: { const: 'item' },
           itemId: { type: 'string', maxLength: 128 },
           quantity: { type: 'integer', minimum: 1 },
-          instanceId: { type: 'string', format: 'uuid', description: 'Unique instance (single assignee only)' },
+          instanceId: { type: 'string', format: 'uuid', description: d('Unique instance (single assignee only)', 'Récompense instance unique (assigné seul uniquement)') },
         },
         additionalProperties: false,
       },
@@ -145,14 +149,14 @@ export function missionKindsCatalog(): {
       quantity: k.quantity,
       summary: pickText(k.summary),
       categories: k.categories,
-      params: k.paramsJsonSchema,
+      params: localizeJsonSchema(k.paramsJsonSchema),
     })),
     prerequisiteKinds: PREREQUISITE_KIND_LIST.map((k) => ({
       kind: k.kind,
       summary: pickText(k.summary),
       categories: k.categories,
-      params: k.paramsJsonSchema,
+      params: localizeJsonSchema(k.paramsJsonSchema),
     })),
-    rewards: REWARDS_JSON_SCHEMA,
+    rewards: localizeJsonSchema(REWARDS_JSON_SCHEMA),
   };
 }

@@ -175,6 +175,13 @@ export const createPlayerMissionBody = z
     visibility: z.enum(MISSION_VISIBILITIES).default('public'),
     /** Required when `visibility` is `corporation`. */
     corporationId: uuidSchema.nullish(),
+    /** Alternative issuer: a political entity (commune … federation, owned by Social). */
+    politicalEntityId: uuidSchema.nullish(),
+    /**
+     * Who funds the escrow: `creator` pays from their own wallet (default), `issuer` debits
+     * the issuing organization's treasury (corporation or political entity).
+     */
+    escrowSource: z.enum(['creator', 'issuer']).default('creator'),
     /** Reward components, escrowed from the creator (≥ 1 required). */
     rewards: rewardsSchema.min(1),
     prerequisites: z.array(prerequisiteSchema).max(20).default([]),
@@ -189,6 +196,14 @@ export const createPlayerMissionBody = z
   .refine((v) => v.visibility !== 'corporation' || !!v.corporationId, {
     message: 'corporationId is required for corporation missions',
     path: ['corporationId'],
+  })
+  .refine((v) => !(v.corporationId && v.politicalEntityId), {
+    message: 'corporationId and politicalEntityId are mutually exclusive',
+    path: ['politicalEntityId'],
+  })
+  .refine((v) => v.escrowSource !== 'issuer' || !!(v.corporationId || v.politicalEntityId), {
+    message: 'escrowSource "issuer" requires corporationId or politicalEntityId',
+    path: ['escrowSource'],
   });
 
 /**
