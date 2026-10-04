@@ -9,6 +9,7 @@ import { validate } from '../middleware/validate.js';
 import { listActivity } from '../services/activity.service.js';
 import { listPlayerRequests, resolvePlayerRequest } from '../services/corporationRequests.service.js';
 import { getCorporationRefMap, listCorporationMemberships } from '../services/corporations.service.js';
+import { getPlayerGroup, listPlayerGroupInvitations, resolveGroupInvitation } from '../services/groups.service.js';
 import { getPoliticalRefMap, listPoliticalMemberships } from '../services/politics.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { ensureProfile, updateProfile } from '../services/profiles.service.js';
@@ -25,16 +26,18 @@ meRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const profile = await ensureProfile(player.id, player.username);
-    const [presence, corporationRefs, politicsRefs] = await Promise.all([
+    const [presence, corporationRefs, politicsRefs, groupMembership] = await Promise.all([
       getPresence(player.id),
       getCorporationRefMap([player.id]),
       getPoliticalRefMap([player.id]),
+      getPlayerGroup(player.id),
     ]);
     res.json({
       ...profile,
       presence,
       corporations: corporationRefs.get(player.id) ?? [],
       politics: politicsRefs.get(player.id) ?? [],
+      group: groupMembership ? { ...groupMembership.group, joinedAt: groupMembership.member.joinedAt } : null,
     });
   }),
 );
@@ -110,6 +113,45 @@ meRoutes.post(
   validate(requestIdParams, 'params'),
   asyncHandler(async (req, res) => {
     await resolvePlayerRequest(requirePlayer(req).id, Number(req.params.id), false);
+    res.status(204).send();
+  }),
+);
+
+// ── Group ───────────────────────────────────────────────────────────────────
+
+/** GET /groups — The player's group (a player belongs to at most one), or null. */
+meRoutes.get(
+  '/groups',
+  asyncHandler(async (req, res) => {
+    const membership = await getPlayerGroup(requirePlayer(req).id);
+    res.json(membership ? { ...membership.group, joinedAt: membership.member.joinedAt } : null);
+  }),
+);
+
+/** GET /group/invitations — My pending group invitations. */
+meRoutes.get(
+  '/group/invitations',
+  asyncHandler(async (req, res) => {
+    res.json(await listPlayerGroupInvitations(requirePlayer(req).id));
+  }),
+);
+
+/** POST /group/invitations/:id/accept — Accept an invitation and join the group. */
+meRoutes.post(
+  '/group/invitations/:id/accept',
+  validate(requestIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    await resolveGroupInvitation(requirePlayer(req).id, Number(req.params.id), true);
+    res.status(204).send();
+  }),
+);
+
+/** POST /group/invitations/:id/decline — Decline an invitation. */
+meRoutes.post(
+  '/group/invitations/:id/decline',
+  validate(requestIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    await resolveGroupInvitation(requirePlayer(req).id, Number(req.params.id), false);
     res.status(204).send();
   }),
 );

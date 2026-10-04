@@ -3,7 +3,7 @@
  * status transitions and the scenario-ordering rule.
  */
 import { randomUUID } from 'crypto';
-import { and, asc, count, desc, eq, inArray, lte } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -16,35 +16,27 @@ import {
   type MissionIssuerType,
   type MissionKind,
   type MissionObjective,
-  type MissionReward,
   type MissionStatus,
   type MissionVisibility,
-  type ObjectiveType,
+  type MissionZone,
+  type PrerequisiteSpec,
+  type RewardComponent,
+  type ZoneLocation,
 } from '../db/schema/index.js';
+import { getObjectiveKind } from '../kinds/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { debitPlayer, creditPlayer } from './economy.client.js';
-import { createHold, isInventoryConfigured, releaseHold } from './inventory.client.js';
+import { createHold, releaseHold } from './inventory.client.js';
 import { settledTotal } from './rewards.service.js';
-import { isCorporationMember } from './social.client.js';
+import { getGroup, isCorporationMember, getPlayerCorporationIn } from './social.client.js';
+import { validateMissionSpec, type SpecObjectiveInput } from './spec.service.js';
+import { zoneFilterSql } from './zones.service.js';
 
 const PG_UNIQUE_VIOLATION = '23505';
 
 function isUniqueViolation(err: unknown): boolean {
   const pgError = (err as { cause?: unknown })?.cause ?? err;
   return (pgError as { code?: string } | undefined)?.code === PG_UNIQUE_VIOLATION;
-}
-
-/** Input describing a single objective when creating a mission. */
-export interface ObjectiveInput {
-  type: ObjectiveType;
-  title: string;
-  description?: string;
-  targetQuantity?: number;
-  unit?: string;
-  locationFrom?: Record<string, unknown>;
-  locationTo?: Record<string, unknown>;
-  order?: number;
-  payload?: Record<string, unknown>;
 }
 
 /** Input describing a mission to create. */
@@ -55,14 +47,19 @@ export interface CreateMissionInput {
   category?: MissionCategory;
   issuerType?: MissionIssuerType;
   issuerId?: string | null;
-  reward?: MissionReward | null;
+  rewards?: RewardComponent[] | null;
+  prerequisites?: PrerequisiteSpec[];
+  /** Availability zones (empty = global). */
+  zones?: MissionZone[];
   maxAssignees?: number;
+  /** Limited to a single group: the first group to accept claims it. */
+  groupClaimable?: boolean;
   scriptId?: string | null;
   expiresAt?: Date | null;
-  objectives: ObjectiveInput[];
+  objectives: SpecObjectiveInput[];
 }
 
-/** Input describing a player-created mission (economic reward escrowed from the creator). */
+/** Input describing a player-created mission (reward escrowed from the creator). */
 export interface CreatePlayerMissionInput {
   title: string;
   description?: string;
@@ -71,20 +68,42 @@ export interface CreatePlayerMissionInput {
   visibility?: MissionVisibility;
   /** Corporation id when `visibility` is `corporation`. */
   issuerId?: string | null;
-  reward: MissionReward;
+  rewards: RewardComponent[];
+  prerequisites?: PrerequisiteSpec[];
+  /** Availability zones (empty = global). */
+  zones?: MissionZone[];
   maxAssignees?: number;
+  /** Limited to a single group: the first group to accept claims it. */
+  groupClaimable?: boolean;
   expiresAt?: Date | null;
-  objectives: ObjectiveInput[];
+  objectives: SpecObjectiveInput[];
 }
 
 /** Filters accepted when listing missions. */
 export interface MissionFilters {
   status?: MissionStatus;
+  /** Several statuses at once (player browse: `available` + `active`). */
+  statuses?: MissionStatus[];
   kind?: MissionKind;
   category?: MissionCategory;
   issuerType?: MissionIssuerType;
   issuerId?: string;
   visibility?: MissionVisibility;
+  groupId?: string;
+  groupClaimable?: boolean;
+  isEvent?: boolean;
+  /** Only missions with at least one free assignee slot (full missions disappear). */
+  hasFreeSlots?: boolean;
+  /**
+   * The viewer's group (Social). Missions shared with a group are only visible to its
+   * members; pass `undefined` to disable the group filter, e.g. on the internal API.
+   */
+  viewerGroupId?: string | null;
+  /**
+   * The viewer's location (Social presence). Applies the zone filter: `undefined` disables
+   * it (internal API), `null` (unknown location) hides every zoned mission.
+   */
+  viewerLocation?: ZoneLocation | null;
 }
 
 /** A mission together with its objectives, ordered by `order` then creation. */
@@ -158,6 +177,10 @@ export async function requireObjective(missionId: string, objectiveId: string): 
 
 /**
  * Lists missions, newest first.
+ *
+ * `hasFreeSlots` hides missions whose active assignees already reach `maxAssignees`, and
+ * `viewerGroupId` hides missions shared with a group from non-members (pass `undefined`
+ * to disable the group filter, e.g. on the internal API).
  * @param filters - Optional filters.
  * @param limit - Max rows.
  * @returns Missions.
@@ -165,11 +188,26 @@ export async function requireObjective(missionId: string, objectiveId: string): 
 export async function listMissions(filters: MissionFilters, limit: number): Promise<Mission[]> {
   const conditions = [];
   if (filters.status) conditions.push(eq(missions.status, filters.status));
+  if (filters.statuses?.length) conditions.push(inArray(missions.status, filters.statuses));
   if (filters.kind) conditions.push(eq(missions.kind, filters.kind));
   if (filters.category) conditions.push(eq(missions.category, filters.category));
   if (filters.issuerType) conditions.push(eq(missions.issuerType, filters.issuerType));
   if (filters.issuerId) conditions.push(eq(missions.issuerId, filters.issuerId));
   if (filters.visibility) conditions.push(eq(missions.visibility, filters.visibility));
+  if (filters.groupId) conditions.push(eq(missions.groupId, filters.groupId));
+  if (filters.groupClaimable !== undefined) conditions.push(eq(missions.groupClaimable, filters.groupClaimable));
+  if (filters.isEvent !== undefined) conditions.push(eq(missions.isEvent, filters.isEvent));
+  if (filters.hasFreeSlots) {
+    conditions.push(
+      sql`(select count(*) from ${missionAssignments} where ${missionAssignments.missionId} = ${missions.id} and ${missionAssignments.status} = 'active') < ${missions.maxAssignees}`,
+    );
+  }
+  if (filters.viewerGroupId !== undefined) {
+    conditions.push(sql`(${missions.groupId} is null or ${missions.groupId} = ${filters.viewerGroupId})`);
+  }
+  if (filters.viewerLocation !== undefined) {
+    conditions.push(zoneFilterSql(filters.viewerLocation));
+  }
 
   return db
     .select()
@@ -180,33 +218,7 @@ export async function listMissions(filters: MissionFilters, limit: number): Prom
 }
 
 /**
- * Rejects an item reward that cannot be split across participants.
- *
- * A unique-instance reward can only go to one assignee. A player-funded (escrowed) item is
- * reserved as a whole and is therefore also restricted to a single assignee. System-funded
- * fungible rewards may be split between participants.
- * @param maxAssignees - Mission capacity.
- * @param reward - Mission reward.
- * @param opts.escrowed - True when the item reward is escrowed from the creator.
- */
-function assertRewardSplitable(
-  maxAssignees: number,
-  reward?: MissionReward | null,
-  opts: { escrowed?: boolean } = {},
-): void {
-  if (maxAssignees <= 1 || !reward?.item) return;
-  const splittable = !reward.item.instanceId && !opts.escrowed;
-  if (!splittable) {
-    throw new HttpError(
-      400,
-      'ITEM_REWARD_NOT_SPLITABLE',
-      'This item reward cannot be shared by several assignees (unique instance or escrowed item)',
-    );
-  }
-}
-
-/**
- * Creates a mission and its objectives atomically.
+ * Creates a mission and its objectives atomically (spec validated by the kind registry).
  * @param input - Mission and objective definitions.
  * @param createdBy - Keycloak client id of the creator service (or player id).
  * @returns The created mission and objectives.
@@ -216,10 +228,15 @@ export async function createMission(
   input: CreateMissionInput,
   createdBy: string,
 ): Promise<MissionWithObjectives> {
-  if (input.objectives.length === 0) {
-    throw new HttpError(400, 'MISSING_OBJECTIVES', 'A mission requires at least one objective');
-  }
-  assertRewardSplitable(input.maxAssignees ?? 1, input.reward);
+  const spec = validateMissionSpec(
+    {
+      objectives: input.objectives,
+      prerequisites: input.prerequisites,
+      rewards: input.rewards,
+      maxAssignees: input.maxAssignees ?? 1,
+    },
+    { escrowed: false },
+  );
 
   const expiresAt =
     input.expiresAt ??
@@ -238,8 +255,11 @@ export async function createMission(
           category: input.category ?? 'generic',
           issuerType: input.issuerType ?? 'system',
           issuerId: input.issuerId ?? null,
-          reward: input.reward ?? null,
+          rewards: spec.rewards.length > 0 ? spec.rewards : null,
+          prerequisites: spec.prerequisites,
+          zones: input.zones ?? [],
           maxAssignees: input.maxAssignees ?? 1,
+          groupClaimable: input.groupClaimable ?? false,
           scriptId: input.scriptId ?? null,
           expiresAt,
           createdBy,
@@ -248,20 +268,7 @@ export async function createMission(
 
       const objectives = await tx
         .insert(missionObjectives)
-        .values(
-          input.objectives.map((objective, index) => ({
-            missionId: mission.id,
-            type: objective.type,
-            title: objective.title,
-            description: objective.description,
-            targetQuantity: objective.targetQuantity ?? 1,
-            unit: objective.unit,
-            locationFrom: objective.locationFrom,
-            locationTo: objective.locationTo,
-            order: objective.order ?? index,
-            payload: objective.payload,
-          })),
-        )
+        .values(spec.objectives.map((objective) => ({ missionId: mission.id, ...objective })))
         .returning();
 
       return { mission, objectives };
@@ -275,14 +282,12 @@ export async function createMission(
 }
 
 /**
- * Creates a player-sponsored mission. An economic reward is escrowed (debited) from the
- * creator's wallet through Economy, and/or an item reward is escrowed (held) from the
- * creator's inventory through Inventory, then held until settlement or refund.
- *
- * Both escrows use deterministic keys, so a retried creation never debits/holds twice. If
- * an escrow is refused (insufficient funds/goods), everything is rolled back and the error
- * is propagated.
- * @param input - Mission definition (economic and/or item reward required).
+ * Creates a player-sponsored mission. Reward components are escrowed from the creator:
+ * the credits component is debited from their wallet through Economy, every item
+ * component is held in their inventory through Inventory, then held until settlement or
+ * refund. All escrows use deterministic keys, so a retried creation never debits/holds
+ * twice; any refusal rolls everything back.
+ * @param input - Mission definition (at least one reward component required).
  * @param playerId - Creating player (escrow payer).
  * @returns The created mission and objectives.
  */
@@ -290,15 +295,15 @@ export async function createPlayerMission(
   input: CreatePlayerMissionInput,
   playerId: string,
 ): Promise<MissionWithObjectives> {
-  if (input.objectives.length === 0) {
-    throw new HttpError(400, 'MISSING_OBJECTIVES', 'A mission requires at least one objective');
-  }
-  const economic = input.reward.economic;
-  const item = input.reward.item;
-  if (!economic && !item) {
-    throw new HttpError(400, 'REWARD_REQUIRED', 'Player-created missions require an economic and/or item reward');
-  }
-  assertRewardSplitable(input.maxAssignees ?? 1, input.reward, { escrowed: true });
+  const spec = validateMissionSpec(
+    {
+      objectives: input.objectives,
+      prerequisites: input.prerequisites,
+      rewards: input.rewards,
+      maxAssignees: input.maxAssignees ?? 1,
+    },
+    { escrowed: true, requireReward: true },
+  );
 
   const visibility = input.visibility ?? 'public';
   if (visibility === 'corporation') {
@@ -310,10 +315,8 @@ export async function createPlayerMission(
     }
   }
 
-  if (item && !isInventoryConfigured()) {
-    throw new HttpError(503, 'INVENTORY_NOT_CONFIGURED', 'Item rewards require the Inventory service to be configured');
-  }
-
+  const economic = spec.rewards.find((component) => component.type === 'credits');
+  const items = spec.rewards.filter((component): component is Extract<RewardComponent, { type: 'item' }> => component.type === 'item');
   const missionId = randomUUID();
   const escrowExternalId = `mission-escrow:${missionId}`;
 
@@ -329,58 +332,54 @@ export async function createPlayerMission(
         issuerType: visibility === 'corporation' ? 'corporation' : 'player',
         issuerId: input.issuerId ?? null,
         visibility,
-        reward: input.reward,
+        rewards: spec.rewards,
+        prerequisites: spec.prerequisites,
+        zones: input.zones ?? [],
         maxAssignees: input.maxAssignees ?? 1,
+        groupClaimable: input.groupClaimable ?? false,
         expiresAt: input.expiresAt ?? null,
         escrowStatus: economic ? 'pending' : 'none',
-        escrowAmount: economic?.amount ?? null,
-        escrowCurrency: economic?.currency ?? null,
+        escrowAmount: economic ? economic.amount : null,
+        escrowCurrency: economic ? economic.currency : null,
         escrowPayerId: playerId,
         escrowExternalId: economic ? escrowExternalId : null,
-        escrowItemStatus: item ? 'held' : 'none',
+        escrowItemStatus: items.length > 0 ? 'held' : 'none',
         createdBy: playerId,
       })
       .returning();
 
     const objectives = await tx
       .insert(missionObjectives)
-      .values(
-        input.objectives.map((objective, index) => ({
-          missionId,
-          type: objective.type,
-          title: objective.title,
-          description: objective.description,
-          targetQuantity: objective.targetQuantity ?? 1,
-          unit: objective.unit,
-          locationFrom: objective.locationFrom,
-          locationTo: objective.locationTo,
-          order: objective.order ?? index,
-          payload: objective.payload,
-        })),
-      )
+      .values(spec.objectives.map((objective) => ({ missionId, ...objective })))
       .returning();
 
     return { mission, objectives };
   });
 
-  // Escrow the item reward (hold from the creator's inventory).
-  let itemHoldId: string | null = null;
-  if (item) {
+  // Escrow the item components (one hold per item, aligned with the reward list order).
+  const holdIds: string[] = [];
+  if (items.length > 0) {
     try {
-      const hold = await createHold(
-        { holderType: 'player', holderId: playerId },
-        {
-          kind: item.instanceId ? 'instance' : 'stack',
-          goodType: item.itemId,
-          quantity: item.instanceId ? undefined : item.quantity,
-          instanceId: item.instanceId,
-          refType: 'mission_escrow',
-          refId: missionId,
-        },
-      );
-      itemHoldId = hold.id;
-      await db.update(missions).set({ escrowItemHoldId: itemHoldId, updatedAt: new Date() }).where(eq(missions.id, missionId));
+      for (const item of items) {
+        const hold = await createHold(
+          { holderType: 'player', holderId: playerId },
+          {
+            kind: item.instanceId ? 'instance' : 'stack',
+            goodType: item.itemId,
+            quantity: item.instanceId ? undefined : item.quantity,
+            instanceId: item.instanceId,
+            refType: 'mission_escrow',
+            refId: missionId,
+          },
+        );
+        holdIds.push(hold.id);
+      }
+      await db
+        .update(missions)
+        .set({ escrowItemHoldIds: holdIds, updatedAt: new Date() })
+        .where(eq(missions.id, missionId));
     } catch (err) {
+      await Promise.all(holdIds.map((holdId) => releaseHold(holdId).catch(() => undefined)));
       await db
         .update(missions)
         .set({ status: 'cancelled', escrowItemStatus: 'none', updatedAt: new Date() })
@@ -389,7 +388,7 @@ export async function createPlayerMission(
     }
   }
 
-  // Escrow the economic reward (debit from the creator's wallet).
+  // Escrow the credits component (debit from the creator's wallet).
   if (economic) {
     try {
       await debitPlayer(playerId, {
@@ -399,12 +398,16 @@ export async function createPlayerMission(
         externalId: escrowExternalId,
       });
     } catch (err) {
-      if (itemHoldId) {
-        await releaseHold(itemHoldId).catch(() => undefined);
-      }
+      await Promise.all(holdIds.map((holdId) => releaseHold(holdId).catch(() => undefined)));
       await db
         .update(missions)
-        .set({ status: 'cancelled', escrowStatus: 'none', escrowItemStatus: 'none', escrowItemHoldId: null, updatedAt: new Date() })
+        .set({
+          status: 'cancelled',
+          escrowStatus: 'none',
+          escrowItemStatus: 'none',
+          escrowItemHoldIds: null,
+          updatedAt: new Date(),
+        })
         .where(eq(missions.id, missionId));
       throw err;
     }
@@ -442,17 +445,19 @@ export async function refundEscrow(mission: Mission): Promise<void> {
       .where(and(eq(missions.id, mission.id), eq(missions.escrowStatus, 'held')));
   }
 
-  if (mission.escrowItemStatus === 'held' && mission.escrowItemHoldId) {
-    await releaseHold(mission.escrowItemHoldId).catch(() => undefined);
+  if (mission.escrowItemStatus === 'held' && mission.escrowItemHoldIds?.length) {
+    await Promise.all(mission.escrowItemHoldIds.map((holdId) => releaseHold(holdId).catch(() => undefined)));
     await db
       .update(missions)
-      .set({ escrowItemStatus: 'released', escrowItemHoldId: null, updatedAt: new Date() })
+      .set({ escrowItemStatus: 'released', escrowItemHoldIds: null, updatedAt: new Date() })
       .where(and(eq(missions.id, mission.id), eq(missions.escrowItemStatus, 'held')));
   }
 }
 
 /**
- * Updates mutable mission fields.
+ * Updates the mutable presentation fields of a mission. The spec (objectives,
+ * prerequisites, rewards, capacity) is immutable after creation: the escrow is taken
+ * against it at creation time.
  * @param missionId - Mission id.
  * @param patch - Fields to change.
  * @returns Updated mission.
@@ -462,14 +467,195 @@ export async function updateMission(
   patch: {
     title?: string;
     description?: string | null;
-    reward?: MissionReward | null;
-    maxAssignees?: number;
     expiresAt?: Date | null;
+    isEvent?: boolean;
+    /** Re-zone a mission (internal API only; no escrow impact). */
+    zones?: MissionZone[];
   },
 ): Promise<Mission> {
   const [updated] = await db
     .update(missions)
     .set({ ...patch, updatedAt: new Date() })
+    .where(eq(missions.id, missionId))
+    .returning();
+  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  return updated;
+}
+
+/**
+ * Completes an `issuer`-confirmed objective (the mission creator, or the game server
+ * through the internal API). Scenario ordering still applies.
+ * @param missionId - Mission id.
+ * @param objectiveId - Objective to confirm.
+ * @returns The confirmed objective, all objectives and whether the mission is complete.
+ * @throws 409 when the mission is not open, the objective is not confirmable, or the
+ *   objective is locked by the scenario order.
+ */
+export async function confirmObjective(
+  missionId: string,
+  objectiveId: string,
+): Promise<{ objective: MissionObjective; objectives: MissionObjective[]; allComplete: boolean }> {
+  const mission = await requireMission(missionId);
+  requireOpenMission(mission);
+
+  const objective = await requireObjective(missionId, objectiveId);
+  const kindDef = getObjectiveKind(objective.type);
+  if (!kindDef || kindDef.evaluation !== 'issuer') {
+    throw new HttpError(409, 'OBJECTIVE_NOT_CONFIRMABLE', 'Only issuer-confirmed objectives can be confirmed');
+  }
+  const objectives = await listObjectives(missionId);
+  assertObjectiveUnlocked(mission, objective, objectives);
+
+  if (objective.status !== 'completed') {
+    await db
+      .update(missionObjectives)
+      .set({ status: 'completed', currentProgress: objective.targetQuantity, updatedAt: new Date() })
+      .where(eq(missionObjectives.id, objective.id));
+  }
+  const refreshed = await listObjectives(missionId);
+  const updated = refreshed.find((row) => row.id === objective.id) ?? objective;
+  return { objective: updated, objectives: refreshed, allComplete: allObjectivesCompleted(refreshed) };
+}
+
+/**
+ * Whether a player may manage a mission (share/unshare/flag as event): its creator, or a
+ * member of the issuing corporation.
+ * @param mission - Mission to check.
+ * @param playerId - Acting player.
+ * @throws 403 when the player may not manage the mission.
+ */
+async function assertCanManageMission(mission: Mission, playerId: string): Promise<void> {
+  if (mission.createdBy === playerId) return;
+  if (mission.issuerType === 'corporation' && mission.issuerId) {
+    if (await isCorporationMember(playerId, mission.issuerId)) return;
+    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'This mission belongs to a corporation you are not a member of');
+  }
+  throw new HttpError(403, 'NOT_MISSION_MANAGER', 'Only the creator of the mission can manage it');
+}
+
+/**
+ * Shares a mission with a group: only its members will be able to see and accept it, and
+ * it counts as taken by that group. A mission with active assignees cannot be shared.
+ * @param missionId - Mission id.
+ * @param groupId - Target group (must exist in Social).
+ * @param opts.actorId - Acting player (required unless `trusted`).
+ * @param opts.trusted - Internal caller (game server): skips the ownership check.
+ * @returns Updated mission.
+ */
+export async function shareMission(
+  missionId: string,
+  groupId: string,
+  opts: { actorId?: string; trusted?: boolean } = {},
+): Promise<Mission> {
+  const mission = await requireMission(missionId);
+  if (!opts.trusted) await assertCanManageMission(mission, opts.actorId ?? '');
+  if (!(await getGroup(groupId))) throw notFound(`Group ${groupId} not found`);
+  if ((await countActiveAssignments(missionId)) > 0) {
+    throw new HttpError(409, 'MISSION_HAS_ASSIGNEES', 'A mission with active assignees cannot be shared');
+  }
+  const [updated] = await db
+    .update(missions)
+    .set({ groupId, updatedAt: new Date() })
+    .where(eq(missions.id, missionId))
+    .returning();
+  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  return updated;
+}
+
+/**
+ * Removes the group share of a mission (back to public/corporation access). Only possible
+ * while no assignee is active.
+ * @param missionId - Mission id.
+ * @param opts.actorId - Acting player (required unless `trusted`).
+ * @param opts.trusted - Internal caller (game server): skips the ownership check.
+ * @returns Updated mission.
+ */
+export async function unshareMission(
+  missionId: string,
+  opts: { actorId?: string; trusted?: boolean } = {},
+): Promise<Mission> {
+  const mission = await requireMission(missionId);
+  if (!opts.trusted) await assertCanManageMission(mission, opts.actorId ?? '');
+  if ((await countActiveAssignments(missionId)) > 0) {
+    throw new HttpError(409, 'MISSION_HAS_ASSIGNEES', 'A mission with active assignees cannot be unshared');
+  }
+  const [updated] = await db
+    .update(missions)
+    .set({ groupId: null, updatedAt: new Date() })
+    .where(eq(missions.id, missionId))
+    .returning();
+  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  return updated;
+}
+
+/**
+ * Declares (or lifts) a "big event" flag on a corporation mission. Events allow a capacity
+ * up to 1000 assignees; the flag can only be set by the CEO or a member holding the
+ * `manage_corporation` permission of the issuing corporation.
+ * @param missionId - Mission id.
+ * @param playerId - Acting player.
+ * @param opts.enabled - Whether the mission is an event.
+ * @param opts.maxAssignees - Optional new capacity (1..1000).
+ * @returns Updated mission.
+ */
+export async function setMissionEvent(
+  missionId: string,
+  playerId: string,
+  opts: { enabled: boolean; maxAssignees?: number },
+): Promise<Mission> {
+  const mission = await requireMission(missionId);
+  if (mission.issuerType !== 'corporation' || !mission.issuerId) {
+    throw new HttpError(403, 'NOT_CORPORATION_MISSION', 'Only corporation missions can be flagged as events');
+  }
+  const membership = await getPlayerCorporationIn(playerId, mission.issuerId);
+  if (!membership) {
+    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'This mission belongs to a corporation you are not a member of');
+  }
+  const { rank } = membership;
+  if (!rank.isCeo && !rank.permissions.includes('manage_corporation')) {
+    throw new HttpError(403, 'EVENT_FORBIDDEN', 'Requires the manage_corporation permission');
+  }
+
+  const maxAssignees = opts.maxAssignees ?? mission.maxAssignees;
+  if (opts.enabled && maxAssignees > 1000) {
+    throw new HttpError(400, 'INVALID_MAX_ASSIGNEES', 'Event missions allow at most 1000 assignees');
+  }
+  if (!opts.enabled && maxAssignees > 100) {
+    throw new HttpError(
+      400,
+      'EVENT_CAPACITY_REQUIRES_FLAG',
+      'Lower maxAssignees to 100 or below before lifting the event flag',
+    );
+  }
+
+  const [updated] = await db
+    .update(missions)
+    .set({ isEvent: opts.enabled, maxAssignees, updatedAt: new Date() })
+    .where(eq(missions.id, missionId))
+    .returning();
+  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  return updated;
+}
+
+/**
+ * Internal variant of the event flag (game server): no corporation membership check, any
+ * mission may be flagged.
+ * @param missionId - Mission id.
+ * @param opts - Enabled flag and optional capacity.
+ * @returns Updated mission.
+ */
+export async function setMissionEventInternal(
+  missionId: string,
+  opts: { enabled: boolean; maxAssignees?: number },
+): Promise<Mission> {
+  const mission = await requireMission(missionId);
+  const maxAssignees = opts.maxAssignees ?? mission.maxAssignees;
+  if (maxAssignees < 1 || maxAssignees > 1000) {
+    throw new HttpError(400, 'INVALID_MAX_ASSIGNEES', 'maxAssignees must be between 1 and 1000');
+  }
+  const [updated] = await db
+    .update(missions)
+    .set({ isEvent: opts.enabled, maxAssignees, updatedAt: new Date() })
     .where(eq(missions.id, missionId))
     .returning();
   if (!updated) throw notFound(`Mission ${missionId} not found`);
@@ -536,6 +722,16 @@ export function allObjectivesCompleted(objectives: MissionObjective[]): boolean 
   return objectives.length > 0 && objectives.every((objective) => objective.status === 'completed');
 }
 
+/** True when a scenario objective is still locked by an incomplete lower-`order` objective. */
+export function isObjectiveLocked(
+  mission: Mission,
+  objective: MissionObjective,
+  objectives: MissionObjective[],
+): boolean {
+  if (mission.kind !== 'scenario') return false;
+  return objectives.some((other) => other.order < objective.order && other.status !== 'completed');
+}
+
 /**
  * For scenarized missions, blocks an objective until every lower-`order` objective is done.
  * @param mission - Parent mission.
@@ -548,11 +744,7 @@ export function assertObjectiveUnlocked(
   objective: MissionObjective,
   objectives: MissionObjective[],
 ): void {
-  if (mission.kind !== 'scenario') return;
-  const locked = objectives.some(
-    (other) => other.order < objective.order && other.status !== 'completed',
-  );
-  if (locked) {
+  if (isObjectiveLocked(mission, objective, objectives)) {
     throw new HttpError(409, 'OBJECTIVE_LOCKED', 'Previous objectives must be completed first');
   }
 }

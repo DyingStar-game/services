@@ -2,7 +2,7 @@
  * Player assignments: accepting a mission, reporting objective progress, completing
  * (which settles the reward) and abandoning.
  */
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
 import {
@@ -16,17 +16,22 @@ import {
   type MissionObjective,
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
+import { getObjectiveKind } from '../kinds/index.js';
 import {
   allObjectivesCompleted,
   assertObjectiveUnlocked,
   countActiveAssignments,
+  isObjectiveLocked,
+  listObjectives,
   markMissionActive,
   requireMission,
   requireObjective,
   requireOpenMission,
 } from './missions.service.js';
-import { settleMissionRewards, splitReward, type SettlementResult } from './rewards.service.js';
-import { isCorporationMember } from './social.client.js';
+import { freezeShares, settleMissionRewards, type SettlementResult } from './rewards.service.js';
+import { evaluatePrerequisites } from './prerequisites.service.js';
+import { getPlayerGroup, isCorporationMember, isGroupMember } from './social.client.js';
+import { assertMissionZone } from './zones.service.js';
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -128,6 +133,46 @@ export async function acceptMission(
     throw new HttpError(409, 'ALREADY_COMPLETED', 'You already completed this mission');
   }
 
+  // Zone gate: the player must be where the mission is available (players only; a mission
+  // without zones costs nothing, an unknown/outage location fails closed).
+  if (holderType === 'player') {
+    await assertMissionZone(mission, playerId);
+  }
+
+  // Prerequisite gates (kind registry): evaluated before any state change, so a player
+  // who cannot afford/qualify never claims the mission for their group. NPCs assigned by
+  // the game server skip them.
+  if (holderType === 'player' && (mission.prerequisites?.length ?? 0) > 0) {
+    await evaluatePrerequisites(mission, playerId);
+  }
+
+  // Group rules: a shared mission only accepts its members; a group-claimable mission is
+  // claimed by the first group to accept (then only its members may join). NPCs assigned
+  // by the game server skip those checks.
+  if (holderType === 'player') {
+    if (mission.groupId) {
+      if (!(await isGroupMember(playerId, mission.groupId))) {
+        throw new HttpError(403, 'NOT_GROUP_MEMBER', 'This mission is reserved to a group you are not a member of');
+      }
+    } else if (mission.groupClaimable) {
+      const membership = await getPlayerGroup(playerId);
+      if (!membership) {
+        throw new HttpError(403, 'NO_GROUP', 'This mission is reserved to a group: create or join a group first');
+      }
+      const claimed = await db
+        .update(missions)
+        .set({ groupId: membership.group.id, updatedAt: new Date() })
+        .where(and(eq(missions.id, missionId), isNull(missions.groupId)))
+        .returning({ id: missions.id });
+      if (claimed.length === 0) {
+        const current = await requireMission(missionId);
+        if (current.groupId !== membership.group.id) {
+          throw new HttpError(403, 'GROUP_ALREADY_CLAIMED', 'Another group already claimed this mission');
+        }
+      }
+    }
+  }
+
   const active = await countActiveAssignments(missionId);
   if (active >= mission.maxAssignees) {
     throw new HttpError(409, 'MISSION_FULL', 'Mission has no free slot');
@@ -192,6 +237,16 @@ export async function reportProgress(
   requireOpenMission(mission);
 
   const objective = await requireObjective(missionId, objectiveId);
+  const kindDef = getObjectiveKind(objective.type);
+  if (!kindDef || kindDef.evaluation !== 'game') {
+    throw new HttpError(
+      409,
+      'OBJECTIVE_NOT_PUSHABLE',
+      kindDef
+        ? `Objective kind ${objective.type} is not reported by the game server (use verify or issuer confirmation)`
+        : `Unknown objective kind: ${objective.type}`,
+    );
+  }
   const objectives = await db
     .select()
     .from(missionObjectives)
@@ -210,6 +265,82 @@ export async function reportProgress(
   return { objective: updated, objectives: merged, allComplete: allObjectivesCompleted(merged) };
 }
 
+/**
+ * Measures every `service` objective of the mission against external state (Inventory,
+ * Economy, ...) and persists the result. Scenario-locked objectives are skipped.
+ *
+ * Snapshot kinds (`owns_items`, `has_credits`) may regress: spending the goods lowers the
+ * stored progress, which is why completion re-runs this measurement before paying.
+ * `deliver_items` performs its transfer as its side effect.
+ * @param mission - Mission being measured.
+ * @param assignment - Assignee whose holder state is measured.
+ * @param objectives - Current objectives of the mission.
+ * @returns The objective list with measurements merged in.
+ */
+async function measureServiceObjectives(
+  mission: Mission,
+  assignment: MissionAssignment,
+  objectives: MissionObjective[],
+): Promise<MissionObjective[]> {
+  const now = new Date();
+  const result: MissionObjective[] = [];
+  for (const objective of objectives) {
+    const kindDef = getObjectiveKind(objective.type);
+    if (!kindDef || kindDef.evaluation !== 'service' || !kindDef.measure) {
+      result.push(objective);
+      continue;
+    }
+    if (isObjectiveLocked(mission, objective, objectives)) {
+      result.push(objective);
+      continue;
+    }
+
+    const measured = await kindDef.measure({
+      playerId: assignment.playerId,
+      holderType: assignment.holderType,
+      missionId: mission.id,
+      objective,
+    });
+    const currentProgress = Math.max(0, Math.min(measured, objective.targetQuantity));
+    const status =
+      currentProgress >= objective.targetQuantity ? 'completed' : currentProgress > 0 ? 'in_progress' : 'pending';
+    if (currentProgress === objective.currentProgress && status === objective.status) {
+      result.push(objective);
+      continue;
+    }
+    const [updated] = await db
+      .update(missionObjectives)
+      .set({ currentProgress, status, updatedAt: now })
+      .where(eq(missionObjectives.id, objective.id))
+      .returning();
+    result.push(updated);
+  }
+  return result;
+}
+
+/**
+ * Re-measures the `service` objectives of the player's mission (verify endpoint: also the
+ * action that performs `deliver_items` transfers).
+ * @param missionId - Mission id.
+ * @param playerId - Player whose assignment is verified.
+ * @returns All objectives (measured) and whether they are all complete.
+ * @throws 409 when the mission is not open or the assignment is not active.
+ */
+export async function verifyPlayerObjectives(
+  missionId: string,
+  playerId: string,
+): Promise<{ objectives: MissionObjective[]; allComplete: boolean }> {
+  const mission = await requireMission(missionId);
+  requireOpenMission(mission);
+  const assignment = await requireAssignment(missionId, playerId);
+  if (assignment.status !== 'active') {
+    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`);
+  }
+  const objectives = await listObjectives(missionId);
+  const measured = await measureServiceObjectives(mission, assignment, objectives);
+  return { objectives: measured, allComplete: allObjectivesCompleted(measured) };
+}
+
 /** Result of completing a mission (single- or multi-player). */
 export interface CompleteMissionResult {
   /** The caller's completed assignment (reward already credited when settled). */
@@ -224,15 +355,16 @@ export interface CompleteMissionResult {
 }
 
 /**
- * Verifies and completes a mission for all active participants, then splits and settles the
- * economic reward.
+ * Verifies and completes a mission for all active participants, then splits and settles
+ * every reward component.
  *
  * Objective verification is re-checked here, so a reward is only ever paid once every
  * objective reports its target quantity. When `force` is false and objectives are
  * incomplete, the call is rejected.
  *
- * Multiplayer: every active assignee is completed at once and receives an equal share
- * (frozen on the assignment, so a retry credits the same amount).
+ * Multiplayer: every active assignee is completed at once and receives an equal share of
+ * each reward component (frozen in `rewardShares`, so a retry settles the exact same
+ * amounts).
  * @param missionId - Mission id.
  * @param playerId - Player triggering the completion (must have an active assignment).
  * @param opts.force - Skip the objective check (game-server override).
@@ -250,33 +382,38 @@ export async function completeMission(
     throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`);
   }
 
-  const objectives = await db
-    .select()
-    .from(missionObjectives)
-    .where(eq(missionObjectives.missionId, missionId));
-  if (!opts.force && !allObjectivesCompleted(objectives)) {
-    throw new HttpError(409, 'OBJECTIVES_INCOMPLETE', 'Not every objective is completed');
+  let objectives = await listObjectives(missionId);
+  if (!opts.force) {
+    // Fresh measurement of service objectives right before paying (snapshots may have
+    // regressed, deliveries from other participants are picked up here).
+    objectives = await measureServiceObjectives(mission, assignment, objectives);
+    if (!allObjectivesCompleted(objectives)) {
+      throw new HttpError(409, 'OBJECTIVES_INCOMPLETE', 'Not every objective is completed');
+    }
   }
 
   const participants = await db
     .select()
     .from(missionAssignments)
     .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, 'active')));
-  const shares = splitReward(mission.reward?.economic?.amount ?? 0, participants);
-  const itemShares = splitReward(mission.reward?.item?.quantity ?? 0, participants);
+  const sharesByAssignment = new Map(
+    participants.map((participant) => [participant.id, freezeShares(mission, participant, participants)]),
+  );
   const now = new Date();
 
   const { assignments: completedAssignments, mission: updatedMission } = await db.transaction(
     async (tx) => {
       const done: MissionAssignment[] = [];
       for (const participant of participants) {
+        const shares = sharesByAssignment.get(participant.id) ?? [];
+        const creditsShare = shares.find((component) => component.type === 'credits');
         const [row] = await tx
           .update(missionAssignments)
           .set({
             status: 'completed',
             completedAt: now,
-            rewardAmount: shares.get(participant.id) ?? 0,
-            rewardItemQuantity: mission.reward?.item ? (itemShares.get(participant.id) ?? 0) : null,
+            rewardShares: shares,
+            rewardAmount: creditsShare?.type === 'credits' ? creditsShare.amount : null,
             updatedAt: now,
           })
           .where(eq(missionAssignments.id, participant.id))

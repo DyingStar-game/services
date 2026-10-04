@@ -17,18 +17,24 @@ import {
   listAssignmentsForPlayer,
   listMissionsByIds,
   reportProgress,
+  verifyPlayerObjectives,
 } from '../services/assignments.service.js';
 import {
   cancelMission,
+  confirmObjective,
   createMission,
   expireDueMissions,
   getMissionById,
   listMissions,
+  setMissionEventInternal,
+  shareMission,
+  unshareMission,
   updateMission,
 } from '../services/missions.service.js';
 import { settleMissionRewards } from '../services/rewards.service.js';
 import {
   createMissionBody,
+  eventBody,
   internalAssignBody,
   internalCompleteBody,
   internalProgressBody,
@@ -37,6 +43,8 @@ import {
   objectiveParams,
   playerIdParams,
   settleBody,
+  shareBody,
+  internalVerifyBody,
   updateMissionBody,
 } from './schemas.js';
 
@@ -70,6 +78,9 @@ internalRoutes.get(
         issuerType: req.query.issuerType as never,
         issuerId: req.query.issuerId as string | undefined,
         visibility: req.query.visibility as never,
+        groupId: req.query.groupId as string | undefined,
+        groupClaimable: req.query.groupClaimable as never,
+        isEvent: req.query.isEvent as never,
       },
       Number(req.query.limit),
     );
@@ -107,6 +118,38 @@ internalRoutes.post(
   }),
 );
 
+/** POST /missions/:missionId/share — Share a mission with a group (game server, trusted). */
+internalRoutes.post(
+  '/missions/:missionId/share',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(missionIdParams, 'params'),
+  validate(shareBody),
+  asyncHandler(async (req, res) => {
+    res.json(await shareMission(req.params.missionId, req.body.groupId, { trusted: true }));
+  }),
+);
+
+/** DELETE /missions/:missionId/share — Remove the group share (game server, trusted). */
+internalRoutes.delete(
+  '/missions/:missionId/share',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(missionIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await unshareMission(req.params.missionId, { trusted: true }));
+  }),
+);
+
+/** POST /missions/:missionId/event — Declare/lift the "big event" flag (game server). */
+internalRoutes.post(
+  '/missions/:missionId/event',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(missionIdParams, 'params'),
+  validate(eventBody),
+  asyncHandler(async (req, res) => {
+    res.json(await setMissionEventInternal(req.params.missionId, req.body));
+  }),
+);
+
 // ── Objective progress ───────────────────────────────────────────────────────
 
 /** POST /missions/:missionId/objectives/:objectiveId/progress — Verified progress report. */
@@ -118,6 +161,27 @@ internalRoutes.post(
   asyncHandler(async (req, res) => {
     const { playerId, quantity } = req.body;
     res.json(await reportProgress(req.params.missionId, playerId, req.params.objectiveId, quantity));
+  }),
+);
+
+/** POST /missions/:missionId/objectives/:objectiveId/confirm — Confirm an issuer-verified objective (game server). */
+internalRoutes.post(
+  '/missions/:missionId/objectives/:objectiveId/confirm',
+  requireServiceRole(SERVICE_ROLES.missionProgress),
+  validate(objectiveParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await confirmObjective(req.params.missionId, req.params.objectiveId));
+  }),
+);
+
+/** POST /missions/:missionId/verify — Re-measure service objectives for a holder (game server). */
+internalRoutes.post(
+  '/missions/:missionId/verify',
+  requireServiceRole(SERVICE_ROLES.missionProgress),
+  validate(missionIdParams, 'params'),
+  validate(internalVerifyBody),
+  asyncHandler(async (req, res) => {
+    res.json(await verifyPlayerObjectives(req.params.missionId, req.body.playerId));
   }),
 );
 

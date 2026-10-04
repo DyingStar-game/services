@@ -1,19 +1,36 @@
 /**
  * Missions and their verifiable objectives.
  *
- * A mission is either **dynamic** (generated, e.g. by an IA corporation or a city later on),
- * **scenario** (hand-authored, possibly a chain of ordered objectives via `scriptId`) or
- * **player**-created. Each objective carries the target quantity the game server (or the
- * player) reports against; a mission is completable only once every objective is met.
+ * A mission is a **declarative spec**: category, rewards, prerequisites and objectives
+ * whose shapes are validated against the kind registry (`src/kinds`). Objectives are
+ * either reported by the game server (`game` kinds), measured by this service against
+ * Inventory/Economy/Social state (`service` kinds), or confirmed by the mission issuer
+ * (`issuer` kinds).
  */
-import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /** How a mission came to be. */
 export const MISSION_KINDS = ['dynamic', 'scenario', 'player'] as const;
 export type MissionKind = (typeof MISSION_KINDS)[number];
 
-/** High-level mission category, used for filtering and future reward logic. */
-export const MISSION_CATEGORIES = ['delivery', 'transport', 'generic'] as const;
+/**
+ * Mission category. Text column validated against this list at creation; extending the
+ * game's catalogue is a one-line change here (no migration).
+ */
+export const MISSION_CATEGORIES = [
+  'delivery',
+  'transport',
+  'generic',
+  'mining',
+  'farming',
+  'crafting',
+  'construction',
+  'trading',
+  'exploration',
+  'salvage',
+  'combat',
+  'reception',
+] as const;
 export type MissionCategory = (typeof MISSION_CATEGORIES)[number];
 
 /** Who issued the mission. `corporation`/`city` ids are opaque (owned by Social / the game). */
@@ -32,27 +49,61 @@ export type MissionVisibility = (typeof MISSION_VISIBILITIES)[number];
 export const ESCROW_STATUSES = ['none', 'pending', 'held', 'refunded', 'claimed'] as const;
 export type EscrowStatus = (typeof ESCROW_STATUSES)[number];
 
-/** Kinds of verifiable objectives. */
-export const OBJECTIVE_TYPES = ['deliver_material', 'transport', 'visit', 'custom'] as const;
-export type ObjectiveType = (typeof OBJECTIVE_TYPES)[number];
-
 /** Lifecycle of a single objective. */
 export const OBJECTIVE_STATUSES = ['pending', 'in_progress', 'completed', 'failed'] as const;
 export type ObjectiveStatus = (typeof OBJECTIVE_STATUSES)[number];
 
-/**
- * Reward attached to a mission. `economic` is settled by the Economy service, `item` by the
- * Inventory service (ownership transfer from the escrow payer or the system faucet).
- * `instanceId` marks a unique-instance reward (single assignee only).
- */
-export interface MissionReward {
-  economic?: { currency: string; amount: number };
-  item?: { itemId: string; quantity: number; instanceId?: string };
+/** A credit reward component (at most one per mission). */
+export interface RewardCredits {
+  type: 'credits';
+  currency: string;
+  amount: number;
+}
+
+/** An item reward component (any number, distinct items). */
+export interface RewardItem {
+  type: 'item';
+  itemId: string;
+  quantity: number;
+  /** Unique-instance reward (single assignee only). */
+  instanceId?: string;
+}
+
+/** One entry of a mission's reward list (also used for frozen per-assignee shares). */
+export type RewardComponent = RewardCredits | RewardItem;
+
+/** A prerequisite gate evaluated when a player accepts a mission. */
+export interface PrerequisiteSpec {
+  /** Prerequisite kind name (registry-validated). */
+  kind: string;
+  /** Kind-specific structured params. */
+  params?: Record<string, unknown>;
 }
 
 /** Item escrow lifecycle for player-funded item rewards. */
 export const ITEM_ESCROW_STATUSES = ['none', 'held', 'claimed', 'released'] as const;
 export type ItemEscrowStatus = (typeof ITEM_ESCROW_STATUSES)[number];
+
+/**
+ * Where a mission is available, matched against the player's presence location
+ * (`{system, scene, position}` reported by the game server):
+ * - `system`: same system;
+ * - `scene`: hierarchical scene path (planet/city/district...), matched by equality or
+ *   path prefix (`tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`, never `tarsis_10`);
+ * - `area`: within `radiusM` of `center` (game units, assumed meters).
+ * An empty `zones` array means the mission is available everywhere (global).
+ */
+export type MissionZone =
+  | { kind: 'system'; system: string }
+  | { kind: 'scene'; system?: string; scene: string }
+  | { kind: 'area'; system?: string; center: { x: number; y: number; z: number }; radiusM: number };
+
+/** Player location subset used for zone matching (from Social's presence). */
+export interface ZoneLocation {
+  system?: string | null;
+  scene?: string | null;
+  position?: { x: number; y: number; z: number } | null;
+}
 
 export const missions = pgTable(
   'missions',
@@ -66,10 +117,38 @@ export const missions = pgTable(
     /** Opaque issuer UUID (corporation, city or player); null for the system. */
     issuerId: uuid('issuer_id'),
     status: text('status').$type<MissionStatus>().notNull().default('available'),
-    /** Economic and/or item reward; null when the mission only grants reputation. */
-    reward: jsonb('reward').$type<MissionReward>(),
+    /**
+     * Reward components; immutable after creation (the escrow is taken against them).
+     * Null/empty when the mission only grants reputation or is manually rewarded.
+     */
+    rewards: jsonb('rewards').$type<RewardComponent[]>(),
+    /**
+     * Prerequisite gates checked at acceptance (kind registry). Immutable after creation.
+     */
+    prerequisites: jsonb('prerequisites').$type<PrerequisiteSpec[]>()
+      .notNull()
+      .$default(() => []),
     /** Public, or restricted to the members of `issuerId` (a corporation). */
     visibility: text('visibility').$type<MissionVisibility>().notNull().default('public'),
+    /**
+     * Group this mission is shared with / claimed by (opaque UUID owned by Social). When
+     * set, only its members may see and accept the mission.
+     */
+    groupId: uuid('group_id'),
+    /**
+     * Limited to a single group: the first group to accept claims the mission, then only
+     * its members may join (until `maxAssignees`).
+     */
+    groupClaimable: boolean('group_claimable').notNull().default(false),
+    /** Big event mission declared by the game server or a corporation (open multijoueur). */
+    isEvent: boolean('is_event').notNull().default(false),
+    /**
+     * Availability zones (see `MissionZone`); empty = global. Mutable through the
+     * internal API only (the game re-zones live events; no escrow impact).
+     */
+    zones: jsonb('zones').$type<MissionZone[]>()
+      .notNull()
+      .$default(() => []),
     /** Maximum number of simultaneous assignees (1 = single-player mission). */
     maxAssignees: integer('max_assignees').notNull().default(1),
     /** Escrow state of a player-funded economic reward (`none` for system/scenario missions). */
@@ -81,10 +160,13 @@ export const missions = pgTable(
     escrowPayerId: uuid('escrow_payer_id'),
     /** Idempotency key of the Economy escrow debit (`mission-escrow:<missionId>`). */
     escrowExternalId: text('escrow_external_id'),
-    /** Item escrow lifecycle for a player-funded item reward. */
+    /** Item escrow lifecycle for player-funded item rewards (all item components). */
     escrowItemStatus: text('escrow_item_status').$type<ItemEscrowStatus>().notNull().default('none'),
-    /** Inventory hold reserving the escrowed item (`refType: mission_escrow`). */
-    escrowItemHoldId: uuid('escrow_item_hold_id'),
+    /**
+     * Inventory hold ids of the item reward components, aligned with the `item` components
+     * of `rewards` (same order). Created at mission creation, consumed at settlement.
+     */
+    escrowItemHoldIds: jsonb('escrow_item_hold_ids').$type<string[]>(),
     /** Scenarized missions reference their script/chain here. */
     scriptId: text('script_id'),
     /** When set and passed, the mission is no longer acceptable nor completable. */
@@ -111,10 +193,11 @@ export const missionObjectives = pgTable(
     missionId: uuid('mission_id')
       .notNull()
       .references(() => missions.id, { onDelete: 'cascade' }),
-    type: text('type').$type<ObjectiveType>().notNull(),
+    /** Objective kind (validated against the kind registry at creation). */
+    type: text('type').notNull(),
     title: text('title').notNull(),
     description: text('description'),
-    /** Quantity to deliver/transport/visit before the objective is met. */
+    /** Quantity to reach before the objective is met (`quantity` kinds only). */
     targetQuantity: integer('target_quantity').notNull().default(1),
     /** Free-form unit label (e.g. `t`, `units`). */
     unit: text('unit'),
@@ -127,7 +210,9 @@ export const missionObjectives = pgTable(
     status: text('status').$type<ObjectiveStatus>().notNull().default('pending'),
     /** Progress reported so far, compared against `targetQuantity`. */
     currentProgress: integer('current_progress').notNull().default(0),
-    /** Extra parameters (material id, NPC id, script step, ...). */
+    /** Kind-specific structured params, validated by the kind's params schema. */
+    params: jsonb('params').$type<Record<string, unknown>>(),
+    /** Free-form extras owned by the game server (script step, NPC id, ...). */
     payload: jsonb('payload').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

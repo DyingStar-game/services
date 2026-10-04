@@ -42,6 +42,8 @@ tags:
     description: Block list
   - name: corporations
     description: Corporation directory, pages, members, ranks and recruitment
+  - name: groups
+    description: 'Temporary groups (mission sharing): members, invitations, ownership'
   - name: politics
     description: Political entities (commune, agglomeration, department, region, country, federation), offices, members and hierarchy
   - name: reports
@@ -105,7 +107,7 @@ paths:
     get:
       tags: [me]
       operationId: getMe
-      summary: Own profile with presence, corporations and political memberships
+      summary: Own profile with presence, corporations, group and political memberships
       description: The profile is created on first call from the token identity.
       responses:
         '200':
@@ -116,7 +118,7 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/PlayerProfile'
                   - type: object
-                    required: [presence, corporations, politics]
+                    required: [presence, corporations, politics, group]
                     properties:
                       presence: { $ref: '#/components/schemas/Presence' }
                       corporations:
@@ -126,6 +128,16 @@ paths:
                         type: array
                         description: Political entities the player belongs to (commune, country, federation, …)
                         items: { $ref: '#/components/schemas/PoliticalEntityRef' }
+                      group:
+                        description: The player's group (a player belongs to at most one)
+                        oneOf:
+                          - allOf:
+                              - $ref: '#/components/schemas/Group'
+                              - type: object
+                                required: [joinedAt]
+                                properties:
+                                  joinedAt: { type: string, format: date-time }
+                          - type: 'null'
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
     patch:
@@ -233,6 +245,76 @@ paths:
         - $ref: '#/components/parameters/requestId'
       responses:
         '204': { description: Request removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Group ───────────────────────────────────────────────────────────────────
+  /api/me/groups:
+    get:
+      tags: [me]
+      operationId: getMyGroup
+      summary: The player's group (a player belongs to at most one), or null
+      responses:
+        '200':
+          description: The group with the caller's join date, or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/Group'
+                      - type: object
+                        required: [joinedAt]
+                        properties:
+                          joinedAt: { type: string, format: date-time }
+                  - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/group/invitations:
+    get:
+      tags: [me]
+      operationId: getMyGroupInvitations
+      summary: My pending group invitations
+      responses:
+        '200':
+          description: Pending invitations with the group reference
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PlayerGroupInvitation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/group/invitations/{id}/accept:
+    post:
+      tags: [me]
+      operationId: acceptGroupInvitation
+      summary: Accept a group invitation and join the group
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Joined the group }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already in a group (`ALREADY_IN_GROUP`) or the group is full (`GROUP_FULL`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/me/group/invitations/{id}/decline:
+    post:
+      tags: [me]
+      operationId: declineGroupInvitation
+      summary: Decline a group invitation
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Invitation removed }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1045,6 +1127,162 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ── Reports ─────────────────────────────────────────────────────────────────
+  # ── Groups ─────────────────────────────────────────────────────────────────
+  /api/groups:
+    post:
+      tags: [groups]
+      operationId: createGroup
+      summary: Create a temporary group (the caller becomes its owner and first member)
+      description: >
+        A player belongs to at most one group. Groups have no expiry: they are disbanded
+        manually by the owner, and ownership passes to the oldest remaining member when
+        the owner leaves (an empty group is deleted).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGroup' }
+      responses:
+        '201':
+          description: Group created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Group' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409':
+          description: Already in a group (`ALREADY_IN_GROUP`) or name taken (`CONFLICT`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/groups/{groupId}:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    get:
+      tags: [groups]
+      operationId: getGroup
+      summary: Group summary with its member count (members only)
+      responses:
+        '200':
+          description: Group summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [groups]
+      operationId: updateGroup
+      summary: Edit the group (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupPatch' }
+      responses:
+        '200':
+          description: Updated group
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Group' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [groups]
+      operationId: disbandGroup
+      summary: Disband the group (owner only, cascade-deletes members and invitations)
+      responses:
+        '204': { description: Group disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/members:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    get:
+      tags: [groups]
+      operationId: listGroupMembers
+      summary: Members with profile and presence (owner first, then oldest join)
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GroupMember' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+      - $ref: '#/components/parameters/playerId'
+    delete:
+      tags: [groups]
+      operationId: removeGroupMember
+      summary: Remove a member (owner only; the owner leaves on their own)
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/leave:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    post:
+      tags: [groups]
+      operationId: leaveGroup
+      summary: Leave the group (the oldest member becomes owner; an empty group is deleted)
+      responses:
+        '204': { description: Left the group }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/invitations:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    post:
+      tags: [groups]
+      operationId: inviteGroupPlayer
+      summary: Invite a player to the group (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupInvitation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: >
+            Invitee already in a group (`ALREADY_IN_GROUP`), invitation pending,
+            group full (`GROUP_FULL`) or a block exists (`CONFLICT`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /api/reports:
     post:
       tags: [reports]
@@ -1374,6 +1612,26 @@ paths:
 
   # ── Internal ────────────────────────────────────────────────────────────────
   /api/internal/players/{playerId}:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerProfile
+      summary: Full profile (incl. reputation), or null when it does not exist
+      description: Requires the `social:profile:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Profile or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: 'null'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     put:
       tags: [internal]
       operationId: internalUpsertPlayer
@@ -1438,6 +1696,35 @@ paths:
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/players/{playerId}/presence:
+    get:
+      tags: [internal]
+      operationId: internalGetPresence
+      summary: Status and location of a player (defaults to offline, location null)
+      description: >
+        Used by Mission to filter/accept zone-scoped missions. Requires the
+        `social:profile:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Presence row (defaulted when the player was never seen)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, status, location]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  status: { $ref: '#/components/schemas/PresenceStatus' }
+                  location:
+                    oneOf:
+                      - { $ref: '#/components/schemas/Location' }
+                      - type: 'null'
+                  updatedAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     put:
       tags: [internal]
       operationId: internalSetPresence
@@ -1660,6 +1947,57 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/group:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerGroup
+      summary: Group of a player (a player belongs to at most one group)
+      description: >
+        With `?groupId`, returns that membership (or `null`). Without it, returns the
+        player's single group membership (or `null`). Requires the `social:group:read`
+        capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+        - name: groupId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Membership or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/GroupMembership'
+                  - type: 'null'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/groups/{groupId}:
+    get:
+      tags: [internal]
+      operationId: internalGetGroup
+      summary: Group summary with member count, or null when it does not exist
+      description: Requires the `social:group:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/groupId'
+      responses:
+        '200':
+          description: Group summary or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/GroupSummary'
+                  - type: 'null'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/players/{playerId}/sanctions:
@@ -2431,6 +2769,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    groupId:
+      name: groupId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     politicalEntityId:
       name: entityId
       in: path
@@ -2858,6 +3201,95 @@ components:
           examples: [corporation_created, member_joined, member_left, member_kicked, rank_changed, player_invited, ceo_transferred]
         details: { type: [object, 'null'], additionalProperties: true }
         createdAt: { type: string, format: date-time }
+
+    # ── Groups ──
+    Group:
+      type: object
+      required: [id, name, description, ownerId, maxMembers, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        ownerId: { type: string, format: uuid, description: Owner (passes to the oldest member when they leave) }
+        maxMembers: { type: integer, minimum: 2, maximum: 100, default: 10 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    GroupSummary:
+      allOf:
+        - $ref: '#/components/schemas/Group'
+        - type: object
+          required: [memberCount]
+          properties:
+            memberCount: { type: integer }
+
+    GroupMember:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [joinedAt, isOwner, status, location]
+          properties:
+            joinedAt: { type: string, format: date-time }
+            isOwner: { type: boolean }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    GroupMembership:
+      type: object
+      required: [group, member]
+      properties:
+        group: { $ref: '#/components/schemas/Group' }
+        member:
+          type: object
+          required: [groupId, playerId, joinedAt]
+          properties:
+            groupId: { type: string, format: uuid }
+            playerId: { type: string, format: uuid }
+            joinedAt: { type: string, format: date-time }
+
+    GroupInvitation:
+      type: object
+      required: [id, groupId, playerId, invitedBy, createdAt]
+      properties:
+        id: { type: integer }
+        groupId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        invitedBy: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    PlayerGroupInvitation:
+      allOf:
+        - $ref: '#/components/schemas/GroupInvitation'
+        - type: object
+          required: [group]
+          properties:
+            group:
+              type: object
+              required: [id, name]
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+                description: { type: [string, 'null'] }
+                maxMembers: { type: integer }
+
+    CreateGroup:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        maxMembers: { type: integer, minimum: 2, maximum: 100, default: 10 }
+
+    GroupPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        maxMembers: { type: integer, minimum: 2, maximum: 100 }
 
     # ── Politics ──
     PoliticalEntityType:

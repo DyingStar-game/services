@@ -56,7 +56,7 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/me` | Mon profil + présence (créé au premier appel) |
+| GET | `/api/me` | Mon profil + présence (créé au premier appel) + mon groupe (`group`, `null` si aucun) |
 | PATCH | `/api/me` | `displayName, avatarUrl, faction, biography, rpSheet{characterName,story,alignment}` |
 | GET | `/api/me/activity?limit=` | Mon historique d'activité |
 | GET | `/api/profiles?search=&limit=&entityType=` | Recherche par nom d'affichage (`entityType` ∈ `player\|npc`, défaut : les deux) |
@@ -76,6 +76,10 @@ Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 | GET | `/api/me/corporation/requests` | Mes invitations et candidatures en attente |
 | POST | `/api/me/corporation/requests/:id/accept` | Accepter une invitation |
 | POST | `/api/me/corporation/requests/:id/decline` | Refuser une invitation / retirer une candidature |
+| GET | `/api/me/groups` | Mon groupe (un joueur appartient au plus à **un** groupe), ou `null` |
+| GET | `/api/me/group/invitations` | Mes invitations de groupe en attente |
+| POST | `/api/me/group/invitations/:id/accept` | Accepter une invitation de groupe |
+| POST | `/api/me/group/invitations/:id/decline` | Refuser une invitation de groupe |
 | GET | `/api/me/reputation?limit=` | Mon score, l'historique des variations et mes sanctions actives (accessible même suspendu) |
 | GET | `/api/me/sanctions` | Mes sanctions actives (accessible même suspendu) |
 | POST | `/api/reports` `{targetType: player\|corporation, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
@@ -112,6 +116,20 @@ Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur tout
 Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade CEO (unique, indélébile) les a toutes. Grades créés par défaut : CEO (100), Director (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
 
 **Multi-appartenance & hiérarchie** : un joueur/PNJ peut être membre de plusieurs corporations (aucune contrainte d'unicité par joueur ; les doublons sont interdits par corporation). Une corporation peut être rattachée à une **maison mère** via `parentId` : la page publique expose `parent` (référence) et `subsidiaries` (filiales directes), `GET /api/corporations/:id/subsidiaries` liste les filiales et `PUT /api/corporations/:id/parent` rattache/détache (les cycles sont refusés). Dissoudre une maison mère laisse ses filiales indépendantes (`ON DELETE SET NULL`).
+
+### Groupes (`Authorization: Bearer <JWT Keycloak>`) — groupes **temporaires** pour partager des missions ; un joueur appartient au plus à **un** groupe
+| Méthode | Route | Description |
+|---|---|---|
+| POST | `/api/groups` `{name, description?, maxMembers?}` | Créer un groupe ; le créateur devient owner et premier membre (`409 ALREADY_IN_GROUP` si déjà dans un groupe) |
+| GET | `/api/groups/:groupId` | Résumé : groupe + `memberCount` (membres uniquement) |
+| PATCH | `/api/groups/:groupId` | `name, description, maxMembers` (owner) |
+| DELETE | `/api/groups/:groupId` | Dissoudre (owner ; `members` et invitations supprimés en cascade) |
+| GET | `/api/groups/:groupId/members` | Membres avec profil et présence (owner d'abord, puis ancienneté) |
+| DELETE | `/api/groups/:groupId/members/:playerId` | Exclure un membre (owner ; l'owner ne peut pas être exclu) |
+| POST | `/api/groups/:groupId/leave` | Quitter le groupe — si l'owner quitte, le **membre le plus ancien devient owner** ; s'il ne reste personne, le groupe est supprimé |
+| POST | `/api/groups/:groupId/invitations` `{playerId}` | Inviter un joueur (owner ; `409 ALREADY_IN_GROUP` / `GROUP_FULL` / invitation en attente) |
+
+**Règles** : pas d'expiration automatique (« temporaire » = dissolution manuelle par l'owner ou auto à vide) ; **1 groupe par joueur** garanti par contrainte unique (`group_members.player_id`) ; cap `maxMembers` 2..100 (défaut 10), compté owner inclus. L'invitation est proposée au destinataire via `/api/me/group/invitations` (accept/refuse). Le service Mission vérifie l'appartenance via l'API interne.
 
 ### Politique (`Authorization: Bearer <JWT Keycloak>`)
 Catégorie sociale hiérarchique : **commune** (villages/villes, avec maire et conseil) → **agglomération** → **département** → **région** → **pays** → **fédération** (niveau le plus haut, optionnel — un pays peut rester indépendant). Une entité politique a des **offices** (maire, président, conseiller…), des **membres** (joueurs **et** PNJ) et un **office de tête**. Un profil (joueur ou PNJ) peut occuper n'importe quel office, y compris la tête.
@@ -163,13 +181,17 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | Méthode | Route | Rôle requis | Description |
 |---|---|---|---|
 | PUT | `/api/internal/players/:playerId` `{displayName}` | `social:profile:write` | Créer le profil au login (nom existant conservé) |
+| GET | `/api/internal/players/:playerId` | `social:profile:read` | Profil complet (**réputation** inclus) ou `null` — utilisé par Mission pour les prérequis `min_reputation` |
 | PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?}` | `social:profile:write` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
 | PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
+| GET | `/api/internal/players/:playerId/presence` | `social:profile:read` | Statut + localisation (défaut hors ligne / `location: null`) — lu par Mission pour filtrer les missions zonées |
 | POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
 | GET | `/api/internal/players/:playerId/sanctions` | `social:sanctions:read` | Sanctions actives (pour appliquer mute/ban côté jeu) |
 | POST | `/api/internal/reputation/rehabilitate` | `social:reputation:write` | Lancer une passe de réhabilitation |
 | POST | `/api/internal/players/:playerId/activity` `{type, details?}` | `social:player:write` | Ajouter une entrée d'activité |
 | GET | `/api/internal/players/:playerId/corporation?corporationId=` | `social:corporation:read` | Avec `corporationId` : cette adhésion ou `null` ; sans : la liste des adhésions d'un joueur |
+| GET | `/api/internal/players/:playerId/group?groupId=` | `social:group:read` | Avec `groupId` : cette adhésion ou `null` ; sans : le groupe unique du joueur ou `null` — `{group, member}` |
+| GET | `/api/internal/groups/:groupId` | `social:group:read` | Résumé du groupe (`memberCount`) ou `null` si inexistant — utilisé par Mission pour valider un partage |
 | GET | `/api/internal/players?search=&playerIds=&limit=` | `social:profile:read` | Résoudre des profils par pseudo (sous-chaîne) et/ou ids explicites — `{playerId, displayName, entityType}` (pour les services qui ne stockent que des UUID) |
 | PUT | `/api/internal/players/:playerId/corporation` `{corporationId, rankId?}` | `social:corporation:write` | Ajouter un **PNJ** à une corporation (grade par défaut si omis) |
 | DELETE | `/api/internal/players/:playerId/corporation?corporationId=` | `social:corporation:write` | Retirer un **PNJ** d'une corporation précise |
@@ -199,7 +221,7 @@ Les **PNJ** sont des profils `entityType: "npc"` (id UUID attribué par le serve
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, politics, moderation)
+  db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, groups, politics, moderation)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT joueur / service-account + rôles de capacité), sanctions, validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
@@ -224,7 +246,7 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 - [x] Liste d'amis et gestion des invitations
 - [x] Statut en ligne (connecté / mission / hors ligne)
 - [x] Localisation des amis dans l'univers persistant
-- [~] Invitations contextuelles (groupe, corporation, mission) — corporation faite, groupe/mission à venir
+- [~] Invitations contextuelles (groupe, corporation, mission) — corporation et **groupe** faits, invitations de mission à venir
 - [x] Système de recommandations ("joueurs rencontrés récemment")
 
 ### Corporations

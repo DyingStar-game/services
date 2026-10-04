@@ -16,6 +16,19 @@ export interface PlayerCorporation {
   [key: string]: unknown;
 }
 
+/** Group reference, as returned by Social's internal API. */
+export interface PlayerGroup {
+  id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
+/** Membership of a player in a group, as returned by Social's internal API. */
+export interface PlayerGroupMembership {
+  group: PlayerGroup;
+  member: { groupId: string; playerId: string; joinedAt: string; [key: string]: unknown };
+}
+
 interface TokenCache {
   value: string;
   expiresAt: number;
@@ -62,13 +75,12 @@ async function authHeaders(): Promise<Record<string, string>> {
   );
 }
 
-/** Calls the Social internal corporation endpoint and returns the parsed body. */
-async function fetchMappings<T>(playerId: string, corporationId?: string): Promise<T> {
+/** Calls a Social internal endpoint (path starting with `/api/internal/...`) and returns the parsed body. */
+async function fetchInternal<T>(path: string): Promise<T> {
   if (!env.social.apiUrl) {
     throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
   }
-  const query = corporationId ? `?corporationId=${encodeURIComponent(corporationId)}` : '';
-  const res = await fetch(`${env.social.apiUrl}/api/internal/players/${playerId}/corporation${query}`, {
+  const res = await fetch(`${env.social.apiUrl}${path}`, {
     headers: { ...(await authHeaders()) },
   });
   if (res.ok) {
@@ -76,6 +88,12 @@ async function fetchMappings<T>(playerId: string, corporationId?: string): Promi
   }
   const text = await res.text().catch(() => '');
   throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`);
+}
+
+/** Calls the Social internal corporation endpoint and returns the parsed body. */
+async function fetchMappings<T>(playerId: string, corporationId?: string): Promise<T> {
+  const query = corporationId ? `?corporationId=${encodeURIComponent(corporationId)}` : '';
+  return fetchInternal<T>(`/api/internal/players/${playerId}/corporation${query}`);
 }
 
 /**
@@ -108,4 +126,71 @@ export async function getPlayerCorporationIn(
  */
 export async function isCorporationMember(playerId: string, corporationId: string): Promise<boolean> {
   return (await getPlayerCorporationIn(playerId, corporationId)) !== null;
+}
+
+/**
+ * The (single) group a player belongs to, or null. A player belongs to at most one group.
+ * @param playerId - Player id.
+ * @returns Membership, or null.
+ */
+export async function getPlayerGroup(playerId: string): Promise<PlayerGroupMembership | null> {
+  return fetchInternal<PlayerGroupMembership | null>(`/api/internal/players/${playerId}/group`);
+}
+
+/**
+ * Whether a player is a member of the given group.
+ * @param playerId - Player id.
+ * @param groupId - Group id.
+ * @returns True when the player belongs to that group.
+ */
+export async function isGroupMember(playerId: string, groupId: string): Promise<boolean> {
+  const membership = await fetchInternal<PlayerGroupMembership | null>(
+    `/api/internal/players/${playerId}/group?groupId=${encodeURIComponent(groupId)}`,
+  );
+  return membership !== null;
+}
+
+/**
+ * A group reference, or null when it does not exist (used to validate a share target).
+ * @param groupId - Group id.
+ * @returns Group, or null.
+ */
+export async function getGroup(groupId: string): Promise<PlayerGroup | null> {
+  return fetchInternal<PlayerGroup | null>(`/api/internal/groups/${encodeURIComponent(groupId)}`);
+}
+
+/** Public profile fields mission checks care about (reputation gate). */
+export interface PlayerProfileInfo {
+  playerId: string;
+  displayName?: string;
+  reputation: number;
+  [key: string]: unknown;
+}
+
+/**
+ * A player's profile (with reputation), or null when it does not exist.
+ * @param playerId - Player id.
+ * @returns Profile, or null.
+ */
+export async function getPlayerProfile(playerId: string): Promise<PlayerProfileInfo | null> {
+  return fetchInternal<PlayerProfileInfo | null>(`/api/internal/players/${playerId}`);
+}
+
+/** Presence of a player as reported by the game server (Social internal API). */
+export interface PlayerPresence {
+  playerId: string;
+  status: string;
+  location: { system?: string; scene?: string; position?: { x: number; y: number; z: number } } | null;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The player's presence (status + location). Defaults to offline/null when the player
+ * was never seen — used for mission zone matching.
+ * @param playerId - Player id.
+ * @returns Presence.
+ */
+export async function getPlayerPresence(playerId: string): Promise<PlayerPresence> {
+  return fetchInternal<PlayerPresence>(`/api/internal/players/${playerId}/presence`);
 }

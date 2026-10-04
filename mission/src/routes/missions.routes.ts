@@ -14,24 +14,36 @@ import {
   completeMission,
   getAssignment,
   reportProgress,
+  verifyPlayerObjectives,
 } from '../services/assignments.service.js';
 import {
+  confirmObjective,
   createPlayerMission,
   getMissionWithObjectives,
   listMissions,
+  requireMission,
+  setMissionEvent,
+  shareMission,
+  unshareMission,
 } from '../services/missions.service.js';
+import { isGroupMember, getPlayerGroup, getPlayerPresence } from '../services/social.client.js';
+import { validateMissionSpec } from '../services/spec.service.js';
+import { missionKindsCatalog } from '../kinds/index.js';
 import {
   createPlayerMissionBody,
+  eventBody,
   missionIdParams,
   missionListQuery,
   objectiveParams,
   progressBody,
+  shareBody,
+  validateMissionBody,
 } from './schemas.js';
 
 /** Router mounted at `/api/missions`. */
 export const missionsRoutes: IRouter = Router();
 
-/** POST / — Create a player-sponsored mission (economic reward escrowed from the caller). */
+/** POST / — Create a player-sponsored mission (reward escrowed from the caller). */
 missionsRoutes.post(
   '/',
   validate(createPlayerMissionBody),
@@ -46,21 +58,62 @@ missionsRoutes.post(
   }),
 );
 
-/** GET / — Browse missions (defaults to open, `available` ones). */
+/** POST /validate — Dry-run a mission spec (no persistence, no escrow). */
+missionsRoutes.post(
+  '/validate',
+  validate(validateMissionBody),
+  asyncHandler(async (req, res) => {
+    const { mode, mission } = req.body;
+    const spec = validateMissionSpec(
+      {
+        objectives: mission.objectives,
+        prerequisites: mission.prerequisites,
+        rewards: mission.rewards,
+        maxAssignees: mission.maxAssignees,
+      },
+      { escrowed: mode === 'player', requireReward: mode === 'player' },
+    );
+    res.json({ valid: true, spec });
+  }),
+);
+
+/** GET /kinds — Discovery catalogue: categories, objective/prerequisite kinds, reward shape. */
+missionsRoutes.get('/kinds', asyncHandler(async (_req, res) => {
+  res.json(missionKindsCatalog());
+}));
+
+/** GET / — Browse missions: open (`available`/`active`) with a free slot, group-aware. */
 missionsRoutes.get(
   '/',
   validate(missionListQuery, 'query'),
   asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
     const filters = {
-      status: req.query.status as never,
       kind: req.query.kind as never,
       category: req.query.category as never,
       issuerType: req.query.issuerType as never,
       issuerId: req.query.issuerId as string | undefined,
       visibility: req.query.visibility as never,
+      groupId: req.query.groupId as string | undefined,
+      groupClaimable: req.query.groupClaimable as never,
+      isEvent: req.query.isEvent as never,
+      hasFreeSlots: true as const,
+      statuses: (req.query.status
+        ? [req.query.status as never]
+        : ['available', 'active']) as never,
     };
-    if (!filters.status) filters.status = 'available' as never;
-    res.json({ missions: await listMissions(filters, Number(req.query.limit)) });
+    // Group-shared missions are only listed to their members, and zoned missions only to
+    // players inside one of their zones (both lookups fail-soft: a Social outage degrades
+    // to "no group, no location" instead of breaking the browse).
+    const [groupMembership, presence] = await Promise.all([
+      getPlayerGroup(player.id).catch(() => null),
+      getPlayerPresence(player.id).catch(() => null),
+    ]);
+    const viewerGroupId = groupMembership?.group.id ?? null;
+    const viewerLocation = presence?.location ?? null;
+    res.json({
+      missions: await listMissions({ ...filters, viewerGroupId, viewerLocation }, Number(req.query.limit)),
+    });
   }),
 );
 
@@ -72,6 +125,10 @@ missionsRoutes.get(
     const player = requirePlayer(req);
     const result = await getMissionWithObjectives(req.params.missionId);
     if (!result) throw new HttpError(404, 'NOT_FOUND', 'Mission not found');
+    if (result.mission.groupId && !(await isGroupMember(player.id, result.mission.groupId))) {
+      // Hidden from players outside the target group.
+      throw new HttpError(404, 'NOT_FOUND', 'Mission not found');
+    }
     const assignment = await getAssignment(req.params.missionId, player.id);
     res.json({ ...result, assignment });
   }),
@@ -84,6 +141,38 @@ missionsRoutes.post(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     res.status(201).json(await acceptMission(req.params.missionId, player.id));
+  }),
+);
+
+/** POST /:missionId/share — Share the mission with a group (creator or corporation member). */
+missionsRoutes.post(
+  '/:missionId/share',
+  validate(missionIdParams, 'params'),
+  validate(shareBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await shareMission(req.params.missionId, req.body.groupId, { actorId: player.id }));
+  }),
+);
+
+/** DELETE /:missionId/share — Remove the group share (creator or corporation member). */
+missionsRoutes.delete(
+  '/:missionId/share',
+  validate(missionIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await unshareMission(req.params.missionId, { actorId: player.id }));
+  }),
+);
+
+/** POST /:missionId/event — Declare/lift the "big event" flag (corporation mission only). */
+missionsRoutes.post(
+  '/:missionId/event',
+  validate(missionIdParams, 'params'),
+  validate(eventBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await setMissionEvent(req.params.missionId, player.id, req.body));
   }),
 );
 
@@ -122,5 +211,29 @@ missionsRoutes.post(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     res.json(await completeMission(req.params.missionId, player.id));
+  }),
+);
+
+/** POST /:missionId/verify — Re-measure the mission's service objectives (and perform deliveries). */
+missionsRoutes.post(
+  '/:missionId/verify',
+  validate(missionIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await verifyPlayerObjectives(req.params.missionId, player.id));
+  }),
+);
+
+/** POST /:missionId/objectives/:objectiveId/confirm — Confirm an issuer-verified objective (mission creator). */
+missionsRoutes.post(
+  '/:missionId/objectives/:objectiveId/confirm',
+  validate(objectiveParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const mission = await requireMission(req.params.missionId);
+    if (mission.createdBy !== player.id) {
+      throw new HttpError(403, 'NOT_MISSION_ISSUER', 'Only the creator of the mission can confirm its objectives');
+    }
+    res.json(await confirmObjective(req.params.missionId, req.params.objectiveId));
   }),
 );

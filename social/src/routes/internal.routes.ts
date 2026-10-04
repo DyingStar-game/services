@@ -24,6 +24,7 @@ import {
   transferCorporationCeo,
   updateCorporation,
 } from '../services/corporations.service.js';
+import { getGroupMembership, getGroupSummary, getPlayerGroup } from '../services/groups.service.js';
 import {
   addNpcPoliticalMember,
   createPoliticalEntity,
@@ -35,7 +36,7 @@ import {
   transferPoliticalHead,
   updatePoliticalEntity,
 } from '../services/politics.service.js';
-import { setPresence } from '../services/presence.service.js';
+import { getPresence, setPresence } from '../services/presence.service.js';
 import {
   applyStats,
   ensureNpcProfile,
@@ -54,6 +55,8 @@ import {
   corporationQueryOptional,
   corporationQueryRequired,
   encounterBody,
+  groupIdParams,
+  groupQueryOptional,
   internalCreateCorporationBody,
   internalCreatePoliticalEntityBody,
   internalProfileQuery,
@@ -86,6 +89,16 @@ internalRoutes.put(
   }),
 );
 
+/** GET /players/:playerId — Full profile (incl. reputation), or null when it does not exist. */
+internalRoutes.get(
+  '/players/:playerId',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json((await getProfile(req.params.playerId)) ?? null);
+  }),
+);
+
 /** PUT /players/:playerId/presence — Set status and location. */
 internalRoutes.put(
   '/players/:playerId/presence',
@@ -94,6 +107,16 @@ internalRoutes.put(
   validate(presenceBody),
   asyncHandler(async (req, res) => {
     res.json(await setPresence(req.params.playerId, req.body.status, req.body.location));
+  }),
+);
+
+/** GET /players/:playerId/presence — Status and location of a player (default offline, location null). */
+internalRoutes.get(
+  '/players/:playerId/presence',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json({ playerId: req.params.playerId, ...(await getPresence(req.params.playerId)) });
   }),
 );
 
@@ -379,6 +402,38 @@ internalRoutes.get(
     }
     const memberships = await listCorporationMemberships(req.params.playerId);
     res.json(memberships.map((m) => ({ ...m.corporation, rank: m.rank })));
+  }),
+);
+
+/**
+ * GET /players/:playerId/group[?groupId=] — Group of a player (a player belongs to at
+ * most one group). With `groupId`, returns that membership or null; without, the player's
+ * single group or null.
+ */
+internalRoutes.get(
+  '/players/:playerId/group',
+  requireServiceRole(SERVICE_ROLES.groupRead),
+  validate(playerIdParams, 'params'),
+  validate(groupQueryOptional, 'query'),
+  asyncHandler(async (req, res) => {
+    const groupId = req.query.groupId as string | undefined;
+    if (groupId) {
+      const membership = await getGroupMembership(groupId, req.params.playerId);
+      res.json(membership ? { group: membership.group, member: membership.member } : null);
+      return;
+    }
+    const membership = await getPlayerGroup(req.params.playerId);
+    res.json(membership ? { group: membership.group, member: membership.member } : null);
+  }),
+);
+
+/** GET /groups/:groupId — Group summary with member count, or null when it does not exist. */
+internalRoutes.get(
+  '/groups/:groupId',
+  requireServiceRole(SERVICE_ROLES.groupRead),
+  validate(groupIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await getGroupSummary(req.params.groupId));
   }),
 );
 

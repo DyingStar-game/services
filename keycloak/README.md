@@ -64,6 +64,7 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 | `social:player:write` | Game stats and activity |
 | `social:corporation:read` | Corporation membership reads |
 | `social:corporation:write` | NPC corporation membership + internal corporation/CEO management |
+| `social:group:read` | Group membership reads (temporary groups: player group, group summary) |
 | `social:politics:read` | Political membership reads |
 | `social:politics:write` | NPC political membership + internal political entity management |
 | `social:sanctions:read` | Active sanctions (mute/ban enforcement) |
@@ -107,6 +108,10 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 > the calling `svc-*` service account. The game server (`svc-game`) typically needs the write
 > roles: `social:corporation:write`, `social:politics:write`, `economie:wallet:*`,
 > `economie:politics:*`, `inventory:*`, `mission:*` and `market:*`.
+> The mission service (`svc-mission`) needs, on top of the write roles it already uses:
+> `social:corporation:read`, `social:group:read`, `social:profile:read` (prereq `min_reputation`)
+> on `social-api`, `economie:wallet:read` on `economie-api` (prereq/objective `has_credits`),
+> and `inventory:read` on `inventory-api` (objectives `owns_items` / `deliver_items`).
 
 ## Required GitHub Secrets
 

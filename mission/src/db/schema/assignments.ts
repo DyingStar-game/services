@@ -1,11 +1,13 @@
 /**
  * Player assignments: a player accepts a mission, progresses it and is rewarded on
  * completion. `rewardExternalId` is the idempotency key handed to the Economy service so a
- * reward can never be paid twice (see `rewards.service`).
+ * reward can never be paid twice (see `rewards.service`). Per-component settlement state
+ * (`settledComponents`) makes partial retries safe when a mission has several reward
+ * components.
  */
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 
-import { missions } from './missions.js';
+import { missions, type RewardComponent } from './missions.js';
 
 /** Lifecycle of an assignee's participation in a mission. */
 export const ASSIGNMENT_STATUSES = ['active', 'completed', 'abandoned', 'expired'] as const;
@@ -29,9 +31,12 @@ export const missionAssignments = pgTable(
     acceptedAt: timestamp('accepted_at', { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     /**
-     * Reward share frozen at completion time (multiplayer splits the mission reward
-     * deterministically), so a settlement retry credits the exact same amount.
+     * Reward shares frozen at completion, one entry per mission reward component
+     * (multiplayer splits each component deterministically), so a settlement retry
+     * credits/transfers the exact same amounts.
      */
+    rewardShares: jsonb('reward_shares').$type<RewardComponent[]>(),
+    /** Credits share of the frozen `rewardShares` entry (used by the escrow refund math). */
     rewardAmount: integer('reward_amount'),
     /** True once the economic reward has been credited by the Economy service. */
     rewardSettled: boolean('reward_settled').notNull().default(false),
@@ -40,13 +45,14 @@ export const missionAssignments = pgTable(
     rewardSettledAt: timestamp('reward_settled_at', { withTimezone: true }),
     /** Raw result/error of the last settlement attempt. */
     rewardDetails: jsonb('reward_details').$type<Record<string, unknown>>(),
-    /** Item reward share frozen at completion (fungible goods split like the economic share). */
-    rewardItemQuantity: integer('reward_item_quantity'),
-    /** True once the item reward has been transferred by the Inventory service. */
-    itemSettled: boolean('item_settled').notNull().default(false),
-    itemSettledAt: timestamp('item_settled_at', { withTimezone: true }),
-    /** Raw result/error of the last item settlement attempt. */
-    itemDetails: jsonb('item_details').$type<Record<string, unknown>>(),
+    /**
+     * Reward components already granted (`credits`, `item:<itemId>`); each is settled at
+     * most once, so a partial failure can be retried without double-paying.
+     */
+    settledComponents: text('settled_components')
+      .array()
+      .notNull()
+      .$default(() => []),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

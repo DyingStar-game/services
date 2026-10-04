@@ -1878,6 +1878,224 @@ paths:
     servers:
     - url: http://social:3000
       description: social
+  /api/groups:
+    post:
+      tags:
+      - social
+      operationId: createGroup
+      summary: Create a temporary group (the caller becomes its owner and first member)
+      description: 'A player belongs to at most one group. Groups have no expiry: they are disbanded manually by the owner,
+        and ownership passes to the oldest remaining member when the owner leaves (an empty group is deleted).
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_CreateGroup'
+      responses:
+        '201':
+          description: Group created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Group'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+        '409':
+          description: Already in a group (`ALREADY_IN_GROUP`) or name taken (`CONFLICT`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/groups/{groupId}:
+    get:
+      tags:
+      - social
+      operationId: getGroup
+      summary: Group summary with its member count (members only)
+      responses:
+        '200':
+          description: Group summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_GroupSummary'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+    patch:
+      tags:
+      - social
+      operationId: updateGroup
+      summary: Edit the group (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/social_GroupPatch'
+      responses:
+        '200':
+          description: Updated group
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Group'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          $ref: '#/components/responses/social_Conflict'
+    delete:
+      tags:
+      - social
+      operationId: disbandGroup
+      summary: Disband the group (owner only, cascade-deletes members and invitations)
+      responses:
+        '204':
+          description: Group disbanded
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+    parameters:
+    - $ref: '#/components/parameters/social_groupId'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/groups/{groupId}/invitations:
+    post:
+      tags:
+      - social
+      operationId: inviteGroupPlayer
+      summary: Invite a player to the group (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - playerId
+              properties:
+                playerId:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_GroupInvitation'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          description: 'Invitee already in a group (`ALREADY_IN_GROUP`), invitation pending, group full (`GROUP_FULL`) or
+            a block exists (`CONFLICT`)
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+    parameters:
+    - $ref: '#/components/parameters/social_groupId'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/groups/{groupId}/leave:
+    post:
+      tags:
+      - social
+      operationId: leaveGroup
+      summary: Leave the group (the oldest member becomes owner; an empty group is deleted)
+      responses:
+        '204':
+          description: Left the group
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+    parameters:
+    - $ref: '#/components/parameters/social_groupId'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/groups/{groupId}/members:
+    get:
+      tags:
+      - social
+      operationId: listGroupMembers
+      summary: Members with profile and presence (owner first, then oldest join)
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_GroupMember'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+    parameters:
+    - $ref: '#/components/parameters/social_groupId'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/groups/{groupId}/members/{playerId}:
+    delete:
+      tags:
+      - social
+      operationId: removeGroupMember
+      summary: Remove a member (owner only; the owner leaves on their own)
+      responses:
+        '204':
+          description: Member removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+    parameters:
+    - $ref: '#/components/parameters/social_groupId'
+    - $ref: '#/components/parameters/social_playerId'
+    servers:
+    - url: http://social:3000
+      description: social
   /api/health:
     get:
       tags:
@@ -2557,6 +2775,35 @@ paths:
     servers:
     - url: http://social:3000
       description: social
+  /api/internal/groups/{groupId}:
+    get:
+      tags:
+      - social
+      operationId: internalGetGroup
+      summary: Group summary with member count, or null when it does not exist
+      description: Requires the `social:group:read` capability role.
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/social_groupId'
+      responses:
+        '200':
+          description: Group summary or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/social_GroupSummary'
+                - type: 'null'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_ServiceForbidden'
+    servers:
+    - url: http://social:3000
+      description: social
   /api/internal/holders/{holderType}/{holderId}:
     get:
       tags:
@@ -3136,6 +3383,69 @@ paths:
     servers:
     - url: http://mission:3000
       description: mission
+  /api/internal/missions/{missionId}/event:
+    post:
+      tags:
+      - mission
+      summary: Declare (or lift) the "big event" flag on a mission (game server)
+      description: Requires the `mission:write` service role. No corporation membership check.
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mission_EventFlag'
+      responses:
+        '200':
+          description: Updated mission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Mission'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          $ref: '#/components/responses/mission_Forbidden'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/internal/missions/{missionId}/objectives/{objectiveId}/confirm:
+    post:
+      tags:
+      - mission
+      summary: Confirm an issuer-verified objective (`manual` kind) on the game server's behalf
+      description: Requires the `mission:progress` service role.
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      - $ref: '#/components/parameters/mission_ObjectiveId'
+      responses:
+        '200':
+          description: Confirmed objective
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_ConfirmResult'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '403':
+          $ref: '#/components/responses/mission_Forbidden'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Mission not open, objective not confirmable, or locked by scenario order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+    servers:
+    - url: http://mission:3000
+      description: mission
   /api/internal/missions/{missionId}/objectives/{objectiveId}/progress:
     post:
       tags:
@@ -3230,6 +3540,116 @@ paths:
           $ref: '#/components/responses/mission_NotFound'
         '409':
           description: Assignment is not completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/internal/missions/{missionId}/share:
+    post:
+      tags:
+      - mission
+      summary: Share a mission with a group (game server, trusted)
+      description: Requires the `mission:write` service role. Skips the creator/corporation check.
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mission_ShareMission'
+      responses:
+        '200':
+          description: Updated mission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Mission'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          $ref: '#/components/responses/mission_Forbidden'
+        '404':
+          description: Mission or target group not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '409':
+          description: Mission has active assignees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+    delete:
+      tags:
+      - mission
+      summary: Remove the group share of a mission (game server, trusted)
+      description: Requires the `mission:write` service role.
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      responses:
+        '200':
+          description: Updated mission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Mission'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          $ref: '#/components/responses/mission_Forbidden'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Mission has active assignees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/internal/missions/{missionId}/verify:
+    post:
+      tags:
+      - mission
+      summary: Re-measure service objectives for a holder (also performs `deliver_items` transfers)
+      description: Requires the `mission:progress` service role.
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - playerId
+              properties:
+                playerId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Measured objectives
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_VerifyResult'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '403':
+          $ref: '#/components/responses/mission_Forbidden'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Mission not open, assignment not active
           content:
             application/json:
               schema:
@@ -3516,6 +3936,31 @@ paths:
     - url: http://social:3000
       description: social
   /api/internal/players/{playerId}:
+    get:
+      tags:
+      - social
+      operationId: internalGetPlayerProfile
+      summary: Full profile (incl. reputation), or null when it does not exist
+      description: Requires the `social:profile:read` capability role.
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/social_playerId'
+      responses:
+        '200':
+          description: Profile or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/social_PlayerProfile'
+                - type: 'null'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_ServiceForbidden'
     put:
       tags:
       - social
@@ -3736,6 +4181,44 @@ paths:
     servers:
     - url: http://social:3000
       description: social
+  /api/internal/players/{playerId}/group:
+    get:
+      tags:
+      - social
+      operationId: internalGetPlayerGroup
+      summary: Group of a player (a player belongs to at most one group)
+      description: 'With `?groupId`, returns that membership (or `null`). Without it, returns the player''s single group membership
+        (or `null`). Requires the `social:group:read` capability role.
+
+        '
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/social_playerId'
+      - name: groupId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Membership or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/social_GroupMembership'
+                - type: 'null'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_ServiceForbidden'
+    servers:
+    - url: http://social:3000
+      description: social
   /api/internal/players/{playerId}/missions:
     get:
       tags:
@@ -3938,6 +4421,48 @@ paths:
     - url: http://social:3000
       description: social
   /api/internal/players/{playerId}/presence:
+    get:
+      tags:
+      - social
+      operationId: internalGetPresence
+      summary: Status and location of a player (defaults to offline, location null)
+      description: 'Used by Mission to filter/accept zone-scoped missions. Requires the `social:profile:read` capability role.
+
+        '
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/social_playerId'
+      responses:
+        '200':
+          description: Presence row (defaulted when the player was never seen)
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - playerId
+                - status
+                - location
+                properties:
+                  playerId:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/social_PresenceStatus'
+                  location:
+                    oneOf:
+                    - $ref: '#/components/schemas/social_Location'
+                    - type: 'null'
+                  updatedAt:
+                    type: string
+                    format: date-time
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_ServiceForbidden'
     put:
       tags:
       - social
@@ -5171,7 +5696,7 @@ paths:
       tags:
       - social
       operationId: getMe
-      summary: Own profile with presence, corporations and political memberships
+      summary: Own profile with presence, corporations, group and political memberships
       description: The profile is created on first call from the token identity.
       responses:
         '200':
@@ -5186,6 +5711,7 @@ paths:
                   - presence
                   - corporations
                   - politics
+                  - group
                   properties:
                     presence:
                       $ref: '#/components/schemas/social_Presence'
@@ -5198,6 +5724,19 @@ paths:
                       description: Political entities the player belongs to (commune, country, federation, …)
                       items:
                         $ref: '#/components/schemas/social_PoliticalEntityRef'
+                    group:
+                      description: The player's group (a player belongs to at most one)
+                      oneOf:
+                      - allOf:
+                        - $ref: '#/components/schemas/social_Group'
+                        - type: object
+                          required:
+                          - joinedAt
+                          properties:
+                            joinedAt:
+                              type: string
+                              format: date-time
+                      - type: 'null'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -5351,6 +5890,104 @@ paths:
                         format: date-time
                       rank:
                         $ref: '#/components/schemas/social_CorporationRank'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/me/group/invitations:
+    get:
+      tags:
+      - social
+      operationId: getMyGroupInvitations
+      summary: My pending group invitations
+      responses:
+        '200':
+          description: Pending invitations with the group reference
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/social_PlayerGroupInvitation'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/me/group/invitations/{id}/accept:
+    post:
+      tags:
+      - social
+      operationId: acceptGroupInvitation
+      summary: Accept a group invitation and join the group
+      parameters:
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '204':
+          description: Joined the group
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+        '409':
+          description: Already in a group (`ALREADY_IN_GROUP`) or the group is full (`GROUP_FULL`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/social_Error'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/me/group/invitations/{id}/decline:
+    post:
+      tags:
+      - social
+      operationId: declineGroupInvitation
+      summary: Decline a group invitation
+      parameters:
+      - $ref: '#/components/parameters/social_requestId'
+      responses:
+        '204':
+          description: Invitation removed
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Forbidden'
+        '404':
+          $ref: '#/components/responses/social_NotFound'
+    servers:
+    - url: http://social:3000
+      description: social
+  /api/me/groups:
+    get:
+      tags:
+      - social
+      operationId: getMyGroup
+      summary: The player's group (a player belongs to at most one), or null
+      responses:
+        '200':
+          description: The group with the caller's join date, or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - allOf:
+                  - $ref: '#/components/schemas/social_Group'
+                  - type: object
+                    required:
+                    - joinedAt
+                    properties:
+                      joinedAt:
+                        type: string
+                        format: date-time
+                - type: 'null'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -5615,7 +6252,12 @@ paths:
     get:
       tags:
       - mission
-      summary: Browse missions (defaults to the `available` ones)
+      summary: Browse missions with a free slot (defaults to `available` + `active`)
+      description: 'Missions without a free assignee slot (`maxAssignees` reached) are hidden, missions shared with a group
+        are only listed to that group''s members, and zoned missions only to players inside one of their zones (unknown location
+        → only global missions; a Social outage degrades to "no group, no location").
+
+        '
       parameters:
       - $ref: '#/components/parameters/mission_MissionStatus'
       - $ref: '#/components/parameters/mission_MissionKind'
@@ -5623,6 +6265,9 @@ paths:
       - $ref: '#/components/parameters/mission_IssuerType'
       - $ref: '#/components/parameters/mission_IssuerId'
       - $ref: '#/components/parameters/mission_Visibility'
+      - $ref: '#/components/parameters/mission_GroupId'
+      - $ref: '#/components/parameters/mission_GroupClaimable'
+      - $ref: '#/components/parameters/mission_IsEvent'
       - $ref: '#/components/parameters/mission_Limit'
       responses:
         '200':
@@ -5694,6 +6339,61 @@ paths:
                     status: 409
         '502':
           description: Economy or Social is unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/missions/kinds:
+    get:
+      tags:
+      - mission
+      summary: Discovery catalogue for mission builders (categories, objective/prerequisite kinds, reward shape)
+      responses:
+        '200':
+          description: Catalogue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_MissionKindsCatalog'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/missions/validate:
+    post:
+      tags:
+      - mission
+      summary: Dry-run a mission spec (no persistence, no escrow)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mission_ValidateMission'
+      responses:
+        '200':
+          description: Spec is valid (normalized)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_ValidatedSpec'
+        '400':
+          description: 'Spec rejected (`MISSING_OBJECTIVES`, `REWARD_REQUIRED`, `UNKNOWN_OBJECTIVE_KIND`, `INVALID_OBJECTIVE_PARAMS`,
+            `UNKNOWN_PREREQ_KIND`, `INVALID_PREREQUISITE_PARAMS`, `ITEM_REWARD_NOT_SPLITABLE`)
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '503':
+          description: Item rewards require the Inventory service (`INVENTORY_NOT_CONFIGURED`)
           content:
             application/json:
               schema:
@@ -5795,6 +6495,26 @@ paths:
                       $ref: '#/components/schemas/mission_Objective'
         '401':
           $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          description: 'Not allowed (`NOT_CORPORATION_MEMBER`, `NOT_GROUP_MEMBER`, `NO_GROUP`, `GROUP_ALREADY_CLAIMED`, `PREREQ_FAILED`,
+            `OUT_OF_ZONE`)
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+              examples:
+                prereq:
+                  value:
+                    error: PREREQ_FAILED
+                    message: 'Prerequisite has_credits failed: balance 120 < 500 credits'
+                    status: 403
+                outOfZone:
+                  value:
+                    error: OUT_OF_ZONE
+                    message: You are not in a zone where this mission is available
+                    status: 403
         '404':
           $ref: '#/components/responses/mission_NotFound'
         '409':
@@ -5816,7 +6536,8 @@ paths:
     post:
       tags:
       - mission
-      summary: Complete the mission and settle its economic reward
+      summary: Complete the mission and settle every reward component
+      description: Re-measures the service objectives (unless `force`) before paying.
       parameters:
       - $ref: '#/components/parameters/mission_MissionId'
       responses:
@@ -5852,6 +6573,92 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/mission_Error'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/missions/{missionId}/event:
+    post:
+      tags:
+      - mission
+      summary: Declare (or lift) the "big event" flag on a corporation mission
+      description: 'Events are the exception to the capacity cap: they allow up to 1000 assignees and stay listed as long
+        as they have a free slot. Requires the CEO rank or the `manage_corporation` permission in the issuing corporation.
+        Lifting the flag requires `maxAssignees` ≤ 100.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mission_EventFlag'
+      responses:
+        '200':
+          description: Updated mission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Mission'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          description: Not a corporation mission, not a member, or missing permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+              examples:
+                forbidden:
+                  value:
+                    error: EVENT_FORBIDDEN
+                    message: Requires the manage_corporation permission
+                    status: 403
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/missions/{missionId}/objectives/{objectiveId}/confirm:
+    post:
+      tags:
+      - mission
+      summary: Confirm an issuer-verified objective (`manual` kind) — mission creator only
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      - $ref: '#/components/parameters/mission_ObjectiveId'
+      responses:
+        '200':
+          description: Confirmed objective
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_ConfirmResult'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          description: Caller is not the mission creator (`NOT_MISSION_ISSUER`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Mission not open, objective not confirmable, or locked by scenario order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+              examples:
+                notConfirmable:
+                  value:
+                    error: OBJECTIVE_NOT_CONFIRMABLE
+                    message: Only issuer-confirmed objectives can be confirmed
+                    status: 409
     servers:
     - url: http://mission:3000
       description: mission
@@ -5903,7 +6710,7 @@ paths:
         '404':
           $ref: '#/components/responses/mission_NotFound'
         '409':
-          description: Objective locked, mission closed or assignment not active
+          description: Objective locked, mission closed, assignment not active, or kind not pushable
           content:
             application/json:
               schema:
@@ -5914,6 +6721,142 @@ paths:
                     error: OBJECTIVE_LOCKED
                     message: Previous objectives must be completed first
                     status: 409
+                pushable:
+                  value:
+                    error: OBJECTIVE_NOT_PUSHABLE
+                    message: Objective kind has_credits is not reported by the game server (use verify or issuer confirmation)
+                    status: 409
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/missions/{missionId}/share:
+    post:
+      tags:
+      - mission
+      summary: Share the mission with a group
+      description: 'Restricts the mission to the members of the target group: they are the only ones to see and accept it,
+        and it counts as taken by that group. Possible on any mission (public or corporation) by its creator or a member of
+        the issuing corporation. Rejected while the mission has active assignees.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mission_ShareMission'
+      responses:
+        '200':
+          description: Updated mission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Mission'
+        '400':
+          $ref: '#/components/responses/mission_ValidationError'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          description: Only the creator or a corporation member can share the mission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '404':
+          description: Mission or target group not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '409':
+          description: Mission has active assignees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+              examples:
+                assigned:
+                  value:
+                    error: MISSION_HAS_ASSIGNEES
+                    message: A mission with active assignees cannot be shared
+                    status: 409
+        '502':
+          description: Social is unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+    delete:
+      tags:
+      - mission
+      summary: Remove the group share of the mission
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      responses:
+        '200':
+          description: Updated mission (back to public/corporation access)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Mission'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '403':
+          $ref: '#/components/responses/mission_Forbidden'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Mission has active assignees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/missions/{missionId}/verify:
+    post:
+      tags:
+      - mission
+      summary: Re-measure the mission's service objectives (also performs `deliver_items` transfers)
+      description: 'Measures every `service` objective against Inventory/Economy state for the caller''s holder and persists
+        the result (snapshots may regress). Call it whenever the game or the client wants progress refreshed; completion re-runs
+        the same measurement before paying.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionId'
+      responses:
+        '200':
+          description: Measured objectives
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_VerifyResult'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+        '404':
+          $ref: '#/components/responses/mission_NotFound'
+        '409':
+          description: Mission not open, assignment not active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '502':
+          description: Inventory/Economy unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
+        '503':
+          description: Service not configured (`INVENTORY_NOT_CONFIGURED`, `ECONOMY_NOT_CONFIGURED`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mission_Error'
     servers:
     - url: http://mission:3000
       description: mission
@@ -6652,6 +7595,22 @@ components:
       in: query
       schema:
         $ref: '#/components/schemas/mission_MissionVisibility'
+    mission_GroupId:
+      name: groupId
+      in: query
+      schema:
+        type: string
+        format: uuid
+    mission_GroupClaimable:
+      name: groupClaimable
+      in: query
+      schema:
+        type: boolean
+    mission_IsEvent:
+      name: isEvent
+      in: query
+      schema:
+        type: boolean
     mission_AssignmentStatus:
       name: status
       in: query
@@ -6666,6 +7625,13 @@ components:
         format: uuid
     social_corporationId:
       name: corporationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    social_groupId:
+      name: groupId
       in: path
       required: true
       schema:
@@ -7125,6 +8091,15 @@ components:
       - delivery
       - transport
       - generic
+      - mining
+      - farming
+      - crafting
+      - construction
+      - trading
+      - exploration
+      - salvage
+      - combat
+      - reception
     mission_MissionVisibility:
       type: string
       enum:
@@ -7148,11 +8123,10 @@ components:
       - npc
     mission_ObjectiveType:
       type: string
-      enum:
-      - deliver_material
-      - transport
-      - visit
-      - custom
+      description: 'Objective kind name, validated against the kind registry (`GET /api/missions/kinds`)
+
+        '
+      example: deliver_material
     mission_ObjectiveStatus:
       type: string
       enum:
@@ -7174,38 +8148,117 @@ components:
       - npc
       default: player
       description: Whether the assignee is a player or an NPC (drives reward routing)
-    mission_Reward:
+    mission_RewardComponent:
+      description: 'One reward component of the mission''s reward list (at most one credits component, distinct item components).
+        Immutable after creation.
+
+        '
+      oneOf:
+      - type: object
+        required:
+        - type
+        - amount
+        properties:
+          type:
+            const: credits
+          currency:
+            type: string
+            default: credits
+          amount:
+            type: integer
+            minimum: 1
+      - type: object
+        required:
+        - type
+        - itemId
+        - quantity
+        properties:
+          type:
+            const: item
+          itemId:
+            type: string
+            description: Inventory good type
+          quantity:
+            type: integer
+            minimum: 1
+          instanceId:
+            type: string
+            format: uuid
+            description: Unique-instance reward (single assignee only)
+    mission_Prerequisite:
+      description: A gate checked when a player accepts the mission (kind registry-validated)
       type: object
-      description: At least one of `economic` or `item` is required.
+      required:
+      - kind
       properties:
-        economic:
+        kind:
+          type: string
+          description: Prerequisite kind name (`has_credits`, `owns_items`, `min_reputation`, `corporation_member`)
+          example: has_credits
+        params:
           type: object
-          required:
-          - currency
-          - amount
-          properties:
-            currency:
-              type: string
-              default: credits
-            amount:
-              type: integer
-              minimum: 1
-        item:
-          type: object
-          required:
-          - itemId
-          - quantity
-          properties:
-            itemId:
-              type: string
-              description: Inventory good type
-            quantity:
-              type: integer
-              minimum: 1
-            instanceId:
-              type: string
-              format: uuid
-              description: Unique-instance reward (single assignee only)
+          additionalProperties: true
+          description: Kind-specific structured params (schemas served by GET /api/missions/kinds)
+    mission_MissionZone:
+      description: 'One availability zone, matched against the presence location reported by the game server. `scene` is a
+        hierarchical path (`tarsis_1/new-paris`) matched by equality or path prefix (`tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`,
+        never `tarsis_10`). Coordinates share the units of `location.position` (meters assumed).
+
+        '
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - system
+        properties:
+          kind:
+            const: system
+          system:
+            type: string
+            maxLength: 64
+      - type: object
+        required:
+        - kind
+        - scene
+        properties:
+          kind:
+            const: scene
+          system:
+            type: string
+            maxLength: 64
+            description: 'Optional: restricts the scene to one system'
+          scene:
+            type: string
+            maxLength: 128
+            description: Hierarchical scene path, e.g. `tarsis_1/new-paris`
+      - type: object
+        required:
+        - kind
+        - center
+        - radiusM
+        properties:
+          kind:
+            const: area
+          system:
+            type: string
+            maxLength: 64
+          center:
+            type: object
+            required:
+            - x
+            - y
+            - z
+            properties:
+              x:
+                type: number
+              y:
+                type: number
+              z:
+                type: number
+          radiusM:
+            type: integer
+            minimum: 1
+            maximum: 1000000
     mission_Mission:
       type: object
       properties:
@@ -7229,10 +8282,43 @@ components:
           nullable: true
         status:
           $ref: '#/components/schemas/mission_MissionStatus'
-        reward:
-          $ref: '#/components/schemas/mission_Reward'
+        rewards:
+          type: array
+          nullable: true
+          description: Reward components (immutable after creation; null/empty for reputation-only missions)
+          items:
+            $ref: '#/components/schemas/mission_RewardComponent'
+        prerequisites:
+          type: array
+          description: Gates checked at acceptance (immutable after creation)
+          items:
+            $ref: '#/components/schemas/mission_Prerequisite'
         visibility:
           $ref: '#/components/schemas/mission_MissionVisibility'
+        groupId:
+          type: string
+          format: uuid
+          nullable: true
+          description: 'Group the mission is shared with / claimed by (opaque id owned by Social). When set, only its members
+            can see and accept the mission.
+
+            '
+        groupClaimable:
+          type: boolean
+          description: 'Limited to a single group: the first group to accept claims the mission, then only its members may
+            join (until `maxAssignees`).
+
+            '
+        isEvent:
+          type: boolean
+          description: Big event mission declared by the game server or a corporation (open multijoueur)
+        zones:
+          type: array
+          description: 'Availability zones matched against the player''s presence location; empty = global (available everywhere)
+
+            '
+          items:
+            $ref: '#/components/schemas/mission_MissionZone'
         maxAssignees:
           type: integer
         escrowStatus:
@@ -7247,6 +8333,20 @@ components:
           type: string
           format: uuid
           nullable: true
+        escrowItemStatus:
+          type: string
+          enum:
+          - none
+          - held
+          - claimed
+          - released
+          description: Item escrow lifecycle (all item reward components)
+        escrowItemHoldIds:
+          type: array
+          nullable: true
+          description: Inventory hold ids of the item components (aligned with the item rewards)
+          items:
+            type: string
         scriptId:
           type: string
           nullable: true
@@ -7298,6 +8398,11 @@ components:
           $ref: '#/components/schemas/mission_ObjectiveStatus'
         currentProgress:
           type: integer
+        params:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Kind-specific structured params (validated by the kind's params schema)
         payload:
           type: object
           additionalProperties: true
@@ -7331,12 +8436,19 @@ components:
           type: string
           format: date-time
           nullable: true
+        rewardShares:
+          type: array
+          nullable: true
+          description: Frozen share of every reward component, fixed at completion
+          items:
+            $ref: '#/components/schemas/mission_RewardComponent'
         rewardAmount:
           type: integer
           nullable: true
-          description: Frozen reward share at completion
+          description: Frozen credits share at completion (used by escrow refund math)
         rewardSettled:
           type: boolean
+          description: Credits phase settled
         rewardExternalId:
           type: string
         rewardSettledAt:
@@ -7347,6 +8459,11 @@ components:
           type: object
           additionalProperties: true
           nullable: true
+        settledComponents:
+          type: array
+          description: Item components already granted (`item:<itemId>`), each at most once
+          items:
+            type: string
     mission_PlayerMission:
       type: object
       properties:
@@ -7390,13 +8507,34 @@ components:
           type: string
           format: uuid
           nullable: true
-        reward:
-          $ref: '#/components/schemas/mission_Reward'
+        rewards:
+          type: array
+          description: Reward components (empty/omitted for reputation-only missions)
+          items:
+            $ref: '#/components/schemas/mission_RewardComponent'
+        prerequisites:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/mission_Prerequisite'
         maxAssignees:
           type: integer
           minimum: 1
           maximum: 1000
           default: 1
+        groupClaimable:
+          type: boolean
+          default: false
+          description: 'Limited to a single group: the first group to accept claims it'
+        isEvent:
+          type: boolean
+          default: false
+          description: Big event mission (open multijoueur)
+        zones:
+          type: array
+          description: Availability zones (empty = global)
+          items:
+            $ref: '#/components/schemas/mission_MissionZone'
         scriptId:
           type: string
           nullable: true
@@ -7417,7 +8555,9 @@ components:
       - title
       properties:
         type:
-          $ref: '#/components/schemas/mission_ObjectiveType'
+          type: string
+          description: Objective kind (registry-validated, see GET /api/missions/kinds)
+          example: deliver_material
         title:
           type: string
           maxLength: 200
@@ -7427,6 +8567,7 @@ components:
         targetQuantity:
           type: integer
           minimum: 1
+          description: Quantity target (ignored by non-quantity kinds)
         unit:
           type: string
         locationFrom:
@@ -7438,12 +8579,20 @@ components:
         order:
           type: integer
           minimum: 0
+        params:
+          type: object
+          additionalProperties: true
+          description: Kind-specific structured params (validated by the kind's params schema)
         payload:
           type: object
           additionalProperties: true
     mission_UpdateMission:
       type: object
       minProperties: 1
+      description: 'Presentation fields only: the spec (objectives, prerequisites, rewards, capacity) is immutable after creation.
+        `zones` is mutable (no escrow impact): the game re-zones live events through the internal API.
+
+        '
       properties:
         title:
           type: string
@@ -7452,55 +8601,59 @@ components:
           type: string
           maxLength: 4000
           nullable: true
-        reward:
-          $ref: '#/components/schemas/mission_Reward'
-        maxAssignees:
-          type: integer
-          minimum: 1
-          maximum: 1000
         expiresAt:
           type: string
           format: date-time
           nullable: true
-    mission_PlayerReward:
+        isEvent:
+          type: boolean
+          description: Declare (or lift) the big event flag (game server only)
+        zones:
+          type: array
+          items:
+            $ref: '#/components/schemas/mission_MissionZone'
+    mission_ValidateMission:
       type: object
-      description: 'At least one of `economic` or `item` is required. The economic reward is escrowed (debited) from the creator''s
-        wallet; the item reward is escrowed (held) from the creator''s inventory.
-
-        '
+      required:
+      - mission
+      description: Dry-run of a mission spec (no persistence, no escrow)
       properties:
-        economic:
+        mode:
+          type: string
+          enum:
+          - player
+          - internal
+          default: internal
+          description: '`player` also enforces the reward-required and escrowed-item rules'
+        mission:
+          $ref: '#/components/schemas/mission_CreateMission'
+    mission_ValidatedSpec:
+      type: object
+      properties:
+        valid:
+          type: boolean
+          const: true
+        spec:
           type: object
-          required:
-          - amount
+          description: Normalized spec (kind params parsed, defaults applied)
           properties:
-            currency:
-              type: string
-              default: credits
-            amount:
-              type: integer
-              minimum: 1
-        item:
-          type: object
-          required:
-          - itemId
-          - quantity
-          properties:
-            itemId:
-              type: string
-              description: Inventory good type
-            quantity:
-              type: integer
-              minimum: 1
-            instanceId:
-              type: string
-              format: uuid
-              description: Unique-instance reward (single assignee only)
+            objectives:
+              type: array
+              items:
+                $ref: '#/components/schemas/mission_CreateObjective'
+            prerequisites:
+              type: array
+              items:
+                $ref: '#/components/schemas/mission_Prerequisite'
+            rewards:
+              type: array
+              items:
+                $ref: '#/components/schemas/mission_RewardComponent'
     mission_CreatePlayerMission:
       type: object
       required:
       - title
-      - reward
+      - rewards
       - objectives
       properties:
         title:
@@ -7518,13 +8671,34 @@ components:
           format: uuid
           nullable: true
           description: Required when `visibility` is `corporation`
-        reward:
-          $ref: '#/components/schemas/mission_PlayerReward'
+        rewards:
+          type: array
+          minItems: 1
+          description: 'Reward components escrowed from the creator: the credits component is debited from their wallet, each
+            item component is held in their inventory.
+
+            '
+          items:
+            $ref: '#/components/schemas/mission_RewardComponent'
+        prerequisites:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/mission_Prerequisite'
         maxAssignees:
           type: integer
           minimum: 1
           maximum: 100
           default: 1
+        groupClaimable:
+          type: boolean
+          default: false
+          description: 'Limited to a single group: the first group to accept claims it'
+        zones:
+          type: array
+          description: Availability zones (empty = global)
+          items:
+            $ref: '#/components/schemas/mission_MissionZone'
         expiresAt:
           type: string
           format: date-time
@@ -7535,6 +8709,96 @@ components:
           maxItems: 100
           items:
             $ref: '#/components/schemas/mission_CreateObjective'
+    mission_VerifyResult:
+      type: object
+      properties:
+        objectives:
+          type: array
+          items:
+            $ref: '#/components/schemas/mission_Objective'
+        allComplete:
+          type: boolean
+    mission_ConfirmResult:
+      type: object
+      properties:
+        objective:
+          $ref: '#/components/schemas/mission_Objective'
+        objectives:
+          type: array
+          items:
+            $ref: '#/components/schemas/mission_Objective'
+        allComplete:
+          type: boolean
+    mission_MissionKindsCatalog:
+      type: object
+      description: Discovery catalogue consumed by mission builders
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/mission_MissionCategory'
+        objectiveKinds:
+          type: array
+          items:
+            type: object
+            properties:
+              kind:
+                type: string
+              evaluation:
+                type: string
+                enum:
+                - game
+                - service
+                - issuer
+                description: '`game`: reported by the game server, `service`: measured by this service, `issuer`: confirmed
+                  by the mission creator'
+              quantity:
+                type: boolean
+                description: Uses targetQuantity/currentProgress accumulation
+              summary:
+                type: string
+              params:
+                type: object
+                additionalProperties: true
+                description: JSON Schema of the kind's params
+        prerequisiteKinds:
+          type: array
+          items:
+            type: object
+            properties:
+              kind:
+                type: string
+              summary:
+                type: string
+              params:
+                type: object
+                additionalProperties: true
+        rewards:
+          type: object
+          additionalProperties: true
+          description: JSON Schema of the reward component list
+    mission_ShareMission:
+      type: object
+      required:
+      - groupId
+      properties:
+        groupId:
+          type: string
+          format: uuid
+          description: Target group (must exist in Social)
+    mission_EventFlag:
+      type: object
+      required:
+      - enabled
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the mission is a big event mission
+        maxAssignees:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Optional new capacity (events allow up to 1000)
     mission_Error:
       type: object
       required:
@@ -8285,6 +9549,183 @@ components:
         createdAt:
           type: string
           format: date-time
+    social_Group:
+      type: object
+      required:
+      - id
+      - name
+      - description
+      - ownerId
+      - maxMembers
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 2
+          maxLength: 48
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        ownerId:
+          type: string
+          format: uuid
+          description: Owner (passes to the oldest member when they leave)
+        maxMembers:
+          type: integer
+          minimum: 2
+          maximum: 100
+          default: 10
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    social_GroupSummary:
+      allOf:
+      - $ref: '#/components/schemas/social_Group'
+      - type: object
+        required:
+        - memberCount
+        properties:
+          memberCount:
+            type: integer
+    social_GroupMember:
+      allOf:
+      - $ref: '#/components/schemas/social_PlayerProfile'
+      - type: object
+        required:
+        - joinedAt
+        - isOwner
+        - status
+        - location
+        properties:
+          joinedAt:
+            type: string
+            format: date-time
+          isOwner:
+            type: boolean
+          status:
+            $ref: '#/components/schemas/social_PresenceStatus'
+          location:
+            oneOf:
+            - $ref: '#/components/schemas/social_Location'
+            - type: 'null'
+    social_GroupMembership:
+      type: object
+      required:
+      - group
+      - member
+      properties:
+        group:
+          $ref: '#/components/schemas/social_Group'
+        member:
+          type: object
+          required:
+          - groupId
+          - playerId
+          - joinedAt
+          properties:
+            groupId:
+              type: string
+              format: uuid
+            playerId:
+              type: string
+              format: uuid
+            joinedAt:
+              type: string
+              format: date-time
+    social_GroupInvitation:
+      type: object
+      required:
+      - id
+      - groupId
+      - playerId
+      - invitedBy
+      - createdAt
+      properties:
+        id:
+          type: integer
+        groupId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        invitedBy:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    social_PlayerGroupInvitation:
+      allOf:
+      - $ref: '#/components/schemas/social_GroupInvitation'
+      - type: object
+        required:
+        - group
+        properties:
+          group:
+            type: object
+            required:
+            - id
+            - name
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              description:
+                type:
+                - string
+                - 'null'
+              maxMembers:
+                type: integer
+    social_CreateGroup:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 48
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        maxMembers:
+          type: integer
+          minimum: 2
+          maximum: 100
+          default: 10
+    social_GroupPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 48
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        maxMembers:
+          type: integer
+          minimum: 2
+          maximum: 100
     social_PoliticalEntityType:
       type: string
       enum:

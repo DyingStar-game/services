@@ -130,3 +130,35 @@ export function transferInstance(from: Holder, to: Holder, instanceId: string): 
 export function systemHolder(): Holder {
   return { holderType: 'system', holderId: env.inventory.systemHolderId };
 }
+
+/** One fungible stack with its reserved and available quantities. */
+export interface StackView {
+  goodType: string;
+  quantity: number;
+  held: number;
+  available: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Reads one holder's stack of a good type through the Inventory internal API.
+ * Used by mission objective measurement (`owns_items`) and prerequisites.
+ * @param holder - Holder (player or NPC).
+ * @param goodType - Inventory good type.
+ * @returns The stack, or null when the holder has none of that good.
+ */
+export async function getStack(holder: Holder, goodType: string): Promise<StackView | null> {
+  if (!env.inventory.apiUrl) {
+    throw new HttpError(503, 'INVENTORY_NOT_CONFIGURED', 'INVENTORY_API_URL is not configured');
+  }
+  const res = await fetch(
+    `${env.inventory.apiUrl}/api/internal/holders/${holder.holderType}/${holder.holderId}/stacks/${encodeURIComponent(goodType)}`,
+    { headers: { ...(await authHeaders()) } },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new HttpError(502, 'INVENTORY_READ_FAILED', `Inventory stack read failed (${res.status}): ${text}`);
+  }
+  return (await res.json()) as StackView;
+}

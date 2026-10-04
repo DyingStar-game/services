@@ -8,6 +8,8 @@ import {
   CORPORATION_RECRUITMENT_MODES,
   ENTITY_TYPES,
   ESCALATION_LEVELS,
+  GROUP_MAX_MEMBERS,
+  GROUP_MIN_MEMBERS,
   POLITICAL_ENTITY_TYPES,
   POLITICAL_PERMISSIONS,
   PRESENCE_STATUSES,
@@ -194,6 +196,32 @@ export const internalCreateCorporationBody = z.object({
   logoUrl: z.string().trim().url().max(512).nullable().optional(),
   recruitment: z.enum(CORPORATION_RECRUITMENT_MODES).optional(),
 });
+
+// ── Groups ──────────────────────────────────────────────────────────────────
+
+export const groupIdParams = z.object({ groupId: uuidSchema });
+export const groupMemberParams = groupIdParams.extend({ playerId: uuidSchema });
+
+const groupName = z.string().trim().min(2).max(48);
+
+export const createGroupBody = z.object({
+  name: groupName,
+  description: nullableText(2000),
+  maxMembers: z.number().int().min(GROUP_MIN_MEMBERS).max(GROUP_MAX_MEMBERS).optional(),
+});
+
+export const groupPatchBody = z
+  .object({
+    name: groupName.optional(),
+    description: nullableText(2000),
+    maxMembers: z.number().int().min(GROUP_MIN_MEMBERS).max(GROUP_MAX_MEMBERS).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
+export const groupInviteBody = targetPlayerBody;
+
+/** Internal: optional target group on the player's membership lookup. */
+export const groupQueryOptional = z.object({ groupId: uuidSchema.optional() });
 
 // ── Politics ────────────────────────────────────────────────────────────────
 
