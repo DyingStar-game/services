@@ -129,9 +129,11 @@ console.log('\n# kind catalogue and spec validation');
       catalog.json.objectiveKinds?.some((k) => k.kind === 'deliver_items' && k.evaluation === 'service'),
       catalog.json.objectiveKinds?.some((k) => k.kind === 'manual' && k.evaluation === 'issuer'),
       catalog.json.prerequisiteKinds?.some((k) => k.kind === 'has_credits'),
+      catalog.json.objectiveKinds?.every((k) => typeof k.name === 'string' && k.name.length > 0),
+      catalog.json.prerequisiteKinds?.every((k) => typeof k.name === 'string' && k.name.length > 0),
       Array.isArray(catalog.json.categories) && catalog.json.categories.length >= 10,
     ],
-    [200, true, true, true, true],
+    [200, true, true, true, true, true, true],
   );
 
   const valid = await req(
@@ -172,18 +174,24 @@ console.log('\n# kind catalogue and spec validation');
   });
   check(
     'kind catalogue in French',
-    frCatalog.json.objectiveKinds?.some((k) => k.kind === 'deliver_material' && k.summary.startsWith('Livrer')),
-    true,
+    [
+      frCatalog.json.objectiveKinds?.some((k) => k.kind === 'deliver_material' && k.summary.startsWith('Livrer')),
+      frCatalog.json.objectiveKinds?.find((k) => k.kind === 'deliver_material')?.name,
+      frCatalog.json.prerequisiteKinds?.find((k) => k.kind === 'owns_items')?.name,
+    ],
+    [true, 'Livraison de matériaux', 'Objets requis'],
   );
+  const enCatalog = await req('GET', '/api/missions/kinds', undefined, asPlayer(A));
   check(
     'kind catalogue in English by default',
-    (await req('GET', '/api/missions/kinds', undefined, asPlayer(A))).json.objectiveKinds?.find(
-      (k) => k.kind === 'deliver_material',
-    )?.summary.startsWith('Deliver'),
-    true,
+    [
+      enCatalog.json.objectiveKinds?.find((k) => k.kind === 'deliver_material')?.summary.startsWith('Deliver'),
+      enCatalog.json.objectiveKinds?.find((k) => k.kind === 'deliver_material')?.name,
+    ],
+    [true, 'Material delivery'],
   );
 
-  // Category constraint: combat cannot use deliver_material, custom always fits.
+  // Category constraint: combat cannot use deliver_material, manual always fits ('all').
   const badCategory = await req(
     'POST',
     '/api/missions/validate',
@@ -200,7 +208,7 @@ console.log('\n# kind catalogue and spec validation');
   const okCategory = await req(
     'POST',
     '/api/missions/validate',
-    { mission: { title: 'Combat ok', category: 'combat', objectives: [{ type: 'custom', title: 'x' }] } },
+    { mission: { title: 'Combat ok', category: 'combat', objectives: [{ type: 'manual', title: 'x' }] } },
     asPlayer(A),
   );
   check('category accepts matching kind', [okCategory.status, okCategory.json.valid], [200, true]);
@@ -531,7 +539,7 @@ console.log('\n# validation');
       title: 'Trésor sans émetteur',
       escrowSource: 'issuer',
       rewards: [{ type: 'credits', currency: 'credits', amount: 10 }],
-      objectives: [{ type: 'custom', title: 'x' }],
+      objectives: [{ type: 'manual', title: 'x' }],
     },
     asPlayer(A, 'alice'),
   );
@@ -715,7 +723,7 @@ if (ECONOMY_BASE && SOCIAL_BASE) {
       escrowSource: 'issuer',
       corporationId: corpId,
       rewards: [{ type: 'credits', currency: 'credits', amount: 500 }],
-      objectives: [{ type: 'custom', title: 'Travail' }],
+      objectives: [{ type: 'manual', title: 'Travail' }],
     },
     asPlayer(A, 'alice'),
   );
@@ -734,7 +742,7 @@ if (ECONOMY_BASE && SOCIAL_BASE) {
       escrowSource: 'issuer',
       corporationId: corpId,
       rewards: [{ type: 'credits', currency: 'credits', amount: 100 }],
-      objectives: [{ type: 'custom', title: 'x' }],
+      objectives: [{ type: 'manual', title: 'x' }],
     },
     asPlayer(B, 'bob'),
   );
@@ -770,7 +778,7 @@ if (ECONOMY_BASE && SOCIAL_BASE) {
       escrowSource: 'issuer',
       politicalEntityId: entityId,
       rewards: [{ type: 'credits', currency: 'credits', amount: 800 }],
-      objectives: [{ type: 'custom', title: 'Travaux' }],
+      objectives: [{ type: 'manual', title: 'Travaux' }],
     },
     asPlayer(A, 'alice'),
   );

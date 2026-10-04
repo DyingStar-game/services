@@ -27,6 +27,7 @@ export const ownsItemsPrerequisite: PrerequisiteKind = {
     },
     additionalProperties: false,
   },
+  name: { en: 'Required items', fr: 'Objets requis' },
   summary: { en: 'Player inventory holds at least {quantity} of {itemId}', fr: "L'inventaire du joueur détient au moins {quantity} de {itemId}" },
   categories: ['mining', 'farming', 'crafting', 'construction', 'trading', 'salvage', 'delivery'],
   async check({ playerId, params }) {

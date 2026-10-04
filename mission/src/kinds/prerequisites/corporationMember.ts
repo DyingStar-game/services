@@ -16,6 +16,7 @@ export const corporationMemberKind: PrerequisiteKind = {
     properties: { corporationId: { type: 'string', format: 'uuid' } },
     additionalProperties: false,
   },
+  name: { en: 'Corporation member', fr: 'Membre de corporation' },
   summary: { en: 'Player is a member of the given corporation', fr: 'Le joueur est membre de la corporation donnée' },
   categories: 'all',
   async check({ playerId, params }) {

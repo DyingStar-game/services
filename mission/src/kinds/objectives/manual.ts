@@ -13,6 +13,7 @@ export const manualKind: ObjectiveKind = {
   quantity: false,
   paramsSchema: z.object({}).strict(),
   paramsJsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+  name: { en: 'Manual confirmation', fr: 'Confirmation manuelle' },
   summary: { en: 'Subjective work: the mission issuer confirms completion (no automatic check)', fr: "Travail subjectif : l'émetteur de la mission confirme la complétion (vérification manuelle)" },
   categories: 'all',
 };

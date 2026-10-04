@@ -1526,6 +1526,7 @@ components:
             type: object
             properties:
               kind: { type: string }
+              name: { type: string, description: 'Short localized label for mission builders (from `Accept-Language`, default `en`)' }
               evaluation:
                 type: string
                 enum: [game, service, issuer]
@@ -1546,6 +1547,7 @@ components:
             type: object
             properties:
               kind: { type: string }
+              name: { type: string, description: 'Short localized label for mission builders (from `Accept-Language`, default `en`)' }
               summary: { type: string }
               categories:
                 description: Mission categories this prerequisite may be used on (`all` = every category)

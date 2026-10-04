@@ -63,6 +63,8 @@ export interface ObjectiveKind {
   paramsSchema: z.ZodTypeAny;
   /** JSON Schema of `params`, served to mission builders. */
   paramsJsonSchema: JsonSchema;
+  /** Short bilingual label shown to mission builders (no placeholder). */
+  name: MessageText;
   summary: MessageText;
   /** Categories this objective kind may be used on (see {@link KindCategories}). */
   categories: KindCategories;
@@ -75,6 +77,8 @@ export interface PrerequisiteKind {
   kind: string;
   paramsSchema: z.ZodTypeAny;
   paramsJsonSchema: JsonSchema;
+  /** Short bilingual label shown to mission builders (no placeholder). */
+  name: MessageText;
   summary: MessageText;
   /** Categories this prerequisite may be used on (see {@link KindCategories}). */
   categories: KindCategories;

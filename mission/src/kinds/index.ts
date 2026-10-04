@@ -8,7 +8,6 @@ import { MISSION_CATEGORIES, type MissionCategory } from '../db/schema/index.js'
 import { currentLang } from '../i18n/index.js';
 import { d, localizeJsonSchema } from './schemaI18n.js';
 import type { JsonSchema, KindCategories, MessageText, ObjectiveKind, PrerequisiteKind } from './types.js';
-import { customKind } from './objectives/custom.js';
 import { deliverItemsKind } from './objectives/deliverItems.js';
 import { deliverMaterialKind } from './objectives/deliverMaterial.js';
 import { hasCreditsKind } from './objectives/hasCredits.js';
@@ -40,7 +39,6 @@ const OBJECTIVE_KIND_LIST: ObjectiveKind[] = [
   deliverMaterialKind,
   transportKind,
   visitKind,
-  customKind,
   manualKind,
   ownsItemsKind,
   hasCreditsKind,
@@ -117,6 +115,8 @@ const REWARDS_JSON_SCHEMA: JsonSchema = {
 /** Serializable description of one kind (no functions) for the discovery endpoint. */
 export interface ObjectiveKindInfo {
   kind: string;
+  /** Short localized label (no placeholder) for mission builders. */
+  name: string;
   evaluation: ObjectiveKind['evaluation'];
   quantity: boolean;
   summary: string;
@@ -128,6 +128,8 @@ export interface ObjectiveKindInfo {
 /** Serializable description of one prerequisite kind. */
 export interface PrerequisiteKindInfo {
   kind: string;
+  /** Short localized label (no placeholder) for mission builders. */
+  name: string;
   summary: string;
   /** Mission categories this prerequisite may be used on (`all` = every category). */
   categories: KindCategories;
@@ -145,6 +147,7 @@ export function missionKindsCatalog(): {
     categories: MISSION_CATEGORIES,
     objectiveKinds: OBJECTIVE_KIND_LIST.map((k) => ({
       kind: k.kind,
+      name: pickText(k.name),
       evaluation: k.evaluation,
       quantity: k.quantity,
       summary: pickText(k.summary),
@@ -153,6 +156,7 @@ export function missionKindsCatalog(): {
     })),
     prerequisiteKinds: PREREQUISITE_KIND_LIST.map((k) => ({
       kind: k.kind,
+      name: pickText(k.name),
       summary: pickText(k.summary),
       categories: k.categories,
       params: localizeJsonSchema(k.paramsJsonSchema),

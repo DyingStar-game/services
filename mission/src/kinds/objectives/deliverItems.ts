@@ -45,6 +45,7 @@ export const deliverItemsKind: ObjectiveKind = {
     },
     additionalProperties: false,
   },
+  name: { en: 'Item delivery', fr: "Livraison d'objets" },
   summary: { en: 'Deliver {targetQuantity} of {itemId} to holder {to} (transferred at verify time)', fr: 'Livrer {targetQuantity} de {itemId} au détenteur {to} (transféré au moment du verify)' },
   categories: ['delivery', 'trading', 'reception', 'mining', 'farming', 'salvage'],
   async measure({ playerId, holderType, objective }) {

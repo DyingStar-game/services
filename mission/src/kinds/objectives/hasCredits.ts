@@ -20,6 +20,7 @@ export const hasCreditsKind: ObjectiveKind = {
     properties: { currency: { type: 'string', maxLength: 16, default: 'credits' } },
     additionalProperties: false,
   },
+  name: { en: 'Wallet balance', fr: 'Solde de portefeuille' },
   summary: { en: 'Holder wallet balance reaches {targetQuantity} of {currency} (measured against Economy)', fr: 'Le solde du détenteur atteint {targetQuantity} de {currency} (mesuré sur Economy)' },
   categories: ['trading', 'reception', 'delivery'],
   async measure({ playerId, holderType, objective }) {

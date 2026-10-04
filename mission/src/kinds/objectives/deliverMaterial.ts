@@ -15,6 +15,7 @@ export const deliverMaterialKind: ObjectiveKind = {
     properties: { itemId: { type: 'string', maxLength: 128, description: d('Inventory good type to deliver', 'Type de bien Inventory à livrer') } },
     additionalProperties: false,
   },
+  name: { en: 'Material delivery', fr: 'Livraison de matériaux' },
   summary: { en: 'Deliver a quantity of {itemId} at {locationTo} (progress reported by the game server)', fr: 'Livrer une quantité de {itemId} à {locationTo} (progression rapportée par le serveur de jeu)' },
   categories: ['delivery', 'transport', 'mining', 'farming', 'crafting', 'trading', 'salvage', 'reception'],
 };

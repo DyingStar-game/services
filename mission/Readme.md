@@ -64,11 +64,11 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 
 ## Fonctionnement
 
-**Pipeline** : toute mission traverse les mêmes 4 étapes — **SPEC** (validation par le **registre de kinds**) → **ACCEPT** (prérequis + visibilité + groupe) → **PROGRESS** (dispatch par kind d'évaluation) → **REWARD** (récompenses en composants). Ajouter une capacité = ajouter un fichier dans `src/kinds/` (1 entrée de registre, 0 migration, aucune règle en dur dans le pipeline). Catalogue servi par **`GET /api/missions/kinds`** (catégories, kinds + JSON Schema de leurs params, forme des récompenses) ; dry-run par **`POST /api/missions/validate`**.
+**Pipeline** : toute mission traverse les mêmes 4 étapes — **SPEC** (validation par le **registre de kinds**) → **ACCEPT** (prérequis + visibilité + groupe) → **PROGRESS** (dispatch par kind d'évaluation) → **REWARD** (récompenses en composants). Ajouter une capacité = ajouter un fichier dans `src/kinds/` (1 entrée de registre, 0 migration, aucune règle en dur dans le pipeline). Catalogue servi par **`GET /api/missions/kinds`** (catégories, kinds + leur **`name`** bilingue localisé, leur `summary` et le JSON Schema de leurs params, forme des récompenses) ; dry-run par **`POST /api/missions/validate`**.
 
 **Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery, transport, generic, mining, farming, crafting, construction, trading, exploration, salvage, combat, reception` — enum élargie en une ligne de code), un émetteur (`issuerType` + `issuerId`), une `visibility` (`public` | `corporation`), un statut, une liste **`rewards[]`**, une liste **`prerequisites[]`** et des **objectifs**. Trois colonnes pilotent le partage : `groupId`, `groupClaimable` (limitée à **1 groupe**), `isEvent`. **La spec est immuable après création** (objectifs, prérequis, récompenses, capacité figés — seul `title`, `description`, `expiresAt`, `isEvent` reste patchable) : le séquestre est pris dessus à la création.
 
-**Catégories contraignantes** : chaque kind (objectif **et** prérequis) déclare ses catégories autorisées (`categories` dans `src/kinds/`), exposées par `GET /api/missions/kinds` — un builder filtre ainsi les kinds selon la catégorie choisie. La validation à la création rejette une incohérence (`400 OBJECTIVE_NOT_IN_CATEGORY` / `PREREQ_NOT_IN_CATEGORY`). Échappatoires : les kinds `'all'` (`custom`, `manual`, `min_reputation`, `corporation_member`) et la catégorie **`generic`** (bypass total). Matrice (hors `'all'`) :
+**Catégories contraignantes** : chaque kind (objectif **et** prérequis) déclare ses catégories autorisées (`categories` dans `src/kinds/`), exposées par `GET /api/missions/kinds` — un builder filtre ainsi les kinds selon la catégorie choisie. La validation à la création rejette une incohérence (`400 OBJECTIVE_NOT_IN_CATEGORY` / `PREREQ_NOT_IN_CATEGORY`). Échappatoires : les kinds `'all'` (`manual`, `min_reputation`, `corporation_member`) et la catégorie **`generic`** (bypass total). Matrice (hors `'all'`) :
 
 | kind | catégories |
 |---|---|
@@ -82,7 +82,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `has_credits` (prérequis) | trading, delivery, construction, reception, mining, farming, crafting |
 
 **Kinds d'objectifs** (registre `src/kinds/objectives/`) — 3 modes d'évaluation :
-- **`game`** — le serveur de jeu soumet la quantité (`reportProgress`) : `deliver_material`, `transport`, `visit`, `custom` ;
+- **`game`** — le serveur de jeu soumet la quantité (`reportProgress`) : `deliver_material`, `transport`, `visit` ;
 - **`service`** — le service mesure contre l'état des services via **`POST /:missionId/verify`** : `owns_items` (instantané inventaire, peut régresser), `has_credits` (instantané solde), `deliver_items` (transfère les biens disponibles vers `to` **au moment du verify** — livraison terminale, irréversible) ;
 - **`issuer`** — le créateur confirme : `manual` (`POST /:missionId/objectives/:objectiveId/confirm`, réservé au créateur ; le jeu confirme via l'API interne).
 
@@ -128,7 +128,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/missions/kinds` | Catalogue des kinds (catégories, objectifs, prérequis, forme des récompenses) pour les builders |
+| GET | `/api/missions/kinds` | Catalogue des kinds (catégories, objectifs, prérequis, `name` localisé, forme des récompenses) pour les builders |
 | POST | `/api/missions/validate` `{mode?, mission}` | Dry-run d'une spec (aucune persistance, aucun séquestre) |
 | GET | `/api/missions?status=&kind=&category=&issuerType=&issuerId=&visibility=&groupClaimable=&isEvent=&limit=` | Missions **avec une place libre** (statuts `available` + `active` par défaut ; groupes partagés visibles membres uniquement ; **zones** : sans position connue, seules les missions globales sont listées) |
 | POST | `/api/missions` `{title, rewards[], prerequisites?, zones?, visibility?, corporationId?, politicalEntityId?, escrowSource?, maxAssignees?, groupClaimable?, objectives[{type(kind), params?…}]}` | Créer une mission (récompenses séquestrées ; `escrowSource: 'issuer'` = prélevé sur le **trésor corpo/politique**) |
@@ -196,7 +196,7 @@ Déploiement : `docker/Dockerfile` (image standalone, migrations au démarrage),
 Ce service est dédié à la partie missions du jeu ; les features ci-dessous sont traitées pas à pas.
 
 ### Modèle & cycle de vie
-- [x] Mission avec objectif vérifiable (livraison de matériaux, transport A→B, visite, custom)
+- [x] Mission avec objectif vérifiable (livraison de matériaux, transport A→B, visite)
 - [x] Cycle de vie joueur : accepter, progresser, compléter, abandonner
 - [x] Missions scénarisées avec objectifs ordonnés (verrouillage séquentiel)
 - [x] Récompense économique ou item

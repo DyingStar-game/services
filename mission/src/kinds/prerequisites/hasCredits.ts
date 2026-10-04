@@ -24,6 +24,7 @@ export const hasCreditsPrerequisite: PrerequisiteKind = {
     },
     additionalProperties: false,
   },
+  name: { en: 'Minimum balance', fr: 'Solde minimum' },
   summary: { en: 'Player wallet holds at least {amount} of {currency}', fr: 'Le portefeuille du joueur détient au moins {amount} de {currency}' },
   categories: ['trading', 'delivery', 'construction', 'reception', 'mining', 'farming', 'crafting'],
   async check({ playerId, params }) {

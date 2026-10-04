@@ -18,6 +18,7 @@ export const minReputationKind: PrerequisiteKind = {
     properties: { min: { type: 'integer', minimum: 0 } },
     additionalProperties: false,
   },
+  name: { en: 'Minimum reputation', fr: 'Réputation minimale' },
   summary: { en: 'Player reputation (Social) is at least {min}', fr: 'La réputation du joueur (Social) est au moins de {min}' },
   categories: 'all',
   async check({ playerId, params }) {

@@ -57,7 +57,11 @@ export function zoneMatches(zones: MissionZone[], location: ZoneLocation | null 
 /**
  * Database-side equivalent of `zoneMatches` for the mission listing. `location` bindings
  * are plain parameters: when a part of the location is unknown (null), the corresponding
- * branch can never be true, so zoned missions are hidden (fail-safe).
+ * branch evaluates to NULL (never true), so zoned missions are hidden (fail-safe).
+ *
+ * Every binding carries an explicit cast (`::text`, `::float8`): PostgreSQL cannot infer
+ * the type of a bare parameter (`42P18 could not determine data type of parameter`),
+ * and a bind used only in `is not null` has no inferable type at all.
  * @param location - Player location (null when unknown).
  * @returns A drizzle condition over `missions.zones`.
  */
@@ -74,17 +78,15 @@ export function zoneFilterSql(location: ZoneLocation | null | undefined): SQL {
     or exists (
       select 1 from jsonb_array_elements(${missions.zones}) as z
       where
-        (z->>'kind' = 'system' and z->>'system' = ${system})
+        (z->>'kind' = 'system' and z->>'system' = ${system}::text)
         or (
           z->>'kind' = 'scene'
-          and (z->>'system' is null or z->>'system' = ${system})
-          and ${scene} is not null
-          and (z->>'scene' = ${scene} or ${scene} like ((z->>'scene') || '/%'))
+          and (z->>'system' is null or z->>'system' = ${system}::text)
+          and (z->>'scene' = ${scene}::text or ${scene}::text like ((z->>'scene') || '/%'))
         )
         or (
           z->>'kind' = 'area'
-          and (z->>'system' is null or z->>'system' = ${system})
-          and ${px} is not null and ${py} is not null and ${pz} is not null
+          and (z->>'system' is null or z->>'system' = ${system}::text)
           and (
             (${px}::float8 - (z->'center'->>'x')::float8) ^ 2
             + (${py}::float8 - (z->'center'->>'y')::float8) ^ 2
