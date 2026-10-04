@@ -2,6 +2,7 @@
  * Player profiles: creation on first contact, updates, search and game-server stats.
  */
 import { and, eq, ilike, inArray, sql } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { playerProfiles, type EntityType, type PlayerProfile, type RpSheet } from '../db/schema/index.js';
@@ -57,7 +58,7 @@ export async function getProfile(playerId: string): Promise<PlayerProfile | null
  */
 export async function requireProfile(playerId: string): Promise<PlayerProfile> {
   const profile = await getProfile(playerId);
-  if (!profile) throw notFound(`Player ${playerId} not found`);
+  if (!profile) throw notFound(t('not_found.player', { id: playerId }));
   return profile;
 }
 
@@ -105,7 +106,7 @@ export async function ensureProfile(playerId: string, username: string): Promise
       if (raced) return raced;
     }
   }
-  throw conflict(`Could not allocate a unique display name for ${username}`);
+  throw conflict(t('conflict.name_alloc', { username }));
 }
 
 /**
@@ -119,9 +120,9 @@ export async function ensureProfile(playerId: string, username: string): Promise
 export async function ensureNpcProfile(playerId: string, input: NpcProfileInput): Promise<PlayerProfile> {
   const existing = await getProfile(playerId);
   if (existing) {
-    if (existing.entityType === 'player') throw conflict('This id already belongs to a player profile');
+    if (existing.entityType === 'player') throw conflict(t('conflict.id_taken'));
     if (existing.displayName !== input.displayName) {
-      throw conflict(`NPC display name "${input.displayName}" conflicts with existing profile`);
+      throw conflict(t('conflict.npc_name_conflict', { name: input.displayName }));
     }
     const patch: Partial<Omit<NpcProfileInput, 'displayName'>> = {
       ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}),
@@ -148,7 +149,7 @@ export async function ensureNpcProfile(playerId: string, input: NpcProfileInput)
     if (!isUniqueViolation(err)) throw err;
     const raced = await getProfile(playerId);
     if (raced && raced.entityType === 'npc') return raced;
-    throw conflict(`Display name "${input.displayName}" is already taken`);
+    throw conflict(t('conflict.name_taken', { name: input.displayName }));
   }
 }
 
@@ -169,7 +170,7 @@ export async function updateProfile(playerId: string, patch: ProfilePatch): Prom
     await recordActivity(playerId, 'profile_updated', { fields: Object.keys(patch) });
     return updated;
   } catch (err) {
-    if (isUniqueViolation(err)) throw conflict(`Display name "${patch.displayName}" is already taken`);
+    if (isUniqueViolation(err)) throw conflict(t('conflict.name_taken', { name: patch.displayName ?? '' }));
     throw err;
   }
 }

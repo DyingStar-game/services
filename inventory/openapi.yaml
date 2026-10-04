@@ -21,6 +21,10 @@ info:
 
     Every error is `{ "error": "CODE", "message": "...", "status": 4xx }`.
 
+
+    Language: every response honours the standard `Accept-Language: fr|en` header
+    (default `en`) for error messages; zod validation messages stay in English.
+    Technical identifiers (codes, kind names, fields, `{params}`) are never translated.
 servers:
   - url: http://localhost:3000
     description: Local development

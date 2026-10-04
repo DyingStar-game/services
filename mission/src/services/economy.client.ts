@@ -5,6 +5,7 @@
  * legacy `X-Internal-Key` is sent instead (requires Economy's `INTERNAL_DEV_BYPASS=true`).
  */
 import { env } from '../config/env.js';
+import { currentLang, t } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
 /** Result of an Economy credit call. */
@@ -37,7 +38,10 @@ async function getServiceToken(): Promise<string> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'ECONOMY_AUTH_FAILED', `Economy token request failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'ECONOMY_AUTH_FAILED', `Economy token request failed (${res.status}): ${text}`, {
+      status: res.status,
+      body: text,
+    });
   }
   const json = (await res.json()) as { access_token: string; expires_in?: number };
   const ttl = Math.max(30, (json.expires_in ?? 60) - 30);
@@ -81,7 +85,7 @@ async function holderMovement(
   const segment = holderType === 'player' ? 'players' : holderType === 'npc' ? 'npcs' : 'corporations';
   const res = await fetch(`${env.economy.apiUrl}/api/internal/${segment}/${holderId}/wallet/${direction}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
     body: JSON.stringify({
       amount: opts.amount,
       currency: opts.currency,
@@ -108,7 +112,11 @@ async function holderMovement(
   if (res.status === 409 && parsed?.error === 'INSUFFICIENT_FUNDS') {
     throw new HttpError(409, 'INSUFFICIENT_FUNDS', parsed.message ?? 'Insufficient balance for the mission escrow');
   }
-  throw new HttpError(502, code, `Economy ${direction} failed (${res.status}): ${parsed?.message ?? text}`);
+  const failure =
+    direction === 'credit'
+      ? t('economy.credit_failed', { status: res.status, message: parsed?.message ?? text })
+      : t('economy.debit_failed', { status: res.status, message: parsed?.message ?? text });
+  throw new HttpError(502, code, failure);
 }
 
 /**
@@ -184,11 +192,14 @@ export async function getWalletAccounts(holderType: WalletHolderType, holderId: 
   }
   const segment = holderType === 'player' ? 'players' : holderType === 'npc' ? 'npcs' : 'corporations';
   const res = await fetch(`${env.economy.apiUrl}/api/internal/${segment}/${holderId}/wallet`, {
-    headers: { ...(await authHeaders()) },
+    headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) },
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'ECONOMY_READ_FAILED', `Economy wallet read failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'ECONOMY_READ_FAILED', `Economy wallet read failed (${res.status}): ${text}`, {
+      status: res.status,
+      body: text,
+    });
   }
   const json = (await res.json()) as { accounts?: WalletAccount[] };
   return json.accounts ?? [];

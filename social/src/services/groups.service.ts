@@ -3,6 +3,7 @@
  * succession and disbanding. A player belongs to at most one group at a time.
  */
 import { and, asc, count, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -76,7 +77,7 @@ function uniqueConstraintOf(err: unknown): string | undefined {
  */
 export async function requireGroup(groupId: string): Promise<Group> {
   const rows = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
-  if (!rows[0]) throw notFound(`Group ${groupId} not found`);
+  if (!rows[0]) throw notFound(t('not_found.group', { id: groupId }));
   return rows[0];
 }
 
@@ -138,7 +139,7 @@ export async function getPlayerGroup(playerId: string): Promise<GroupMembership 
 export async function requireGroupMembership(groupId: string, playerId: string): Promise<GroupMembership> {
   await requireGroup(groupId);
   const membership = await getGroupMembership(groupId, playerId);
-  if (!membership) throw forbidden('Not a member of this group');
+  if (!membership) throw forbidden(t('forbidden.not_group_member'));
   return membership;
 }
 
@@ -150,7 +151,7 @@ export async function requireGroupMembership(groupId: string, playerId: string):
  */
 export async function requireGroupOwner(groupId: string, playerId: string): Promise<GroupMembership> {
   const membership = await requireGroupMembership(groupId, playerId);
-  if (membership.group.ownerId !== playerId) throw forbidden('Only the group owner can do this');
+  if (membership.group.ownerId !== playerId) throw forbidden(t('forbidden.owner_only'));
   return membership;
 }
 
@@ -176,7 +177,7 @@ export async function createGroup(
 ): Promise<Group> {
   await requireProfile(playerId);
   if (await getPlayerGroup(playerId)) {
-    throw new HttpError(409, 'ALREADY_IN_GROUP', 'You already belong to a group');
+    throw new HttpError(409, 'ALREADY_IN_GROUP', t('conflict.already_in_group'));
   }
 
   try {
@@ -196,10 +197,10 @@ export async function createGroup(
   } catch (err) {
     if (isUniqueViolation(err)) {
       if (uniqueConstraintOf(err) === GROUP_MEMBERS_PLAYER_UNIQUE) {
-        throw new HttpError(409, 'ALREADY_IN_GROUP', 'You already belong to a group');
+        throw new HttpError(409, 'ALREADY_IN_GROUP', t('conflict.already_in_group'));
       }
       if (uniqueConstraintOf(err) === GROUPS_NAME_UNIQUE || !uniqueConstraintOf(err)) {
-        throw conflict('A group with this name already exists');
+        throw conflict(t('conflict.group_name_taken'));
       }
     }
     throw err;
@@ -221,10 +222,10 @@ export async function updateGroup(groupId: string, actorId: string, patch: Group
       .set({ ...patch, updatedAt: new Date() })
       .where(eq(groups.id, groupId))
       .returning();
-    if (!updated) throw notFound(`Group ${groupId} not found`);
+    if (!updated) throw notFound(t('not_found.group', { id: groupId }));
     return updated;
   } catch (err) {
-    if (isUniqueViolation(err)) throw conflict('A group with this name already exists');
+    if (isUniqueViolation(err)) throw conflict(t('conflict.group_name_taken'));
     throw err;
   }
 }
@@ -279,9 +280,9 @@ export async function addGroupMember(group: Group, playerId: string): Promise<vo
   } catch (err) {
     if (isUniqueViolation(err)) {
       if (uniqueConstraintOf(err) === GROUP_MEMBERS_PLAYER_UNIQUE) {
-        throw new HttpError(409, 'ALREADY_IN_GROUP', 'You already belong to a group');
+        throw new HttpError(409, 'ALREADY_IN_GROUP', t('conflict.already_in_group'));
       }
-      throw conflict('Already a member of this group');
+      throw conflict(t('conflict.group_member'));
     }
     throw err;
   }
@@ -327,10 +328,10 @@ export async function leaveGroup(groupId: string, playerId: string): Promise<voi
  */
 export async function removeGroupMember(groupId: string, actorId: string, targetId: string): Promise<void> {
   const { group } = await requireGroupOwner(groupId, actorId);
-  if (targetId === group.ownerId) throw forbidden('The owner cannot be removed (they must leave)');
-  if (targetId === actorId) throw forbidden('Use leave to quit your own group');
+  if (targetId === group.ownerId) throw forbidden(t('forbidden.owner_cannot_kicked'));
+  if (targetId === actorId) throw forbidden(t('forbidden.use_leave'));
   const membership = await getGroupMembership(groupId, targetId);
-  if (!membership) throw notFound(`Player ${targetId} is not a member of this group`);
+  if (!membership) throw notFound(t('not_found.group_member', { id: targetId }));
   await db
     .delete(groupMembers)
     .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.playerId, targetId)));
@@ -347,11 +348,11 @@ export async function removeGroupMember(groupId: string, actorId: string, target
 export async function inviteGroupPlayer(groupId: string, actorId: string, playerId: string): Promise<GroupInvitation> {
   const { group } = await requireGroupOwner(groupId, actorId);
   await requireProfile(playerId);
-  if (playerId === actorId) throw conflict('You cannot invite yourself');
+  if (playerId === actorId) throw conflict(t('conflict.invite_self'));
   if (await getPlayerGroup(playerId)) {
-    throw new HttpError(409, 'ALREADY_IN_GROUP', 'This player already belongs to a group');
+    throw new HttpError(409, 'ALREADY_IN_GROUP', t('conflict.player_in_group'));
   }
-  if (await isBlockedEitherWay(actorId, playerId)) throw conflict('A block exists between these players');
+  if (await isBlockedEitherWay(actorId, playerId)) throw conflict(t('conflict.block_exists'));
   if ((await countGroupMembers(groupId)) >= group.maxMembers) {
     throw new HttpError(409, 'GROUP_FULL', 'This group has no free slot');
   }
@@ -361,7 +362,7 @@ export async function inviteGroupPlayer(groupId: string, actorId: string, player
     .from(groupInvitations)
     .where(and(eq(groupInvitations.groupId, groupId), eq(groupInvitations.playerId, playerId)))
     .limit(1);
-  if (existing) throw conflict('Invitation already pending');
+  if (existing) throw conflict(t('conflict.invitation_pending'));
 
   try {
     const [invitation] = await db
@@ -371,7 +372,7 @@ export async function inviteGroupPlayer(groupId: string, actorId: string, player
     await recordActivity(playerId, 'group_invitation_received', { groupId, by: actorId });
     return invitation;
   } catch (err) {
-    if (isUniqueViolation(err)) throw conflict('Invitation already pending');
+    if (isUniqueViolation(err)) throw conflict(t('conflict.invitation_pending'));
     throw err;
   }
 }
@@ -416,7 +417,7 @@ export async function resolveGroupInvitation(
     .from(groupInvitations)
     .where(eq(groupInvitations.id, invitationId))
     .limit(1);
-  if (!invitation || invitation.playerId !== playerId) throw notFound(`Invitation ${invitationId} not found`);
+  if (!invitation || invitation.playerId !== playerId) throw notFound(t('not_found.invitation', { id: invitationId }));
 
   if (!accept) {
     await db.delete(groupInvitations).where(eq(groupInvitations.id, invitationId));
@@ -427,10 +428,10 @@ export async function resolveGroupInvitation(
   const [group] = await db.select().from(groups).where(eq(groups.id, invitation.groupId)).limit(1);
   if (!group) {
     await db.delete(groupInvitations).where(eq(groupInvitations.id, invitationId));
-    throw notFound(`Group ${invitation.groupId} not found`);
+    throw notFound(t('not_found.group', { id: invitation.groupId }));
   }
   if (await getPlayerGroup(playerId)) {
-    throw new HttpError(409, 'ALREADY_IN_GROUP', 'You already belong to a group');
+    throw new HttpError(409, 'ALREADY_IN_GROUP', t('conflict.already_in_group'));
   }
   if ((await countGroupMembers(group.id)) >= group.maxMembers) {
     throw new HttpError(409, 'GROUP_FULL', 'This group has no free slot');

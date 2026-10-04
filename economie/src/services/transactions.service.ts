@@ -3,6 +3,7 @@
  * `externalId` idempotency, and ledger listings. Amounts are integer minor units.
  */
 import { and, desc, eq, gte, inArray, or, sql } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -70,7 +71,7 @@ async function findByIdempotencyKey(externalId: string): Promise<Transaction | n
 /** Locks and returns an account, checking status; throws when unusable. */
 async function loadActive(tx: Tx, accountId: string, label: string): Promise<Account> {
   const [row] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).for('update');
-  if (!row) throw notFound(`${label} account ${accountId} not found`);
+  if (!row) throw notFound(t('not_found.labeled_account', { label: label, id: accountId }));
   requireActiveAccount(row);
   return row;
 }
@@ -92,7 +93,7 @@ async function debit(tx: Tx, accountId: string, amount: number): Promise<number>
     .set({ balance: sql`${accounts.balance} - ${amount}`, updatedAt: new Date() })
     .where(and(eq(accounts.id, accountId), gte(accounts.balance, amount)))
     .returning({ balance: accounts.balance });
-  if (!row) throw new HttpError(409, 'INSUFFICIENT_FUNDS', 'Insufficient balance');
+  if (!row) throw new HttpError(409, 'INSUFFICIENT_FUNDS', t('insufficient.plain'));
   return row.balance;
 }
 
@@ -167,8 +168,8 @@ export async function transfer(opts: {
   caller?: string;
 }): Promise<MovementResult> {
   const { fromAccountId, toAccountId, amount, currency = 'credits', type = 'transfer' } = opts;
-  if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', 'Amount must be positive');
-  if (fromAccountId === toAccountId) throw new HttpError(400, 'INVALID_TARGET', 'Cannot transfer to the same account');
+  if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', t('amount.positive'));
+  if (fromAccountId === toAccountId) throw new HttpError(400, 'INVALID_TARGET', t('target.same_account'));
   if (opts.externalId && (await findByIdempotencyKey(opts.externalId))) {
     throw new HttpError(409, 'DUPLICATE_EXTERNAL_ID', 'Transaction already recorded');
   }
@@ -236,7 +237,7 @@ async function movement(
   opts: MovementContext,
 ): Promise<MovementResult> {
   const { accountId, amount, currency, type, reference, details, externalId, caller } = opts;
-  if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', 'Amount must be positive');
+  if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', t('amount.positive'));
   if (externalId && (await findByIdempotencyKey(externalId))) {
     throw new HttpError(409, 'DUPLICATE_EXTERNAL_ID', 'Transaction already recorded');
   }

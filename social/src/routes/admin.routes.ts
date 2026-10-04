@@ -3,6 +3,7 @@
  * reputation adjustments and sanctions beyond warnings require `admin`.
  */
 import { Router, type IRouter } from 'express';
+import { t } from '../i18n/index.js';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { hasRole, requirePlayer, requireRole } from '../middleware/auth.js';
@@ -134,7 +135,7 @@ adminRoutes.post(
   asyncHandler(async (req, res) => {
     const actor = requirePlayer(req);
     if (['suspension', 'ban'].includes(req.body.type) && !hasRole(actor, 'admin')) {
-      throw new HttpError(403, 'FORBIDDEN', 'Suspensions and bans require the admin role');
+      throw new HttpError(403, 'FORBIDDEN', t('admin.moderation_role'));
     }
     res.status(201).json(await sanctions.issueSanction(req.params.playerId, req.body, actor.id));
   }),

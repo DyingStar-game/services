@@ -13,13 +13,25 @@
  */
 import type { z } from 'zod';
 
-import type { AssigneeHolderType, MissionObjective } from '../db/schema/index.js';
+import type { AssigneeHolderType, MissionCategory, MissionObjective } from '../db/schema/index.js';
 
 /** Who evaluates an objective's progress. */
 export type EvaluationMode = 'game' | 'service' | 'issuer';
 
 /** Minimal JSON Schema fragment served by `GET /api/missions/kinds`. */
 export type JsonSchema = Record<string, unknown>;
+
+/**
+ * Mission categories a kind is allowed on. `'all'` means every category; the `generic`
+ * category always bypasses the constraint (catch-all mission type).
+ */
+export type KindCategories = readonly MissionCategory[] | 'all';
+
+/** Bilingual text: English source + French pair (placeholders `{name}` identical). */
+export interface MessageText {
+  en: string;
+  fr: string;
+}
 
 /** Context handed to `service` kind measurements. */
 export interface MeasureContext {
@@ -51,7 +63,9 @@ export interface ObjectiveKind {
   paramsSchema: z.ZodTypeAny;
   /** JSON Schema of `params`, served to mission builders. */
   paramsJsonSchema: JsonSchema;
-  summary: string;
+  summary: MessageText;
+  /** Categories this objective kind may be used on (see {@link KindCategories}). */
+  categories: KindCategories;
   /** `service` only: current progress measured against external state. */
   measure?: (ctx: MeasureContext) => Promise<number>;
 }
@@ -61,6 +75,8 @@ export interface PrerequisiteKind {
   kind: string;
   paramsSchema: z.ZodTypeAny;
   paramsJsonSchema: JsonSchema;
-  summary: string;
+  summary: MessageText;
+  /** Categories this prerequisite may be used on (see {@link KindCategories}). */
+  categories: KindCategories;
   check: (ctx: PrerequisiteContext) => Promise<{ ok: boolean; detail?: string }>;
 }

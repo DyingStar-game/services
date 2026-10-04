@@ -5,6 +5,7 @@
  * with a dev-only `X-Internal-Key` fallback.
  */
 import { env } from '../config/env.js';
+import { currentLang } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
 interface TokenCache {
@@ -30,7 +31,7 @@ async function getServiceToken(): Promise<string> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'SOCIAL_AUTH_FAILED', `Social token request failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'SOCIAL_AUTH_FAILED', `Social token request failed (${res.status}): ${text}`, { status: res.status, body: text });
   }
   const json = (await res.json()) as { access_token: string; expires_in?: number };
   const ttl = Math.max(30, (json.expires_in ?? 60) - 30);
@@ -69,11 +70,11 @@ export async function isCorporationMember(playerId: string, corporationId: strin
     throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
   }
   const url = `${env.social.apiUrl}/api/internal/players/${playerId}/corporation?corporationId=${encodeURIComponent(corporationId)}`;
-  const res = await fetch(url, { headers: { ...(await authHeaders()) } });
+  const res = await fetch(url, { headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) } });
   if (res.ok) {
     const body = (await res.json()) as unknown;
     return body !== null;
   }
   const text = await res.text().catch(() => '');
-  throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`);
+  throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`, { status: res.status, body: text });
 }

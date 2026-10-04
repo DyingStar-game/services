@@ -4,6 +4,7 @@
  * is an opaque UUID. Tax debts are booked and settled by `taxation.service`.
  */
 import { and, desc, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -162,13 +163,13 @@ export async function issueCurrency(
   reason?: string,
   caller?: string,
 ): Promise<MovementResult> {
-  if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', 'Amount must be positive');
+  if (amount <= 0) throw new HttpError(400, 'INVALID_AMOUNT', t('amount.positive'));
   const settings = await getPoliticalSettings(entityId);
   if (!settings.allowMinting) {
     throw new HttpError(403, 'MINTING_DISABLED', 'This political entity is not allowed to create currency');
   }
   if (settings.mintCeiling > 0 && amount > settings.mintCeiling) {
-    throw new HttpError(400, 'MINT_CEILING_EXCEEDED', `Amount exceeds the mint ceiling (${settings.mintCeiling})`);
+    throw new HttpError(400, 'MINT_CEILING_EXCEEDED', `Amount exceeds the mint ceiling (${settings.mintCeiling})`, { ceiling: settings.mintCeiling });
   }
   const account = await ensurePoliticalAccount(entityId, currency);
   return creditAccount(account.id, amount, {

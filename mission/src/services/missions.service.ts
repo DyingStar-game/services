@@ -3,6 +3,7 @@
  * status transitions and the scenario-ordering rule.
  */
 import { randomUUID } from 'crypto';
+import { t } from '../i18n/index.js';
 import { and, asc, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
@@ -134,7 +135,7 @@ export async function getMissionById(missionId: string): Promise<Mission | null>
  */
 export async function requireMission(missionId: string): Promise<Mission> {
   const mission = await getMissionById(missionId);
-  if (!mission) throw notFound(`Mission ${missionId} not found`);
+  if (!mission) throw notFound(t('not_found.mission', { id: missionId }));
   return mission;
 }
 
@@ -171,7 +172,7 @@ export async function requireObjective(missionId: string, objectiveId: string): 
     .where(and(eq(missionObjectives.missionId, missionId), eq(missionObjectives.id, objectiveId)))
     .limit(1);
   const objective = rows[0];
-  if (!objective) throw notFound(`Objective ${objectiveId} not found on mission ${missionId}`);
+  if (!objective) throw notFound(t('not_found.objective', { id: objectiveId, missionId }));
   return objective;
 }
 
@@ -230,6 +231,7 @@ export async function createMission(
 ): Promise<MissionWithObjectives> {
   const spec = validateMissionSpec(
     {
+      category: input.category ?? 'generic',
       objectives: input.objectives,
       prerequisites: input.prerequisites,
       rewards: input.rewards,
@@ -297,6 +299,7 @@ export async function createPlayerMission(
 ): Promise<MissionWithObjectives> {
   const spec = validateMissionSpec(
     {
+      category: input.category ?? 'generic',
       objectives: input.objectives,
       prerequisites: input.prerequisites,
       rewards: input.rewards,
@@ -311,7 +314,7 @@ export async function createPlayerMission(
       throw new HttpError(400, 'CORPORATION_REQUIRED', 'A corporation mission requires an issuerId');
     }
     if (!(await isCorporationMember(playerId, input.issuerId))) {
-      throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'You are not a member of this corporation');
+      throw new HttpError(403, 'NOT_CORPORATION_MEMBER', t('corp.not_member_create'));
     }
   }
 
@@ -478,7 +481,7 @@ export async function updateMission(
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(missions.id, missionId))
     .returning();
-  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  if (!updated) throw notFound(t('not_found.mission', { id: missionId }));
   return updated;
 }
 
@@ -528,7 +531,7 @@ async function assertCanManageMission(mission: Mission, playerId: string): Promi
   if (mission.createdBy === playerId) return;
   if (mission.issuerType === 'corporation' && mission.issuerId) {
     if (await isCorporationMember(playerId, mission.issuerId)) return;
-    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'This mission belongs to a corporation you are not a member of');
+    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', t('corp.not_member_manage'));
   }
   throw new HttpError(403, 'NOT_MISSION_MANAGER', 'Only the creator of the mission can manage it');
 }
@@ -549,16 +552,16 @@ export async function shareMission(
 ): Promise<Mission> {
   const mission = await requireMission(missionId);
   if (!opts.trusted) await assertCanManageMission(mission, opts.actorId ?? '');
-  if (!(await getGroup(groupId))) throw notFound(`Group ${groupId} not found`);
+  if (!(await getGroup(groupId))) throw notFound(t('not_found.group', { id: groupId }));
   if ((await countActiveAssignments(missionId)) > 0) {
-    throw new HttpError(409, 'MISSION_HAS_ASSIGNEES', 'A mission with active assignees cannot be shared');
+    throw new HttpError(409, 'MISSION_HAS_ASSIGNEES', t('share.blocked'));
   }
   const [updated] = await db
     .update(missions)
     .set({ groupId, updatedAt: new Date() })
     .where(eq(missions.id, missionId))
     .returning();
-  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  if (!updated) throw notFound(t('not_found.mission', { id: missionId }));
   return updated;
 }
 
@@ -577,14 +580,14 @@ export async function unshareMission(
   const mission = await requireMission(missionId);
   if (!opts.trusted) await assertCanManageMission(mission, opts.actorId ?? '');
   if ((await countActiveAssignments(missionId)) > 0) {
-    throw new HttpError(409, 'MISSION_HAS_ASSIGNEES', 'A mission with active assignees cannot be unshared');
+    throw new HttpError(409, 'MISSION_HAS_ASSIGNEES', t('share.unblocked'));
   }
   const [updated] = await db
     .update(missions)
     .set({ groupId: null, updatedAt: new Date() })
     .where(eq(missions.id, missionId))
     .returning();
-  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  if (!updated) throw notFound(t('not_found.mission', { id: missionId }));
   return updated;
 }
 
@@ -609,7 +612,7 @@ export async function setMissionEvent(
   }
   const membership = await getPlayerCorporationIn(playerId, mission.issuerId);
   if (!membership) {
-    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'This mission belongs to a corporation you are not a member of');
+    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', t('corp.not_member_manage'));
   }
   const { rank } = membership;
   if (!rank.isCeo && !rank.permissions.includes('manage_corporation')) {
@@ -618,7 +621,7 @@ export async function setMissionEvent(
 
   const maxAssignees = opts.maxAssignees ?? mission.maxAssignees;
   if (opts.enabled && maxAssignees > 1000) {
-    throw new HttpError(400, 'INVALID_MAX_ASSIGNEES', 'Event missions allow at most 1000 assignees');
+    throw new HttpError(400, 'INVALID_MAX_ASSIGNEES', t('event.capacity_1000'));
   }
   if (!opts.enabled && maxAssignees > 100) {
     throw new HttpError(
@@ -633,7 +636,7 @@ export async function setMissionEvent(
     .set({ isEvent: opts.enabled, maxAssignees, updatedAt: new Date() })
     .where(eq(missions.id, missionId))
     .returning();
-  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  if (!updated) throw notFound(t('not_found.mission', { id: missionId }));
   return updated;
 }
 
@@ -651,14 +654,14 @@ export async function setMissionEventInternal(
   const mission = await requireMission(missionId);
   const maxAssignees = opts.maxAssignees ?? mission.maxAssignees;
   if (maxAssignees < 1 || maxAssignees > 1000) {
-    throw new HttpError(400, 'INVALID_MAX_ASSIGNEES', 'maxAssignees must be between 1 and 1000');
+    throw new HttpError(400, 'INVALID_MAX_ASSIGNEES', t('event.capacity_range'));
   }
   const [updated] = await db
     .update(missions)
     .set({ isEvent: opts.enabled, maxAssignees, updatedAt: new Date() })
     .where(eq(missions.id, missionId))
     .returning();
-  if (!updated) throw notFound(`Mission ${missionId} not found`);
+  if (!updated) throw notFound(t('not_found.mission', { id: missionId }));
   return updated;
 }
 
@@ -668,7 +671,7 @@ export async function setMissionEventInternal(
  */
 export function requireOpenMission(mission: Mission): void {
   if (mission.status !== 'available' && mission.status !== 'active') {
-    throw new HttpError(409, 'MISSION_NOT_OPEN', `Mission is ${mission.status}`);
+    throw new HttpError(409, 'MISSION_NOT_OPEN', `Mission is ${mission.status}`, { status: mission.status });
   }
   if (isExpired(mission)) {
     throw new HttpError(409, 'MISSION_EXPIRED', 'Mission has expired');

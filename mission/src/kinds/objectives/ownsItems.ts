@@ -29,7 +29,8 @@ export const ownsItemsKind: ObjectiveKind = {
     },
     additionalProperties: false,
   },
-  summary: 'Holder owns `targetQuantity` of `itemId` (measured against Inventory, snapshot)',
+  summary: { en: 'Holder owns {targetQuantity} of {itemId} (measured against Inventory, snapshot)', fr: 'Le détenteur possède {targetQuantity} de {itemId} (mesuré sur Inventory, instantané)' },
+  categories: ['mining', 'farming', 'crafting', 'construction', 'trading', 'salvage'],
   async measure({ playerId, holderType, objective }) {
     const { itemId, scope } = paramsSchema.parse(objective.params ?? {});
     const stack = await getStack({ holderType, holderId: playerId }, itemId);

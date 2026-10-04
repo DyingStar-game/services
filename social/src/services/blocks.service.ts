@@ -2,6 +2,7 @@
  * Player block list. Blocking drops any friendship/request between the two players.
  */
 import { and, eq, inArray, or } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { friendships, playerBlocks, playerProfiles, type PlayerProfile } from '../db/schema/index.js';
@@ -65,7 +66,7 @@ export async function listBlocks(playerId: string): Promise<Array<PlayerProfile 
  * @param blockedId - Player being blocked.
  */
 export async function blockPlayer(blockerId: string, blockedId: string): Promise<void> {
-  if (blockerId === blockedId) throw new HttpError(400, 'INVALID_TARGET', 'Cannot block yourself');
+  if (blockerId === blockedId) throw new HttpError(400, 'INVALID_TARGET', t('target.block_self'));
   await requireProfile(blockedId);
   const inserted = await db.transaction(async (tx) => {
     const rows = await tx.insert(playerBlocks).values({ blockerId, blockedId }).onConflictDoNothing().returning();

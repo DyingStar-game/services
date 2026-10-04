@@ -4,6 +4,7 @@
  * honoured in non-production when `INTERNAL_DEV_BYPASS=true` (see `serviceAuth`).
  */
 import { timingSafeEqual } from 'crypto';
+import { t } from '../i18n/index.js';
 import type { NextFunction, Request, Response } from 'express';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
@@ -81,7 +82,7 @@ export async function playerAuth(req: Request, _res: Response, next: NextFunctio
 
   const token = extractBearer(req);
   if (!token) {
-    next(new HttpError(401, 'UNAUTHORIZED', 'Missing bearer token'));
+    next(new HttpError(401, 'UNAUTHORIZED', t('auth.missing_bearer')));
     return;
   }
   try {
@@ -91,13 +92,13 @@ export async function playerAuth(req: Request, _res: Response, next: NextFunctio
     });
     const player = playerFromClaims(payload);
     if (!player) {
-      next(new HttpError(401, 'UNAUTHORIZED', 'Token has no usable subject'));
+      next(new HttpError(401, 'UNAUTHORIZED', t('auth.bad_subject')));
       return;
     }
     req.player = player;
     next();
   } catch {
-    next(new HttpError(401, 'UNAUTHORIZED', 'Invalid token'));
+    next(new HttpError(401, 'UNAUTHORIZED', t('auth.invalid_token')));
   }
 }
 
@@ -122,7 +123,7 @@ export function requireRole(role: ModerationRole) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const held = req.player ? moderationRoleOf(req.player) : null;
     if (held === null || MODERATION_ROLES.indexOf(held) < MODERATION_ROLES.indexOf(role)) {
-      next(new HttpError(403, 'FORBIDDEN', `Requires role ${role}`));
+      next(new HttpError(403, 'FORBIDDEN', t('auth.requires_role', { role })));
       return;
     }
     next();
@@ -161,7 +162,7 @@ export async function serviceAuth(req: Request, _res: Response, next: NextFuncti
 
   const token = extractBearer(req);
   if (!token) {
-    next(new HttpError(401, 'UNAUTHORIZED', 'Missing service token'));
+    next(new HttpError(401, 'UNAUTHORIZED', t('auth.missing_service_token')));
     return;
   }
   let payload: JWTPayload;
@@ -171,22 +172,22 @@ export async function serviceAuth(req: Request, _res: Response, next: NextFuncti
       audience: env.oidc.serviceAudience,
     }));
   } catch {
-    next(new HttpError(401, 'UNAUTHORIZED', 'Invalid service token'));
+    next(new HttpError(401, 'UNAUTHORIZED', t('auth.invalid_service_token')));
     return;
   }
 
   const clientId = (payload.azp as string | undefined) ?? (payload.client_id as string | undefined);
   if (!clientId || !env.internal.serviceClients.includes(clientId)) {
-    next(new HttpError(403, 'SERVICE_FORBIDDEN', `Client ${clientId ?? '(none)'} is not an allowed service`));
+    next(new HttpError(403, 'SERVICE_FORBIDDEN', t('auth.client_forbidden', { clientId: clientId ?? '(none)' })));
     return;
   }
   if (typeof payload.sub !== 'string' || !UUID_RE.test(payload.sub)) {
-    next(new HttpError(403, 'SERVICE_FORBIDDEN', 'Service token has no usable subject'));
+    next(new HttpError(403, 'SERVICE_FORBIDDEN', t('auth.service_bad_subject')));
     return;
   }
   const username = payload.preferred_username as string | undefined;
   if (username && !username.startsWith('service-account-')) {
-    next(new HttpError(403, 'SERVICE_FORBIDDEN', 'Token is not issued to a service account'));
+    next(new HttpError(403, 'SERVICE_FORBIDDEN', t('auth.service_account_token')));
     return;
   }
   req.service = { clientId, subject: payload.sub, roles: serviceRolesFromClaims(payload) };
@@ -201,7 +202,7 @@ export async function serviceAuth(req: Request, _res: Response, next: NextFuncti
 export function requireServiceRole(role: string) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     if (!req.service || !req.service.roles.includes(role)) {
-      next(new HttpError(403, 'FORBIDDEN', `Requires service role ${role}`));
+      next(new HttpError(403, 'FORBIDDEN', t('auth.requires_service_role', { role })));
       return;
     }
     next();
@@ -210,7 +211,7 @@ export function requireServiceRole(role: string) {
 
 /** Returns the service bound on the request; throws if `serviceAuth` did not run. */
 export function requireService(req: Request): AuthenticatedService {
-  if (!req.service) throw new HttpError(401, 'UNAUTHORIZED', 'Not authenticated as a service');
+  if (!req.service) throw new HttpError(401, 'UNAUTHORIZED', t('auth.not_service'));
   return req.service;
 }
 
@@ -220,6 +221,6 @@ export function requireService(req: Request): AuthenticatedService {
  * @returns Authenticated player.
  */
 export function requirePlayer(req: Request): AuthenticatedPlayer {
-  if (!req.player) throw new HttpError(401, 'UNAUTHORIZED', 'Not authenticated');
+  if (!req.player) throw new HttpError(401, 'UNAUTHORIZED', t('auth.not_authenticated'));
   return req.player;
 }

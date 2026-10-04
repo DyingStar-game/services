@@ -3,6 +3,7 @@
  * entries through the internal API; the market only references `goodType` strings.
  */
 import { asc, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { marketCatalog, type GoodKind, type MarketCatalogEntry } from '../db/schema/index.js';
@@ -22,7 +23,7 @@ export function listCatalog(enabledOnly = true): Promise<MarketCatalogEntry[]> {
 /** Fetches a catalog entry or throws 404. */
 export async function requireCatalogEntry(goodType: string): Promise<MarketCatalogEntry> {
   const [row] = await db.select().from(marketCatalog).where(eq(marketCatalog.goodType, goodType)).limit(1);
-  if (!row) throw notFound(`Unknown good type "${goodType}"`);
+  if (!row) throw notFound(t('not_found.good', { id: goodType }));
   return row;
 }
 
@@ -71,15 +72,15 @@ export async function setCatalogEnabled(goodType: string, enabled: boolean): Pro
     .set({ enabled, updatedAt: new Date() })
     .where(eq(marketCatalog.goodType, goodType))
     .returning();
-  if (!row) throw notFound(`Unknown good type "${goodType}"`);
+  if (!row) throw notFound(t('not_found.good', { id: goodType }));
   return row;
 }
 
 /** Ensures a good type exists in the catalog before an order/demand references it. */
 export async function ensureTradable(goodType: string, kind: GoodKind): Promise<void> {
   const entry = await requireCatalogEntry(goodType);
-  if (!entry.enabled) throw new HttpError(403, 'GOOD_DISABLED', `Good type "${goodType}" is not tradable`);
+  if (!entry.enabled) throw new HttpError(403, 'GOOD_DISABLED', `Good type "${goodType}" is not tradable`, { goodType });
   if (entry.kind !== kind) {
-    throw new HttpError(400, 'GOOD_KIND_MISMATCH', `Good type "${goodType}" is a ${entry.kind}, not ${kind}`);
+    throw new HttpError(400, 'GOOD_KIND_MISMATCH', `Good type "${goodType}" is a ${entry.kind}, not ${kind}`, { goodType, actual: entry.kind, expected: kind });
   }
 }

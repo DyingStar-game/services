@@ -3,6 +3,7 @@
  * (which settles the reward) and abandoning.
  */
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -75,7 +76,7 @@ export async function requireAssignment(
   playerId: string,
 ): Promise<MissionAssignment> {
   const assignment = await getAssignment(missionId, playerId);
-  if (!assignment) throw notFound(`No assignment for mission ${missionId}`);
+  if (!assignment) throw notFound(t('not_found.no_assignment', { missionId }));
   return assignment;
 }
 
@@ -121,7 +122,7 @@ export async function acceptMission(
 
   if (mission.visibility === 'corporation') {
     if (!mission.issuerId || !(await isCorporationMember(playerId, mission.issuerId))) {
-      throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'This mission is reserved to the corporation members');
+      throw new HttpError(403, 'NOT_CORPORATION_MEMBER', t('corp.reserved'));
     }
   }
 
@@ -232,7 +233,7 @@ export async function reportProgress(
   const mission = await requireMission(missionId);
   const assignment = await requireAssignment(missionId, playerId);
   if (assignment.status !== 'active') {
-    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`);
+    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`, { status: assignment.status });
   }
   requireOpenMission(mission);
 
@@ -334,7 +335,7 @@ export async function verifyPlayerObjectives(
   requireOpenMission(mission);
   const assignment = await requireAssignment(missionId, playerId);
   if (assignment.status !== 'active') {
-    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`);
+    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`, { status: assignment.status });
   }
   const objectives = await listObjectives(missionId);
   const measured = await measureServiceObjectives(mission, assignment, objectives);
@@ -379,7 +380,7 @@ export async function completeMission(
   const mission = await requireMission(missionId);
   const assignment = await requireAssignment(missionId, playerId);
   if (assignment.status !== 'active') {
-    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`);
+    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`, { status: assignment.status });
   }
 
   let objectives = await listObjectives(missionId);
@@ -458,7 +459,7 @@ export async function abandonMission(
 ): Promise<MissionAssignment> {
   const assignment = await requireAssignment(missionId, playerId);
   if (assignment.status !== 'active') {
-    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`);
+    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`, { status: assignment.status });
   }
 
   return db.transaction(async (tx) => {

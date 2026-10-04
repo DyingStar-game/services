@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { t } from '../../i18n/index.js';
 
 import { getStack } from '../../services/inventory.client.js';
 import type { PrerequisiteKind } from '../types.js';
@@ -26,13 +27,22 @@ export const ownsItemsPrerequisite: PrerequisiteKind = {
     },
     additionalProperties: false,
   },
-  summary: 'Player inventory holds at least `quantity` of `itemId`',
+  summary: { en: 'Player inventory holds at least {quantity} of {itemId}', fr: "L'inventaire du joueur détient au moins {quantity} de {itemId}" },
+  categories: ['mining', 'farming', 'crafting', 'construction', 'trading', 'salvage', 'delivery'],
   async check({ playerId, params }) {
     const { itemId, quantity, scope } = paramsSchema.parse(params);
     const stack = await getStack({ holderType: 'player', holderId: playerId }, itemId);
     const held = scope === 'total' ? (stack?.quantity ?? 0) : (stack?.available ?? 0);
     if (held < quantity) {
-      return { ok: false, detail: `${scope} ${itemId}: ${held} < ${quantity}` };
+      return {
+      ok: false,
+      detail: t('prereq.detail.owns', {
+        scope: scope === 'available' ? 'disponible' : 'total',
+        itemId,
+        held,
+        quantity,
+      }),
+    };
     }
     return { ok: true };
   },

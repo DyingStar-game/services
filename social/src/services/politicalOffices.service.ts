@@ -3,6 +3,7 @@
  * its name; the default office cannot be deleted without promoting another one first.
  */
 import { and, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { politicalMembers, politicalOffices, type PoliticalOffice, type PoliticalPermission } from '../db/schema/index.js';
@@ -29,7 +30,7 @@ async function requireOffice(entityId: string, officeId: number): Promise<Politi
     .from(politicalOffices)
     .where(and(eq(politicalOffices.id, officeId), eq(politicalOffices.entityId, entityId)))
     .limit(1);
-  if (!office) throw notFound(`Office ${officeId} not found`);
+  if (!office) throw notFound(t('not_found.office', { id: officeId }));
   return office;
 }
 
@@ -47,7 +48,7 @@ export async function createPoliticalOffice(
 ): Promise<PoliticalOffice> {
   const actor = await requirePoliticalPermission(entityId, actorId, 'manage_offices');
   if (!actor.office.isHead && input.priority >= actor.office.priority) {
-    throw forbidden('Office priority must be below your own');
+    throw forbidden(t('forbidden.office_priority'));
   }
   try {
     return await db.transaction(async (tx) => {
@@ -62,7 +63,7 @@ export async function createPoliticalOffice(
       return office;
     });
   } catch (err) {
-    if (isUniqueViolation(err)) throw conflict(`Office "${input.name}" already exists`);
+    if (isUniqueViolation(err)) throw conflict(t('conflict.office_exists', { name: input.name }));
     throw err;
   }
 }
@@ -85,18 +86,18 @@ export async function updatePoliticalOffice(
   const office = await requireOffice(entityId, officeId);
   if (office.isHead) {
     if (patch.priority !== undefined || patch.permissions !== undefined || patch.isDefault) {
-      throw forbidden('Only the name of the head office can be changed');
+      throw forbidden(t('forbidden.head_office_name'));
     }
   } else {
     if (!actor.office.isHead && office.priority >= actor.office.priority) {
-      throw forbidden('Cannot edit an office equal or higher than your own');
+      throw forbidden(t('forbidden.edit_office_outrank'));
     }
     if (!actor.office.isHead && patch.priority !== undefined && patch.priority >= actor.office.priority) {
-      throw forbidden('Office priority must be below your own');
+      throw forbidden(t('forbidden.office_priority'));
     }
   }
   if (patch.isDefault === false && office.isDefault) {
-    throw conflict('Set another office as default instead of unsetting this one');
+    throw conflict(t('conflict.default_office'));
   }
   try {
     return await db.transaction(async (tx) => {
@@ -108,7 +109,7 @@ export async function updatePoliticalOffice(
       return updated;
     });
   } catch (err) {
-    if (isUniqueViolation(err)) throw conflict(`Office "${patch.name}" already exists`);
+    if (isUniqueViolation(err)) throw conflict(t('conflict.office_exists', { name: patch.name ?? '' }));
     throw err;
   }
 }
@@ -122,10 +123,10 @@ export async function updatePoliticalOffice(
 export async function deletePoliticalOffice(entityId: string, actorId: string, officeId: number): Promise<void> {
   const actor = await requirePoliticalPermission(entityId, actorId, 'manage_offices');
   const office = await requireOffice(entityId, officeId);
-  if (office.isHead) throw forbidden('The head office cannot be deleted');
-  if (office.isDefault) throw forbidden('The default office cannot be deleted; set another default first');
+  if (office.isHead) throw forbidden(t('forbidden.head_office_undeletable'));
+  if (office.isDefault) throw forbidden(t('forbidden.default_office_undeletable'));
   if (!actor.office.isHead && office.priority >= actor.office.priority) {
-    throw forbidden('Cannot delete an office equal or higher than your own');
+    throw forbidden(t('forbidden.delete_office_outrank'));
   }
   const defaultOffice = await getDefaultPoliticalOffice(entityId);
   await db.transaction(async (tx) => {

@@ -2,6 +2,7 @@
  * Corporation lifecycle and membership: creation, public page, members, ranks assignment, ceo.
  */
 import { and, asc, count, desc, eq, ilike, inArray, or } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -72,7 +73,7 @@ function isUniqueViolation(err: unknown): boolean {
 
 function rethrowUnique(err: unknown, patch: { name?: string; ticker?: string }): never {
   if (isUniqueViolation(err)) {
-    throw conflict(`Corporation name "${patch.name ?? ''}" or ticker "${patch.ticker ?? ''}" is already taken`);
+    throw conflict(t('conflict.corp_name_taken', { name: patch.name ?? '', ticker: patch.ticker ?? '' }));
   }
   throw err;
 }
@@ -94,7 +95,7 @@ export function hasCorporationPermission(rank: CorporationRank, permission: Corp
  */
 export async function requireCorporation(corporationId: string): Promise<Corporation> {
   const rows = await db.select().from(corporations).where(eq(corporations.id, corporationId)).limit(1);
-  if (!rows[0]) throw notFound(`Corporation ${corporationId} not found`);
+  if (!rows[0]) throw notFound(t('not_found.corporation', { id: corporationId }));
   return rows[0];
 }
 
@@ -142,7 +143,7 @@ export async function listCorporationMemberships(playerId: string): Promise<Corp
 export async function requireCorporationMember(corporationId: string, playerId: string): Promise<CorporationMembership> {
   await requireCorporation(corporationId);
   const membership = await getCorporationMembership(corporationId, playerId);
-  if (!membership) throw forbidden('Not a member of this corporation');
+  if (!membership) throw forbidden(t('forbidden.not_corp_member'));
   return membership;
 }
 
@@ -160,7 +161,7 @@ export async function requireCorporationPermission(
 ): Promise<CorporationMembership> {
   const membership = await requireCorporationMember(corporationId, playerId);
   if (!hasCorporationPermission(membership.rank, permission)) {
-    throw forbidden(`Missing corporation permission: ${permission}`);
+    throw forbidden(t('forbidden.corp_permission_generic', { permission }));
   }
   return membership;
 }
@@ -276,7 +277,7 @@ export async function updateCorporation(corporationId: string, actorId: string, 
  */
 export async function disbandCorporation(corporationId: string, actorId: string): Promise<void> {
   const corporation = await requireCorporation(corporationId);
-  if (corporation.ceoId !== actorId) throw forbidden('Only the CEO can disband the corporation');
+  if (corporation.ceoId !== actorId) throw forbidden(t('forbidden.ceo_only_disband'));
   const members = await db
     .select({ playerId: corporationMembers.playerId })
     .from(corporationMembers)
@@ -384,7 +385,7 @@ export async function setCorporationParent(
   await requireCorporationPermission(corporationId, actorId, 'manage_corporation');
   if (parentId) {
     if (parentId === corporationId) {
-      throw new HttpError(400, 'INVALID_PARENT', 'A corporation cannot be its own parent');
+      throw new HttpError(400, 'INVALID_PARENT', t('parent.self_corp'));
     }
     await requireCorporation(parentId);
     if (await wouldCreateCycle(corporationId, parentId)) {
@@ -469,7 +470,7 @@ async function requireMemberRow(
     .innerJoin(corporationRanks, eq(corporationRanks.id, corporationMembers.rankId))
     .where(and(eq(corporationMembers.corporationId, corporationId), eq(corporationMembers.playerId, playerId)))
     .limit(1);
-  if (!rows[0]) throw notFound(`Player ${playerId} is not a member of this corporation`);
+  if (!rows[0]) throw notFound(t('not_found.corp_member', { id: playerId }));
   return rows[0];
 }
 
@@ -483,7 +484,7 @@ async function requireMemberRow(
 export async function addCorporationMember(corporationId: string, playerId: string, actorId: string): Promise<void> {
   await requireCorporation(corporationId);
   if (await getCorporationMembership(corporationId, playerId)) {
-    throw conflict('Player is already a member of this corporation');
+    throw conflict(t('conflict.player_corp_member'));
   }
   const [defaultRank] = await db
     .select()
@@ -517,9 +518,9 @@ export async function addCorporationMember(corporationId: string, playerId: stri
 export async function addNpcCorporationMember(corporationId: string, playerId: string, rankId?: number): Promise<CorporationMember> {
   const corporation = await requireCorporation(corporationId);
   await requireProfile(playerId);
-  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', 'Only NPC profiles can be added this way');
+  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', t('npc.add_only'));
   if (await getCorporationMembership(corporationId, playerId)) {
-    throw conflict('NPC is already a member of this corporation');
+    throw conflict(t('conflict.npc_corp_member'));
   }
 
   let chosenRank: CorporationRank;
@@ -529,8 +530,8 @@ export async function addNpcCorporationMember(corporationId: string, playerId: s
       .from(corporationRanks)
       .where(and(eq(corporationRanks.id, rankId), eq(corporationRanks.corporationId, corporationId)))
       .limit(1);
-    if (!rank) throw notFound(`Rank ${rankId} not found`);
-    if (rank.isCeo) throw forbidden('Use the CEO transfer to assign the CEO rank');
+    if (!rank) throw notFound(t('not_found.rank', { id: rankId }));
+    if (rank.isCeo) throw forbidden(t('forbidden.use_ceo_transfer'));
     chosenRank = rank;
   } else {
     const [defaultRank] = await db
@@ -562,7 +563,7 @@ export async function addNpcCorporationMember(corporationId: string, playerId: s
 export async function removeNpcCorporationMember(corporationId: string, playerId: string): Promise<void> {
   await requireCorporation(corporationId);
   await requireProfile(playerId);
-  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', 'Only NPC profiles can be removed this way');
+  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', t('npc.remove_only'));
   await requireMemberRow(corporationId, playerId);
   const deleted = await db
     .delete(corporationMembers)
@@ -589,16 +590,16 @@ export async function setCorporationMemberRank(
 ): Promise<CorporationMember> {
   const actor = await requireCorporationPermission(corporationId, actorId, 'manage_members');
   const target = await requireMemberRow(corporationId, playerId);
-  if (playerId === actorId) throw forbidden('Cannot change your own rank');
-  if (target.rank.priority >= actor.rank.priority) throw forbidden('Cannot manage a member of equal or higher rank');
+  if (playerId === actorId) throw forbidden(t('forbidden.own_rank'));
+  if (target.rank.priority >= actor.rank.priority) throw forbidden(t('forbidden.manage_rank_outrank'));
   const [rank] = await db
     .select()
     .from(corporationRanks)
     .where(and(eq(corporationRanks.id, rankId), eq(corporationRanks.corporationId, corporationId)))
     .limit(1);
-  if (!rank) throw notFound(`Rank ${rankId} not found`);
-  if (rank.isCeo) throw forbidden('Use the CEO transfer to assign the CEO rank');
-  if (rank.priority >= actor.rank.priority) throw forbidden('Cannot assign a rank equal or higher than your own');
+  if (!rank) throw notFound(t('not_found.rank', { id: rankId }));
+  if (rank.isCeo) throw forbidden(t('forbidden.use_ceo_transfer'));
+  if (rank.priority >= actor.rank.priority) throw forbidden(t('forbidden.rank_outrank'));
   const [updated] = await db
     .update(corporationMembers)
     .set({ rankId })
@@ -619,10 +620,10 @@ export async function setCorporationMemberRank(
 export async function removeCorporationMember(corporationId: string, actorId: string, playerId: string): Promise<void> {
   const corporation = await requireCorporation(corporationId);
   const target = await requireMemberRow(corporationId, playerId);
-  if (playerId === corporation.ceoId) throw forbidden('The CEO must transfer leadership before leaving');
+  if (playerId === corporation.ceoId) throw forbidden(t('forbidden.ceo_must_transfer'));
   if (playerId !== actorId) {
     const actor = await requireCorporationPermission(corporationId, actorId, 'manage_members');
-    if (target.rank.priority >= actor.rank.priority) throw forbidden('Cannot kick a member of equal or higher rank');
+    if (target.rank.priority >= actor.rank.priority) throw forbidden(t('forbidden.kick_outrank'));
   }
   await db
     .delete(corporationMembers)
@@ -641,8 +642,8 @@ export async function removeCorporationMember(corporationId: string, actorId: st
  */
 export async function transferCorporationCeo(corporationId: string, actorId: string, playerId: string): Promise<Corporation> {
   const corporation = await requireCorporation(corporationId);
-  if (corporation.ceoId !== actorId) throw forbidden('Only the CEO can transfer leadership');
-  if (playerId === actorId) throw new HttpError(400, 'INVALID_TARGET', 'Already the CEO');
+  if (corporation.ceoId !== actorId) throw forbidden(t('forbidden.ceo_only_transfer'));
+  if (playerId === actorId) throw new HttpError(400, 'INVALID_TARGET', t('target.already_ceo'));
   await requireMemberRow(corporationId, playerId);
   const ranks = await listCorporationRanks(corporationId);
   const ceoRank = ranks.find((r) => r.isCeo)!;

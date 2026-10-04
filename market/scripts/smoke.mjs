@@ -65,6 +65,8 @@ console.log('\n# health and auth');
 
   const noPlayer = await req('GET', '/api/market/orders');
   check('player route without credentials', [noPlayer.status, noPlayer.json.error], [401, 'UNAUTHORIZED']);
+  const noPlayerFr = await req('GET', '/api/market/orders', undefined, { 'Accept-Language': 'fr' });
+  check('error message in French', [noPlayerFr.status, noPlayerFr.json.message], [401, 'Token Bearer manquant']);
 }
 
 // ── Catalog ───────────────────────────────────────────────────────────────────

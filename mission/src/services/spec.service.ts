@@ -4,7 +4,9 @@
  * registry, validates their structured params, and enforces reward rules (component
  * shape, splitability, escrow configuration).
  */
-import { getObjectiveKind, getPrerequisiteKind } from '../kinds/index.js';
+import { getObjectiveKind, getPrerequisiteKind, type KindCategories } from '../kinds/index.js';
+import { t } from '../i18n/index.js';
+import type { MissionCategory } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
 import { isInventoryConfigured } from './inventory.client.js';
 import type { PrerequisiteSpec, RewardComponent } from '../db/schema/index.js';
@@ -46,6 +48,8 @@ export interface ValidatedSpec {
 
 /** Spec fields shared by every creation path. */
 export interface MissionSpecInput {
+  /** Mission category: constrains which objective/prerequisite kinds are allowed. */
+  category: MissionCategory;
   objectives: SpecObjectiveInput[];
   prerequisites?: PrerequisiteSpec[];
   rewards?: RewardComponent[] | null;
@@ -62,6 +66,30 @@ export interface ValidateSpecOptions {
 /** Renders zod issues as `path: message` lines. */
 function formatIssues(issues: { path: PropertyKey[]; message: string }[]): string {
   return issues.map((i) => `${i.path.map(String).join('.') || '(root)'}: ${i.message}`).join('; ');
+}
+
+/**
+ * Enforces that a kind may be used on the mission's category (the `generic` category
+ * bypasses the constraint; `'all'` kinds are allowed everywhere).
+ * @param kindName - Kind name (for the error params).
+ * @param allowed - Categories declared by the kind.
+ * @param category - Mission category.
+ * @param code - Error code (`OBJECTIVE_NOT_IN_CATEGORY` / `PREREQ_NOT_IN_CATEGORY`).
+ * @throws 400 when the kind is not allowed on that category.
+ */
+function assertKindCategory(
+  kindName: string,
+  allowed: KindCategories,
+  category: MissionCategory,
+  code: 'OBJECTIVE_NOT_IN_CATEGORY' | 'PREREQ_NOT_IN_CATEGORY',
+): void {
+  if (category === 'generic' || allowed === 'all' || allowed.includes(category)) return;
+  throw new HttpError(
+    400,
+    code,
+    `Kind ${kindName} cannot be used on missions of category ${category}`,
+    { kind: kindName, category },
+  );
 }
 
 /**
@@ -107,14 +135,19 @@ export function validateMissionSpec(input: MissionSpecInput, opts: ValidateSpecO
   for (const prereq of input.prerequisites ?? []) {
     const kindDef = getPrerequisiteKind(prereq.kind);
     if (!kindDef) {
-      throw new HttpError(400, 'UNKNOWN_PREREQ_KIND', `Unknown prerequisite kind: ${prereq.kind}`);
+      throw new HttpError(400, 'UNKNOWN_PREREQ_KIND', t('spec.unknown_prereq', { kind: prereq.kind }), {
+        kind: prereq.kind,
+      });
     }
+    assertKindCategory(prereq.kind, kindDef.categories, input.category, 'PREREQ_NOT_IN_CATEGORY');
     const parsed = kindDef.paramsSchema.safeParse(prereq.params ?? {});
     if (!parsed.success) {
+      const issues = formatIssues(parsed.error.issues);
       throw new HttpError(
         400,
         'INVALID_PREREQUISITE_PARAMS',
-        `Invalid params for prerequisite kind ${prereq.kind}: ${formatIssues(parsed.error.issues)}`,
+        `Invalid params for prerequisite kind ${prereq.kind}: ${issues}`,
+        { kind: prereq.kind, issues },
       );
     }
     prerequisites.push({ kind: prereq.kind, params: parsed.data as Record<string, unknown> });
@@ -123,14 +156,19 @@ export function validateMissionSpec(input: MissionSpecInput, opts: ValidateSpecO
   const objectives: ValidatedObjective[] = input.objectives.map((objective, index) => {
     const kindDef = getObjectiveKind(objective.type);
     if (!kindDef) {
-      throw new HttpError(400, 'UNKNOWN_OBJECTIVE_KIND', `Unknown objective kind: ${objective.type}`);
+      throw new HttpError(400, 'UNKNOWN_OBJECTIVE_KIND', `Unknown objective kind: ${objective.type}`, {
+        kind: objective.type,
+      });
     }
+    assertKindCategory(objective.type, kindDef.categories, input.category, 'OBJECTIVE_NOT_IN_CATEGORY');
     const parsed = kindDef.paramsSchema.safeParse(objective.params ?? {});
     if (!parsed.success) {
+      const issues = formatIssues(parsed.error.issues);
       throw new HttpError(
         400,
         'INVALID_OBJECTIVE_PARAMS',
-        `Invalid params for objective kind ${objective.type}: ${formatIssues(parsed.error.issues)}`,
+        `Invalid params for objective kind ${objective.type}: ${issues}`,
+        { kind: objective.type, issues },
       );
     }
     return {

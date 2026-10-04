@@ -45,7 +45,8 @@ export const deliverItemsKind: ObjectiveKind = {
     },
     additionalProperties: false,
   },
-  summary: 'Deliver `targetQuantity` of `itemId` to holder `to` (transferred at verify time)',
+  summary: { en: 'Deliver {targetQuantity} of {itemId} to holder {to} (transferred at verify time)', fr: 'Livrer {targetQuantity} de {itemId} au détenteur {to} (transféré au moment du verify)' },
+  categories: ['delivery', 'trading', 'reception', 'mining', 'farming', 'salvage'],
   async measure({ playerId, holderType, objective }) {
     const { itemId, to } = paramsSchema.parse(objective.params ?? {});
     const from = { holderType, holderId: playerId };

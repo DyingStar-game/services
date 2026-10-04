@@ -5,6 +5,7 @@
  * with a dev-only `X-Internal-Key` fallback.
  */
 import { env } from '../config/env.js';
+import { currentLang } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
 /** Minimal profile identity returned by Social's internal resolver. */
@@ -37,7 +38,7 @@ async function getServiceToken(): Promise<string> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'SOCIAL_AUTH_FAILED', `Social token request failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'SOCIAL_AUTH_FAILED', `Social token request failed (${res.status}): ${text}`, { status: res.status, body: text });
   }
   const json = (await res.json()) as { access_token: string; expires_in?: number };
   const ttl = Math.max(30, (json.expires_in ?? 60) - 30);
@@ -71,11 +72,11 @@ async function fetchProfiles(params: URLSearchParams): Promise<ProfileIdentity[]
     throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
   }
   const res = await fetch(`${env.social.apiUrl}/api/internal/players?${params.toString()}`, {
-    headers: { ...(await authHeaders()) },
+    headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) },
   });
   if (res.ok) return (await res.json()) as ProfileIdentity[];
   const text = await res.text().catch(() => '');
-  throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`);
+  throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`, { status: res.status, body: text });
 }
 
 /**

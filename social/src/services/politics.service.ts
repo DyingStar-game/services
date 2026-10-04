@@ -4,6 +4,7 @@
  * hold any office — including the head office (mayor / president / head of state).
  */
 import { and, asc, count, desc, eq, ilike, inArray, or } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -80,7 +81,7 @@ function isUniqueViolation(err: unknown): boolean {
 
 function rethrowUnique(err: unknown, patch: { name?: string }): never {
   if (isUniqueViolation(err)) {
-    throw conflict(`Political entity name "${patch.name ?? ''}" is already taken`);
+    throw conflict(t('conflict.politics_name_taken', { name: patch.name ?? '' }));
   }
   throw err;
 }
@@ -161,7 +162,7 @@ export function hasPoliticalPermission(office: PoliticalOffice, permission: Poli
  */
 export async function requirePoliticalEntity(entityId: string): Promise<PoliticalEntity> {
   const rows = await db.select().from(politicalEntities).where(eq(politicalEntities.id, entityId)).limit(1);
-  if (!rows[0]) throw notFound(`Political entity ${entityId} not found`);
+  if (!rows[0]) throw notFound(t('not_found.political_entity', { id: entityId }));
   return rows[0];
 }
 
@@ -209,7 +210,7 @@ export async function listPoliticalMemberships(playerId: string): Promise<Politi
 export async function requirePoliticalMember(entityId: string, playerId: string): Promise<PoliticalMembership> {
   await requirePoliticalEntity(entityId);
   const membership = await getPoliticalMembership(entityId, playerId);
-  if (!membership) throw forbidden('Not a member of this political entity');
+  if (!membership) throw forbidden(t('forbidden.not_politics_member'));
   return membership;
 }
 
@@ -227,7 +228,7 @@ export async function requirePoliticalPermission(
 ): Promise<PoliticalMembership> {
   const membership = await requirePoliticalMember(entityId, playerId);
   if (!hasPoliticalPermission(membership.office, permission)) {
-    throw forbidden(`Missing political permission: ${permission}`);
+    throw forbidden(t('forbidden.political_permission', { permission }));
   }
   return membership;
 }
@@ -414,7 +415,7 @@ export async function setPoliticalEntityParent(
   await requirePoliticalPermission(entityId, actorId, 'manage_hierarchy');
   if (parentId) {
     if (parentId === entityId) {
-      throw new HttpError(400, 'INVALID_PARENT', 'A political entity cannot be its own parent');
+      throw new HttpError(400, 'INVALID_PARENT', t('parent.self_politics'));
     }
     const parent = await requirePoliticalEntity(parentId);
     if (POLITICAL_ENTITY_ORDER[parent.type] <= POLITICAL_ENTITY_ORDER[child.type]) {
@@ -466,7 +467,7 @@ export async function updatePoliticalEntity(
  */
 export async function disbandPoliticalEntity(entityId: string, actorId: string): Promise<void> {
   const entity = await requirePoliticalEntity(entityId);
-  if (entity.headId !== actorId) throw forbidden('Only the head can disband the political entity');
+  if (entity.headId !== actorId) throw forbidden(t('forbidden.head_only_disband'));
   const members = await db
     .select({ playerId: politicalMembers.playerId })
     .from(politicalMembers)
@@ -502,7 +503,7 @@ export async function requirePoliticalOffice(entityId: string, officeId: number)
     .from(politicalOffices)
     .where(and(eq(politicalOffices.id, officeId), eq(politicalOffices.entityId, entityId)))
     .limit(1);
-  if (!office) throw notFound(`Office ${officeId} not found`);
+  if (!office) throw notFound(t('not_found.office', { id: officeId }));
   return office;
 }
 
@@ -551,7 +552,7 @@ async function requireMemberRow(
     .innerJoin(politicalOffices, eq(politicalOffices.id, politicalMembers.officeId))
     .where(and(eq(politicalMembers.entityId, entityId), eq(politicalMembers.playerId, playerId)))
     .limit(1);
-  if (!rows[0]) throw notFound(`Profile ${playerId} is not a member of this political entity`);
+  if (!rows[0]) throw notFound(t('not_found.politics_member', { id: playerId }));
   return rows[0];
 }
 
@@ -570,9 +571,9 @@ async function resolveAssignableOffice(
 ): Promise<PoliticalOffice> {
   if (officeId === undefined) return getDefaultPoliticalOffice(entityId);
   const office = await requirePoliticalOffice(entityId, officeId);
-  if (office.isHead) throw forbidden('Use the head transfer to assign the head office');
+  if (office.isHead) throw forbidden(t('forbidden.use_head_transfer'));
   if (!actorOffice.isHead && office.priority >= actorOffice.priority) {
-    throw forbidden('Cannot assign an office equal or higher than your own');
+    throw forbidden(t('forbidden.office_outrank'));
   }
   return office;
 }
@@ -595,7 +596,7 @@ export async function addPoliticalMember(
   const actor = await requirePoliticalPermission(entityId, actorId, 'manage_members');
   await requireProfile(playerId);
   if (await getPoliticalMembership(entityId, playerId)) {
-    throw conflict('Profile is already a member of this political entity');
+    throw conflict(t('conflict.profile_politics_member'));
   }
   const office = await resolveAssignableOffice(entityId, actor.office, officeId);
   const member = await db.transaction(async (tx) => {
@@ -625,14 +626,14 @@ export async function addNpcPoliticalMember(
 ): Promise<PoliticalMember> {
   await requirePoliticalEntity(entityId);
   await requireProfile(playerId);
-  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', 'Only NPC profiles can be added this way');
+  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', t('npc.add_only'));
   if (await getPoliticalMembership(entityId, playerId)) {
-    throw conflict('NPC is already a member of this political entity');
+    throw conflict(t('conflict.npc_politics_member'));
   }
   let office: PoliticalOffice;
   if (officeId !== undefined) {
     office = await requirePoliticalOffice(entityId, officeId);
-    if (office.isHead) throw forbidden('Use the head transfer to assign the head office');
+    if (office.isHead) throw forbidden(t('forbidden.use_head_transfer'));
   } else {
     office = await getDefaultPoliticalOffice(entityId);
   }
@@ -656,8 +657,8 @@ export async function addNpcPoliticalMember(
 export async function removeNpcPoliticalMember(entityId: string, playerId: string): Promise<void> {
   const entity = await requirePoliticalEntity(entityId);
   await requireProfile(playerId);
-  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', 'Only NPC profiles can be removed this way');
-  if (playerId === entity.headId) throw forbidden('Transfer the head office before removing its holder');
+  if (!(await isNpc(playerId))) throw new HttpError(400, 'NOT_AN_NPC', t('npc.remove_only'));
+  if (playerId === entity.headId) throw forbidden(t('forbidden.transfer_head_office_first'));
   await requireMemberRow(entityId, playerId);
   const deleted = await db
     .delete(politicalMembers)
@@ -684,14 +685,14 @@ export async function setPoliticalMemberOffice(
 ): Promise<PoliticalMember> {
   const actor = await requirePoliticalPermission(entityId, actorId, 'manage_members');
   const target = await requireMemberRow(entityId, playerId);
-  if (playerId === actorId) throw forbidden('Cannot change your own office');
+  if (playerId === actorId) throw forbidden(t('forbidden.own_office'));
   if (!actor.office.isHead && target.office.priority >= actor.office.priority) {
-    throw forbidden('Cannot manage a member of equal or higher office');
+    throw forbidden(t('forbidden.manage_office_outrank'));
   }
   const office = await requirePoliticalOffice(entityId, officeId);
-  if (office.isHead) throw forbidden('Use the head transfer to assign the head office');
+  if (office.isHead) throw forbidden(t('forbidden.use_head_transfer'));
   if (!actor.office.isHead && office.priority >= actor.office.priority) {
-    throw forbidden('Cannot assign an office equal or higher than your own');
+    throw forbidden(t('forbidden.office_outrank'));
   }
   const [updated] = await db
     .update(politicalMembers)
@@ -713,11 +714,11 @@ export async function setPoliticalMemberOffice(
 export async function removePoliticalMember(entityId: string, actorId: string, playerId: string): Promise<void> {
   const entity = await requirePoliticalEntity(entityId);
   const target = await requireMemberRow(entityId, playerId);
-  if (playerId === entity.headId) throw forbidden('The head must transfer leadership before leaving');
+  if (playerId === entity.headId) throw forbidden(t('forbidden.head_must_transfer'));
   if (playerId !== actorId) {
     const actor = await requirePoliticalPermission(entityId, actorId, 'manage_members');
     if (!actor.office.isHead && target.office.priority >= actor.office.priority) {
-      throw forbidden('Cannot remove a member of equal or higher office');
+      throw forbidden(t('forbidden.remove_office_outrank'));
     }
   }
   await db
@@ -742,8 +743,8 @@ export async function transferPoliticalHead(
   playerId: string,
 ): Promise<PoliticalEntity> {
   const entity = await requirePoliticalEntity(entityId);
-  if (entity.headId !== actorId) throw forbidden('Only the head can transfer leadership');
-  if (playerId === actorId) throw new HttpError(400, 'INVALID_TARGET', 'Already the head');
+  if (entity.headId !== actorId) throw forbidden(t('forbidden.head_only_transfer'));
+  if (playerId === actorId) throw new HttpError(400, 'INVALID_TARGET', t('target.already_head'));
   await requireMemberRow(entityId, playerId);
   const offices = await listPoliticalOffices(entityId);
   const headOffice = offices.find((o) => o.isHead)!;

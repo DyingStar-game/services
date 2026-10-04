@@ -2,6 +2,7 @@
  * Corporation rank management (requires `manage_ranks`). The CEO rank is immutable except for its name.
  */
 import { and, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { corporationMembers, corporationRanks, type CorporationPermission, type CorporationRank } from '../db/schema/index.js';
@@ -28,7 +29,7 @@ async function requireRank(corporationId: string, rankId: number): Promise<Corpo
     .from(corporationRanks)
     .where(and(eq(corporationRanks.id, rankId), eq(corporationRanks.corporationId, corporationId)))
     .limit(1);
-  if (!rank) throw notFound(`Rank ${rankId} not found`);
+  if (!rank) throw notFound(t('not_found.rank', { id: rankId }));
   return rank;
 }
 
@@ -41,7 +42,7 @@ async function requireRank(corporationId: string, rankId: number): Promise<Corpo
  */
 export async function createCorporationRank(corporationId: string, actorId: string, input: CorporationRankInput): Promise<CorporationRank> {
   const actor = await requireCorporationPermission(corporationId, actorId, 'manage_ranks');
-  if (input.priority >= actor.rank.priority) throw forbidden('Rank priority must be below your own');
+  if (input.priority >= actor.rank.priority) throw forbidden(t('forbidden.rank_priority'));
   try {
     return await db.transaction(async (tx) => {
       if (input.isDefault) {
@@ -55,7 +56,7 @@ export async function createCorporationRank(corporationId: string, actorId: stri
       return rank;
     });
   } catch (err) {
-    if (isUniqueViolation(err)) throw conflict(`Rank "${input.name}" already exists`);
+    if (isUniqueViolation(err)) throw conflict(t('conflict.rank_exists', { name: input.name }));
     throw err;
   }
 }
@@ -78,16 +79,16 @@ export async function updateCorporationRank(
   const rank = await requireRank(corporationId, rankId);
   if (rank.isCeo) {
     if (patch.priority !== undefined || patch.permissions !== undefined || patch.isDefault) {
-      throw forbidden('Only the name of the CEO rank can be changed');
+      throw forbidden(t('forbidden.ceo_rank_name'));
     }
   } else {
-    if (rank.priority >= actor.rank.priority) throw forbidden('Cannot edit a rank equal or higher than your own');
+    if (rank.priority >= actor.rank.priority) throw forbidden(t('forbidden.edit_rank_outrank'));
     if (patch.priority !== undefined && patch.priority >= actor.rank.priority) {
-      throw forbidden('Rank priority must be below your own');
+      throw forbidden(t('forbidden.rank_priority'));
     }
   }
   if (patch.isDefault === false && rank.isDefault) {
-    throw conflict('Set another rank as default instead of unsetting this one');
+    throw conflict(t('conflict.default_rank'));
   }
   try {
     return await db.transaction(async (tx) => {
@@ -99,7 +100,7 @@ export async function updateCorporationRank(
       return updated;
     });
   } catch (err) {
-    if (isUniqueViolation(err)) throw conflict(`Rank "${patch.name}" already exists`);
+    if (isUniqueViolation(err)) throw conflict(t('conflict.rank_exists', { name: patch.name ?? '' }));
     throw err;
   }
 }
@@ -113,9 +114,9 @@ export async function updateCorporationRank(
 export async function deleteCorporationRank(corporationId: string, actorId: string, rankId: number): Promise<void> {
   const actor = await requireCorporationPermission(corporationId, actorId, 'manage_ranks');
   const rank = await requireRank(corporationId, rankId);
-  if (rank.isCeo) throw forbidden('The CEO rank cannot be deleted');
-  if (rank.isDefault) throw forbidden('The default rank cannot be deleted; set another default first');
-  if (rank.priority >= actor.rank.priority) throw forbidden('Cannot delete a rank equal or higher than your own');
+  if (rank.isCeo) throw forbidden(t('forbidden.ceo_rank_undeletable'));
+  if (rank.isDefault) throw forbidden(t('forbidden.default_rank_undeletable'));
+  if (rank.priority >= actor.rank.priority) throw forbidden(t('forbidden.delete_rank_outrank'));
   const [defaultRank] = await db
     .select()
     .from(corporationRanks)

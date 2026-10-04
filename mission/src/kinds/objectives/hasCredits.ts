@@ -20,7 +20,8 @@ export const hasCreditsKind: ObjectiveKind = {
     properties: { currency: { type: 'string', maxLength: 16, default: 'credits' } },
     additionalProperties: false,
   },
-  summary: 'Holder wallet balance reaches `targetQuantity` of `currency` (measured against Economy)',
+  summary: { en: 'Holder wallet balance reaches {targetQuantity} of {currency} (measured against Economy)', fr: 'Le solde du détenteur atteint {targetQuantity} de {currency} (mesuré sur Economy)' },
+  categories: ['trading', 'reception', 'delivery'],
   async measure({ playerId, holderType, objective }) {
     const { currency } = paramsSchema.parse(objective.params ?? {});
     const accounts = await getWalletAccounts(holderType, playerId);

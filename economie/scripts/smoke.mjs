@@ -173,6 +173,8 @@ console.log('\n# health and auth');
 
   const noAuth = await req('GET', '/api/me/wallet');
   check('wallet without credentials', [noAuth.status, noAuth.json.error], [401, 'UNAUTHORIZED']);
+  const noAuthFr = await req('GET', '/api/me/wallet', undefined, { 'Accept-Language': 'fr' });
+  check('error message in French', [noAuthFr.status, noAuthFr.json.message], [401, 'Token Bearer manquant']);
 
   const noCreds = await req('GET', `/api/internal/players/${A}/wallet`);
   check('internal route without credentials', [noCreds.status, noCreds.json.error], [401, 'UNAUTHORIZED']);

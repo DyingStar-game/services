@@ -1,10 +1,12 @@
 /**
  * The kind registries and the discovery catalogue served by `GET /api/missions/kinds`.
- * Objective kinds live in `./objectives` (one file per kind); prerequisite kinds are
- * registered here as they land.
+ * Objective kinds live in `./objectives`, prerequisite kinds in `./prerequisites`
+ * (one file per kind). The catalogue localizes summaries from the ambient request
+ * language and exposes each kind's allowed mission categories.
  */
-import { MISSION_CATEGORIES } from '../db/schema/index.js';
-import type { JsonSchema, ObjectiveKind, PrerequisiteKind } from './types.js';
+import { MISSION_CATEGORIES, type MissionCategory } from '../db/schema/index.js';
+import { currentLang } from '../i18n/index.js';
+import type { JsonSchema, KindCategories, MessageText, ObjectiveKind, PrerequisiteKind } from './types.js';
 import { customKind } from './objectives/custom.js';
 import { deliverItemsKind } from './objectives/deliverItems.js';
 import { deliverMaterialKind } from './objectives/deliverMaterial.js';
@@ -18,7 +20,20 @@ import { hasCreditsPrerequisite } from './prerequisites/hasCredits.js';
 import { minReputationKind } from './prerequisites/minReputation.js';
 import { ownsItemsPrerequisite } from './prerequisites/ownsItems.js';
 
-export type { EvaluationMode, JsonSchema, ObjectiveKind, PrerequisiteContext, PrerequisiteKind } from './types.js';
+export type {
+  EvaluationMode,
+  JsonSchema,
+  KindCategories,
+  MessageText,
+  ObjectiveKind,
+  PrerequisiteContext,
+  PrerequisiteKind,
+} from './types.js';
+
+/** Picks the language side of a bilingual text (ambient request language, default en). */
+function pickText(text: MessageText): string {
+  return currentLang() === 'fr' ? text.fr : text.en;
+}
 
 const OBJECTIVE_KIND_LIST: ObjectiveKind[] = [
   deliverMaterialKind,
@@ -101,6 +116,8 @@ export interface ObjectiveKindInfo {
   evaluation: ObjectiveKind['evaluation'];
   quantity: boolean;
   summary: string;
+  /** Mission categories this kind may be used on (`all` = every category). */
+  categories: KindCategories;
   params: JsonSchema;
 }
 
@@ -108,12 +125,14 @@ export interface ObjectiveKindInfo {
 export interface PrerequisiteKindInfo {
   kind: string;
   summary: string;
+  /** Mission categories this prerequisite may be used on (`all` = every category). */
+  categories: KindCategories;
   params: JsonSchema;
 }
 
 /** Full catalogue of categories, kinds and reward shape for mission builders. */
 export function missionKindsCatalog(): {
-  categories: readonly string[];
+  categories: readonly MissionCategory[];
   objectiveKinds: ObjectiveKindInfo[];
   prerequisiteKinds: PrerequisiteKindInfo[];
   rewards: JsonSchema;
@@ -124,12 +143,14 @@ export function missionKindsCatalog(): {
       kind: k.kind,
       evaluation: k.evaluation,
       quantity: k.quantity,
-      summary: k.summary,
+      summary: pickText(k.summary),
+      categories: k.categories,
       params: k.paramsJsonSchema,
     })),
     prerequisiteKinds: PREREQUISITE_KIND_LIST.map((k) => ({
       kind: k.kind,
-      summary: k.summary,
+      summary: pickText(k.summary),
+      categories: k.categories,
       params: k.paramsJsonSchema,
     })),
     rewards: REWARDS_JSON_SCHEMA,

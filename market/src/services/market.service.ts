@@ -4,6 +4,7 @@
  * (inventory) and credits (economy), each idempotently, and is retryable while `pending`.
  */
 import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -162,7 +163,7 @@ async function createTrade(input: {
  */
 export async function settleTrade(tradeId: string): Promise<MarketTrade> {
   const [trade] = await db.select().from(marketTrades).where(eq(marketTrades.id, tradeId)).limit(1);
-  if (!trade) throw notFound(`Trade ${tradeId} not found`);
+  if (!trade) throw notFound(t('not_found.trade', { id: tradeId }));
   if (trade.status === 'settled') return trade;
 
   const seller: Holder = { holderType: trade.sellerType, holderId: trade.sellerId };
@@ -182,10 +183,10 @@ export async function settleTrade(tradeId: string): Promise<MarketTrade> {
     if (!trade.moneyMoved) {
       if (!isEconomyConfigured()) throw new HttpError(503, 'ECONOMY_NOT_CONFIGURED', 'Economy is not configured');
       if (!isSettleableHolder(trade.buyerType)) {
-        throw new HttpError(400, 'UNSUPPORTED_HOLDER', `Buyer holder type '${trade.buyerType}' cannot settle money`);
+        throw new HttpError(400, 'UNSUPPORTED_HOLDER', t('holder.buyer', { holder: trade.buyerType }));
       }
       if (!isSettleableHolder(trade.sellerType)) {
-        throw new HttpError(400, 'UNSUPPORTED_HOLDER', `Seller holder type '${trade.sellerType}' cannot settle money`);
+        throw new HttpError(400, 'UNSUPPORTED_HOLDER', t('holder.seller', { holder: trade.sellerType }));
       }
       await debitHolder(trade.buyerType, trade.buyerId, {
         amount: trade.totalPrice,
@@ -367,7 +368,7 @@ export function listOrders(filter: OrderFilter): Promise<MarketOrder[]> {
 /** Fetches an order or throws 404. */
 export async function requireOrder(orderId: string): Promise<MarketOrder> {
   const [order] = await db.select().from(marketOrders).where(eq(marketOrders.id, orderId)).limit(1);
-  if (!order) throw notFound(`Order ${orderId} not found`);
+  if (!order) throw notFound(t('not_found.order', { id: orderId }));
   return order;
 }
 
@@ -381,7 +382,7 @@ export async function cancelOrder(orderId: string, party: Party): Promise<Market
   const order = await requireOrder(orderId);
   assertOwner(order.holderType, order.holderId, party, 'order');
   if (order.status === 'filled' || order.status === 'cancelled') {
-    throw conflict(`Order ${orderId} is ${order.status}`);
+    throw conflict(t('conflict.order_state', { id: orderId, status: order.status }));
   }
   const [row] = await db
     .update(marketOrders)
@@ -433,7 +434,7 @@ export function listDemands(filter: DemandFilter): Promise<MarketDemand[]> {
 /** Fetches a demand or throws 404. */
 export async function requireDemand(demandId: string): Promise<MarketDemand> {
   const [demand] = await db.select().from(marketDemands).where(eq(marketDemands.id, demandId)).limit(1);
-  if (!demand) throw notFound(`Demand ${demandId} not found`);
+  if (!demand) throw notFound(t('not_found.demand', { id: demandId }));
   return demand;
 }
 
@@ -447,9 +448,9 @@ export async function requireDemand(demandId: string): Promise<MarketDemand> {
  */
 export async function fulfillDemand(demandId: string, seller: Party, unitPrice: number): Promise<MarketTrade> {
   const demand = await requireDemand(demandId);
-  if (demand.status !== 'open') throw conflict(`Demand ${demandId} is ${demand.status}`);
+  if (demand.status !== 'open') throw conflict(t('conflict.demand_state', { id: demandId, status: demand.status }));
   if (unitPrice > demand.maxPrice) {
-    throw new HttpError(400, 'PRICE_ABOVE_MAX', `Unit price ${unitPrice} exceeds the demand max ${demand.maxPrice}`);
+    throw new HttpError(400, 'PRICE_ABOVE_MAX', `Unit price ${unitPrice} exceeds the demand max ${demand.maxPrice}`, { price: unitPrice, max: demand.maxPrice });
   }
   await ensureCorporationMember(seller, seller.actorId);
 
@@ -488,7 +489,7 @@ export async function fulfillDemand(demandId: string, seller: Party, unitPrice: 
 export async function cancelDemand(demandId: string, party: Party): Promise<MarketDemand> {
   const demand = await requireDemand(demandId);
   assertOwner(demand.holderType, demand.holderId, party, 'demand');
-  if (demand.status !== 'open') throw conflict(`Demand ${demandId} is ${demand.status}`);
+  if (demand.status !== 'open') throw conflict(t('conflict.demand_state', { id: demandId, status: demand.status }));
   const [row] = await db
     .update(marketDemands)
     .set({ status: 'cancelled', updatedAt: new Date() })
@@ -517,14 +518,14 @@ export function listTrades(filter: TradeFilter): Promise<MarketTrade[]> {
 /** Fetches a trade or throws 404. */
 export async function requireTrade(tradeId: string): Promise<MarketTrade> {
   const [trade] = await db.select().from(marketTrades).where(eq(marketTrades.id, tradeId)).limit(1);
-  if (!trade) throw notFound(`Trade ${tradeId} not found`);
+  if (!trade) throw notFound(t('not_found.trade', { id: tradeId }));
   return trade;
 }
 
 /** Asserts that the party owns a resource (order/demand). */
 function assertOwner(holderType: HolderType, holderId: string, party: Party, label: string): void {
   if (holderType !== party.holderType || holderId !== party.holderId) {
-    throw new HttpError(403, 'FORBIDDEN', `You do not own this ${label}`);
+    throw new HttpError(403, 'FORBIDDEN', t('forbidden.no_ownership', { label }));
   }
 }
 

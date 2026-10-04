@@ -2,6 +2,7 @@
  * Player and corporation reports, their moderation workflow and escalation.
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -43,7 +44,7 @@ export async function createReport(
 ): Promise<Report> {
   const targetPlayerId = input.targetType === 'player' ? input.targetId : null;
   const targetCorporationId = input.targetType === 'corporation' ? input.targetId : null;
-  if (targetPlayerId === reporterId) throw new HttpError(400, 'INVALID_TARGET', 'Cannot report yourself');
+  if (targetPlayerId === reporterId) throw new HttpError(400, 'INVALID_TARGET', t('target.report_self'));
   if (targetPlayerId) {
     await requireProfile(targetPlayerId);
     await requireNotNpc(targetPlayerId);
@@ -61,7 +62,7 @@ export async function createReport(
       ),
     )
     .limit(1);
-  if (duplicate.length) throw conflict('You already have an open report on this target');
+  if (duplicate.length) throw conflict(t('conflict.open_report'));
 
   const [report] = await db
     .insert(reports)
@@ -147,7 +148,7 @@ export async function listReports(
  */
 export async function requireReport(id: number): Promise<ReportView> {
   const [row] = await db.select().from(reports).where(eq(reports.id, id)).limit(1);
-  if (!row) throw notFound(`Report ${id} not found`);
+  if (!row) throw notFound(t('not_found.report', { id: id }));
   const [view] = await toViews([row]);
   return view;
 }
@@ -168,7 +169,7 @@ export async function updateReportStatus(
   note?: string,
 ): Promise<Report> {
   const report = await requireReport(id);
-  if (!OPEN_STATUSES.includes(report.status)) throw conflict(`Report is already ${report.status}`);
+  if (!OPEN_STATUSES.includes(report.status)) throw conflict(t('conflict.report_state', { status: report.status }));
   const closing = status !== 'reviewing';
   const [updated] = await db
     .update(reports)
@@ -209,9 +210,9 @@ export async function updateReportStatus(
  */
 export async function escalateReport(id: number, actorId: string): Promise<Report> {
   const report = await requireReport(id);
-  if (!OPEN_STATUSES.includes(report.status)) throw conflict(`Report is already ${report.status}`);
+  if (!OPEN_STATUSES.includes(report.status)) throw conflict(t('conflict.report_state', { status: report.status }));
   const idx = ESCALATION_LEVELS.indexOf(report.escalation);
-  if (idx >= ESCALATION_LEVELS.length - 1) throw forbidden('Report is already at the highest escalation level');
+  if (idx >= ESCALATION_LEVELS.length - 1) throw forbidden(t('forbidden.report_max_escalation'));
   const escalation = ESCALATION_LEVELS[idx + 1];
   const [updated] = await db.update(reports).set({ escalation, status: 'open' }).where(eq(reports.id, id)).returning();
   await logModeration(actorId, 'report_escalated', report.targetPlayerId, { reportId: id, to: escalation });

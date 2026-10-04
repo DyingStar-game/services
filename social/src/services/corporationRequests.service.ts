@@ -2,6 +2,7 @@
  * Joining a corporation: direct join, applications (player → corporation) and invitations (corporation → player).
  */
 import { and, desc, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -52,7 +53,7 @@ async function findRequest(corporationId: string, playerId: string): Promise<Cor
 
 async function requireRequest(id: number): Promise<CorporationJoinRequest> {
   const rows = await db.select().from(corporationJoinRequests).where(eq(corporationJoinRequests.id, id)).limit(1);
-  if (!rows[0]) throw notFound(`Request ${id} not found`);
+  if (!rows[0]) throw notFound(t('not_found.request', { id: id }));
   return rows[0];
 }
 
@@ -72,7 +73,7 @@ export async function requestJoinCorporation(
   const corporation = await requireCorporation(corporationId);
   await requireProfile(playerId);
   if (await getCorporationMembership(corporationId, playerId)) {
-    throw conflict('Already a member of this corporation');
+    throw conflict(t('conflict.corp_member'));
   }
 
   const existing = await findRequest(corporationId, playerId);
@@ -80,9 +81,9 @@ export async function requestJoinCorporation(
     await addCorporationMember(corporationId, playerId, playerId);
     return { joined: true };
   }
-  if (existing) throw conflict('Application already pending');
+  if (existing) throw conflict(t('conflict.application_pending'));
 
-  if (corporation.recruitment === 'closed') throw forbidden('This corporation is not recruiting');
+  if (corporation.recruitment === 'closed') throw forbidden(t('forbidden.not_recruiting'));
   if (corporation.recruitment === 'open') {
     await addCorporationMember(corporationId, playerId, playerId);
     return { joined: true };
@@ -110,16 +111,16 @@ export async function inviteCorporationPlayer(
   await requireCorporationPermission(corporationId, actorId, 'invite');
   await requireProfile(playerId);
   if (await getCorporationMembership(corporationId, playerId)) {
-    throw conflict('Player is already a member of this corporation');
+    throw conflict(t('conflict.player_corp_member'));
   }
-  if (await isBlockedEitherWay(actorId, playerId)) throw conflict('A block exists between these players');
+  if (await isBlockedEitherWay(actorId, playerId)) throw conflict(t('conflict.block_exists'));
 
   const existing = await findRequest(corporationId, playerId);
   if (existing?.kind === 'application') {
     await addCorporationMember(corporationId, playerId, actorId);
     return { joined: true };
   }
-  if (existing) throw conflict('Invitation already pending');
+  if (existing) throw conflict(t('conflict.invitation_pending'));
 
   const [request] = await db
     .insert(corporationJoinRequests)
@@ -139,7 +140,7 @@ export async function inviteCorporationPlayer(
 export async function listCorporationRequests(corporationId: string, actorId: string): Promise<CorporationRequestView[]> {
   const { rank } = await requireCorporationMember(corporationId, actorId);
   if (!hasCorporationPermission(rank, 'recruit') && !hasCorporationPermission(rank, 'invite')) {
-    throw forbidden('Missing corporation permission: recruit or invite');
+    throw forbidden(t('forbidden.corp_permission'));
   }
   const rows = await db
     .select({ request: corporationJoinRequests, player: playerProfiles })
@@ -164,9 +165,9 @@ export async function resolveCorporationRequest(
   accept: boolean,
 ): Promise<void> {
   const request = await requireRequest(requestId);
-  if (request.corporationId !== corporationId) throw notFound(`Request ${requestId} not found`);
+  if (request.corporationId !== corporationId) throw notFound(t('not_found.request', { id: requestId }));
   if (request.kind === 'invitation') {
-    if (accept) throw forbidden('Only the invited player can accept an invitation');
+    if (accept) throw forbidden(t('forbidden.invited_only'));
     await requireCorporationPermission(corporationId, actorId, 'invite');
     await db.delete(corporationJoinRequests).where(eq(corporationJoinRequests.id, requestId));
     await recordCorporationActivity(corporationId, actorId, 'invitation_withdrawn', { playerId: request.playerId });
@@ -208,9 +209,9 @@ export async function listPlayerRequests(playerId: string): Promise<PlayerCorpor
  */
 export async function resolvePlayerRequest(playerId: string, requestId: number, accept: boolean): Promise<void> {
   const request = await requireRequest(requestId);
-  if (request.playerId !== playerId) throw notFound(`Request ${requestId} not found`);
+  if (request.playerId !== playerId) throw notFound(t('not_found.request', { id: requestId }));
   if (accept) {
-    if (request.kind !== 'invitation') throw forbidden('Only the corporation can accept an application');
+    if (request.kind !== 'invitation') throw forbidden(t('forbidden.corp_only_application'));
     await addCorporationMember(request.corporationId, playerId, request.createdBy ?? playerId);
     return;
   }

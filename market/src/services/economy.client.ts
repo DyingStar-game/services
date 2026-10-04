@@ -4,6 +4,7 @@
  * account (`client_credentials`) with a dev-only `X-Internal-Key` fallback.
  */
 import { env } from '../config/env.js';
+import { currentLang } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
 interface TokenCache {
@@ -29,7 +30,7 @@ async function getServiceToken(): Promise<string> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'ECONOMY_AUTH_FAILED', `Economy token request failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'ECONOMY_AUTH_FAILED', `Economy token request failed (${res.status}): ${text}`, { status: res.status, body: text });
   }
   const json = (await res.json()) as { access_token: string; expires_in?: number };
   const ttl = Math.max(30, (json.expires_in ?? 60) - 30);
@@ -82,7 +83,7 @@ async function holderMovement(
   const base = `/api/internal/${segment}/${holderId}`;
   const res = await fetch(`${env.economy.apiUrl}${base}/wallet/${direction}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
     body: JSON.stringify({
       amount: opts.amount,
       currency: opts.currency,

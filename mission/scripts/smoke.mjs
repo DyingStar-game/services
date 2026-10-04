@@ -164,6 +164,59 @@ console.log('\n# kind catalogue and spec validation');
     asPlayer(A),
   );
   check('missing kind params', [badParams.status, badParams.json.error], [400, 'INVALID_OBJECTIVE_PARAMS']);
+
+  // i18n: Accept-Language: fr localizes the catalogue summaries.
+  const frCatalog = await req('GET', '/api/missions/kinds', undefined, {
+    ...asPlayer(A),
+    'Accept-Language': 'fr',
+  });
+  check(
+    'kind catalogue in French',
+    frCatalog.json.objectiveKinds?.some((k) => k.kind === 'deliver_material' && k.summary.startsWith('Livrer')),
+    true,
+  );
+  check(
+    'kind catalogue in English by default',
+    (await req('GET', '/api/missions/kinds', undefined, asPlayer(A))).json.objectiveKinds?.find(
+      (k) => k.kind === 'deliver_material',
+    )?.summary.startsWith('Deliver'),
+    true,
+  );
+
+  // Category constraint: combat cannot use deliver_material, custom always fits.
+  const badCategory = await req(
+    'POST',
+    '/api/missions/validate',
+    {
+      mission: {
+        title: 'Combat livraison',
+        category: 'combat',
+        objectives: [{ type: 'deliver_material', title: 'x', params: { itemId: 'ore' } }],
+      },
+    },
+    asPlayer(A),
+  );
+  check('category rejects objective kind', [badCategory.status, badCategory.json.error], [400, 'OBJECTIVE_NOT_IN_CATEGORY']);
+  const okCategory = await req(
+    'POST',
+    '/api/missions/validate',
+    { mission: { title: 'Combat ok', category: 'combat', objectives: [{ type: 'custom', title: 'x' }] } },
+    asPlayer(A),
+  );
+  check('category accepts matching kind', [okCategory.status, okCategory.json.valid], [200, true]);
+  const genericBypass = await req(
+    'POST',
+    '/api/missions/validate',
+    {
+      mission: {
+        title: 'Generic libre',
+        category: 'generic',
+        objectives: [{ type: 'deliver_material', title: 'x', params: { itemId: 'ore' } }],
+      },
+    },
+    asPlayer(A),
+  );
+  check('generic category bypasses the constraint', [genericBypass.status, genericBypass.json.valid], [200, true]);
 }
 
 // ── Mission lifecycle ────────────────────────────────────────────────────────
@@ -437,6 +490,14 @@ console.log('\n# capacity, listing and cancellation');
 
   const full = await req('POST', `/api/missions/${missionId}/accept`, undefined, asPlayer(D, 'dave'));
   check('mission at capacity', [full.status, full.json.error], [409, 'MISSION_FULL']);
+
+  const fullFr = await req('POST', `/api/missions/${missionId}/accept`, undefined, {
+    ...asPlayer(D, 'dave'),
+    'Accept-Language': 'fr',
+  });
+  check('error message in French', [fullFr.status, fullFr.json.message], [409, "La mission n'a plus de place libre"]);
+  const fullEn = await req('POST', `/api/missions/${missionId}/accept`, undefined, asPlayer(D, 'dave'));
+  check('error message in English by default', [fullEn.status, fullEn.json.message], [409, 'Mission has no free slot']);
 
   const cancelled = await req('POST', `/api/internal/missions/${missionId}/cancel`, undefined, internal);
   check('cancel mission', cancelled.json.status, 'cancelled');

@@ -4,6 +4,7 @@
  * their own. Ownership passes to the oldest member when the owner leaves.
  */
 import { Router, type IRouter } from 'express';
+import { t } from '../i18n/index.js';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { notFound } from '../lib/httpError.js';
@@ -43,7 +44,7 @@ groupsRoutes.get(
     const player = requirePlayer(req);
     await requireGroupMembership(req.params.groupId, player.id);
     const summary = await getGroupSummary(req.params.groupId);
-    if (!summary) throw notFound(`Group ${req.params.groupId} not found`);
+    if (!summary) throw notFound(t('not_found.group', { id: req.params.groupId }));
     res.json(summary);
   }),
 );

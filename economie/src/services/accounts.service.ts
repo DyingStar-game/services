@@ -3,6 +3,7 @@
  * and the reserved system tax vault.
  */
 import { and, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -37,7 +38,7 @@ export async function getAccountById(accountId: string): Promise<Account | null>
  */
 export async function requireAccount(accountId: string): Promise<Account> {
   const account = await getAccountById(accountId);
-  if (!account) throw notFound(`Account ${accountId} not found`);
+  if (!account) throw notFound(t('not_found.account', { id: accountId }));
   return account;
 }
 
@@ -148,6 +149,6 @@ export function ensurePoliticalAccount(entityId: string, currency = 'credits'): 
  */
 export function requireActiveAccount(account: Account): void {
   if (account.status !== 'active') {
-    throw new HttpError(403, 'ACCOUNT_LOCKED', `Account is ${account.status}`);
+    throw new HttpError(403, 'ACCOUNT_LOCKED', `Account is ${account.status}`, { status: account.status });
   }
 }

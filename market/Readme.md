@@ -65,6 +65,8 @@ physique d'une livraison reste du ressort du serveur de jeu.
 
 Spécification complète : [`openapi.yaml`](openapi.yaml). Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
 
+Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les messages d'erreur (codes et texte dynamique) sont rendus dans la langue demandée ; les messages de validation zod restent en anglais. Les identifiants techniques (codes, kinds, champs, `{params}`) ne sont jamais traduits.
+
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
 | Méthode | Route | Description |
 |---|---|---|

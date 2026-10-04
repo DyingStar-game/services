@@ -11,12 +11,15 @@ import { runMigrations } from './db/migrate.js';
 import { serveOpenapi } from './lib/openapi.js';
 import { serviceAuth } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { languageMiddleware } from './middleware/language.js';
 import { apiRouter } from './routes/index.js';
 import { internalRoutes } from './routes/internal.routes.js';
 import { startRehabilitationScheduler } from './services/reputation.service.js';
 
 const app = express();
 
+// First: resolves `Accept-Language` for every route (player, internal, health).
+app.use(languageMiddleware);
 app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
 app.use(express.json({ limit: '1mb' }));

@@ -5,6 +5,7 @@
  * `X-Internal-Key` fallback.
  */
 import { env } from '../config/env.js';
+import { currentLang } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
 /** Holder reference shared with the inventory service. */
@@ -36,7 +37,7 @@ async function getServiceToken(): Promise<string> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'INVENTORY_AUTH_FAILED', `Inventory token request failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'INVENTORY_AUTH_FAILED', `Inventory token request failed (${res.status}): ${text}`, { status: res.status, body: text });
   }
   const json = (await res.json()) as { access_token: string; expires_in?: number };
   const ttl = Math.max(30, (json.expires_in ?? 60) - 30);
@@ -71,7 +72,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   }
   const res = await fetch(`${env.inventory.apiUrl}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text().catch(() => '');
@@ -89,7 +90,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (res.status === 409 && code === 'INSUFFICIENT_GOODS') {
     throw new HttpError(409, 'INSUFFICIENT_GOODS', message ?? 'Insufficient goods');
   }
-  throw new HttpError(502, 'INVENTORY_CALL_FAILED', `Inventory ${method} ${path} failed (${res.status}): ${message}`);
+  throw new HttpError(502, 'INVENTORY_CALL_FAILED', `Inventory ${method} ${path} failed (${res.status}): ${message}`, { method, path, status: res.status, message });
 }
 
 /** Moves available fungible goods between holders. */

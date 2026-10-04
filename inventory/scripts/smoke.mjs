@@ -72,6 +72,8 @@ console.log('\n# health and auth');
 
   const me = await req('GET', '/api/me/inventory');
   check('player route without credentials', [me.status, me.json.error], [401, 'UNAUTHORIZED']);
+  const meFr = await req('GET', '/api/me/inventory', undefined, { 'Accept-Language': 'fr' });
+  check('error message in French', [meFr.status, meFr.json.message], [401, 'Token Bearer manquant']);
 }
 
 // ── Fungible stacks: credit, availability, hold, consume ─────────────────────

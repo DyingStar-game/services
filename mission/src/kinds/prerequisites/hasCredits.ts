@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { t } from '../../i18n/index.js';
 
 import { getWalletAccounts } from '../../services/economy.client.js';
 import type { PrerequisiteKind } from '../types.js';
@@ -23,13 +24,14 @@ export const hasCreditsPrerequisite: PrerequisiteKind = {
     },
     additionalProperties: false,
   },
-  summary: 'Player wallet holds at least `amount` of `currency`',
+  summary: { en: 'Player wallet holds at least {amount} of {currency}', fr: 'Le portefeuille du joueur détient au moins {amount} de {currency}' },
+  categories: ['trading', 'delivery', 'construction', 'reception', 'mining', 'farming', 'crafting'],
   async check({ playerId, params }) {
     const { currency, amount } = paramsSchema.parse(params);
     const accounts = await getWalletAccounts('player', playerId);
     const balance = accounts.find((account) => account.currency === currency)?.balance ?? 0;
     if (balance < amount) {
-      return { ok: false, detail: `balance ${balance} < ${amount} ${currency}` };
+      return { ok: false, detail: t('prereq.detail.balance', { balance, amount, currency }) };
     }
     return { ok: true };
   },

@@ -9,6 +9,7 @@
  * Payments are atomic and partial-tolerant: every affordable debt is settled, the rest stay due.
  */
 import { randomUUID } from 'crypto';
+import { t } from '../i18n/index.js';
 import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
@@ -177,7 +178,7 @@ async function lockAccount(tx: Tx, cache: Map<string, { account: Account; balanc
   const cached = cache.get(accountId);
   if (cached) return cached;
   const [row] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).for('update');
-  if (!row) throw notFound(`Account ${accountId} not found`);
+  if (!row) throw notFound(t('not_found.account', { id: accountId }));
   requireActiveAccount(row);
   const entry = { account: row, balance: Number(row.balance) };
   cache.set(accountId, entry);
@@ -272,7 +273,7 @@ export async function payTaxDebts(
   const remaining = Number(remainingRows[0]?.count ?? 0);
 
   if (paid.length === 0 && remaining > 0) {
-    throw new HttpError(409, 'INSUFFICIENT_FUNDS', 'Insufficient balance to settle any due tax debt');
+    throw new HttpError(409, 'INSUFFICIENT_FUNDS', t('tax.insufficient'));
   }
 
   return { debtorType, debtorId, paid, paidTotal, remaining };

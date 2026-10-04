@@ -14,5 +14,6 @@ export const transportKind: ObjectiveKind = {
     properties: { itemId: { type: 'string', maxLength: 128, description: 'Inventory good type to move' } },
     additionalProperties: false,
   },
-  summary: 'Transport a quantity of `itemId` from `locationFrom` to `locationTo` (game server)',
+  summary: { en: 'Transport a quantity of {itemId} from {locationFrom} to {locationTo} (game server)', fr: 'Transporter une quantité de {itemId} de {locationFrom} à {locationTo} (serveur de jeu)' },
+  categories: ['transport', 'delivery', 'trading', 'reception'],
 };

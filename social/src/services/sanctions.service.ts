@@ -2,6 +2,7 @@
  * Sanctions: issue (manual or automatic), revoke, and query active ones.
  */
 import { and, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { sanctions, type Sanction, type SanctionType } from '../db/schema/index.js';
@@ -98,7 +99,7 @@ export async function issueSanction(
  */
 export async function revokeSanction(sanctionId: number, actorId: string): Promise<Sanction> {
   const [existing] = await db.select().from(sanctions).where(eq(sanctions.id, sanctionId)).limit(1);
-  if (!existing || existing.revokedAt) throw notFound(`Active sanction ${sanctionId} not found`);
+  if (!existing || existing.revokedAt) throw notFound(t('not_found.sanction', { id: sanctionId }));
   const [updated] = await db
     .update(sanctions)
     .set({ revokedAt: new Date(), revokedBy: actorId })

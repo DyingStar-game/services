@@ -7,6 +7,7 @@
  * none is (treasury balance is checked under a row lock).
  */
 import { and, eq, sql } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -112,7 +113,7 @@ export async function setMemberSalary(
     .from(corporationMembers)
     .where(and(eq(corporationMembers.corporationId, corporationId), eq(corporationMembers.playerId, playerId)))
     .limit(1);
-  if (!membership[0]) throw notFound(`Player ${playerId} is not a member of this corporation`);
+  if (!membership[0]) throw notFound(t('not_found.corp_member', { id: playerId }));
 
   const currency = patch.currency ?? 'credits';
   const [row] = await db
@@ -191,7 +192,7 @@ async function loadTreasury(tx: Tx, corporationId: string, currency: string): Pr
       ),
     )
     .for('update');
-  if (!row) throw notFound(`Treasury account for ${corporationId} in ${currency} not found`);
+  if (!row) throw notFound(t('not_found.treasury', { corporationId: corporationId, currency: currency }));
   requireActiveAccount(row);
   return row;
 }
@@ -281,7 +282,7 @@ export async function runPayroll(corporationId: string, currency = 'credits'): P
       .set({ balance: sql`${accounts.balance} - ${total}`, updatedAt: new Date() })
       .where(and(eq(accounts.id, treasury.id), sql`${accounts.balance} >= ${total}`))
       .returning({ balance: accounts.balance });
-    if (!debited) throw new HttpError(409, 'INSUFFICIENT_FUNDS', 'Insufficient treasury balance');
+    if (!debited) throw new HttpError(409, 'INSUFFICIENT_FUNDS', t('treasury.insufficient'));
 
     for (const e of effective) {
       const toAccountId = memberAccounts.get(e.playerId)!;
@@ -322,7 +323,7 @@ export async function payPrime(
     .from(corporationMembers)
     .where(and(eq(corporationMembers.corporationId, corporationId), eq(corporationMembers.playerId, playerId)))
     .limit(1);
-  if (!membership[0]) throw notFound(`Player ${playerId} is not a member of this corporation`);
+  if (!membership[0]) throw notFound(t('not_found.corp_member', { id: playerId }));
 
   const [treasury, memberAccount] = await Promise.all([
     ensureCorporationAccount(corporationId, currency),
@@ -332,14 +333,14 @@ export async function payPrime(
   const result = await db.transaction(async (tx) => {
     const treasuryRow = await loadTreasury(tx, corporationId, currency);
     if (treasuryRow.balance < amount) {
-      throw new HttpError(409, 'INSUFFICIENT_FUNDS', 'Insufficient treasury balance');
+      throw new HttpError(409, 'INSUFFICIENT_FUNDS', t('treasury.insufficient'));
     }
     const [debited] = await tx
       .update(accounts)
       .set({ balance: sql`${accounts.balance} - ${amount}`, updatedAt: new Date() })
       .where(and(eq(accounts.id, treasury.id), sql`${accounts.balance} >= ${amount}`))
       .returning({ balance: accounts.balance });
-    if (!debited) throw new HttpError(409, 'INSUFFICIENT_FUNDS', 'Insufficient treasury balance');
+    if (!debited) throw new HttpError(409, 'INSUFFICIENT_FUNDS', t('treasury.insufficient'));
     const memberBalance = await credit(tx, memberAccount.id, amount);
     const [transaction] = await tx
       .insert(transactions)

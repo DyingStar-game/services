@@ -2,6 +2,7 @@
  * "Recently met" counters, recorded symmetrically for both players.
  */
 import { desc, eq, sql } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { playerEncounters, type PlayerEncounter } from '../db/schema/index.js';
@@ -14,7 +15,7 @@ import { requireProfile } from './profiles.service.js';
  * @param otherId - Second player.
  */
 export async function recordEncounter(playerId: string, otherId: string): Promise<void> {
-  if (playerId === otherId) throw new HttpError(400, 'INVALID_TARGET', 'A player cannot meet themselves');
+  if (playerId === otherId) throw new HttpError(400, 'INVALID_TARGET', t('target.meet_self'));
   await Promise.all([requireProfile(playerId), requireProfile(otherId)]);
   const now = new Date();
   await db

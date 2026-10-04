@@ -5,6 +5,7 @@
  * account (`client_credentials`) with a dev-only `X-Internal-Key` fallback.
  */
 import { env } from '../config/env.js';
+import { currentLang } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
 /** Inventory holder reference. */
@@ -36,7 +37,10 @@ async function getServiceToken(): Promise<string> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'INVENTORY_AUTH_FAILED', `Inventory token request failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'INVENTORY_AUTH_FAILED', `Inventory token request failed (${res.status}): ${text}`, {
+      status: res.status,
+      body: text,
+    });
   }
   const json = (await res.json()) as { access_token: string; expires_in?: number };
   const ttl = Math.max(30, (json.expires_in ?? 60) - 30);
@@ -71,7 +75,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   }
   const res = await fetch(`${env.inventory.apiUrl}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text().catch(() => '');
@@ -88,7 +92,12 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (res.status === 409 && error?.error === 'INSUFFICIENT_GOODS') {
     throw new HttpError(409, 'INSUFFICIENT_GOODS', error.message ?? 'Insufficient goods');
   }
-  throw new HttpError(502, 'INVENTORY_CALL_FAILED', `Inventory ${method} ${path} failed (${res.status}): ${error?.message ?? text}`);
+  throw new HttpError(502, 'INVENTORY_CALL_FAILED', `Inventory ${method} ${path} failed (${res.status}): ${error?.message ?? text}`, {
+      method,
+      path,
+      status: res.status,
+      message: error?.message ?? text,
+    });
 }
 
 /** Hold parameters accepted by the Inventory service. */
@@ -153,12 +162,15 @@ export async function getStack(holder: Holder, goodType: string): Promise<StackV
   }
   const res = await fetch(
     `${env.inventory.apiUrl}/api/internal/holders/${holder.holderType}/${holder.holderId}/stacks/${encodeURIComponent(goodType)}`,
-    { headers: { ...(await authHeaders()) } },
+    { headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) } },
   );
   if (res.status === 404) return null;
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'INVENTORY_READ_FAILED', `Inventory stack read failed (${res.status}): ${text}`);
+    throw new HttpError(502, 'INVENTORY_READ_FAILED', `Inventory stack read failed (${res.status}): ${text}`, {
+      status: res.status,
+      body: text,
+    });
   }
   return (await res.json()) as StackView;
 }

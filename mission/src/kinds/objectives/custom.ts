@@ -9,5 +9,6 @@ export const customKind: ObjectiveKind = {
   quantity: true,
   paramsSchema: z.object({}).strict(),
   paramsJsonSchema: { type: 'object', properties: {}, additionalProperties: false },
-  summary: 'Anything the game server can verify; free-form details in `payload` (game server reports progress)',
+  summary: { en: 'Anything the game server can verify; free-form details in {payload} (game server reports progress)', fr: 'Tout ce que le serveur de jeu sait vérifier ; détails libres dans {payload} (le serveur de jeu rapporte la progression)' },
+  categories: 'all',
 };

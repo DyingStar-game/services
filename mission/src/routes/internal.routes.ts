@@ -5,6 +5,7 @@
  * creates missions, reports verified objective progress and completes them.
  */
 import { Router, type IRouter } from 'express';
+import { t } from '../i18n/index.js';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { HttpError } from '../lib/httpError.js';
@@ -224,9 +225,9 @@ internalRoutes.post(
   validate(settleBody),
   asyncHandler(async (req, res) => {
     const mission = await getMissionById(req.params.missionId);
-    if (!mission) throw new HttpError(404, 'NOT_FOUND', 'Mission not found');
+    if (!mission) throw new HttpError(404, 'NOT_FOUND', t('not_found.mission_bare'));
     const assignment = await getAssignment(req.params.missionId, req.body.playerId);
-    if (!assignment) throw new HttpError(404, 'NOT_FOUND', 'Assignment not found');
+    if (!assignment) throw new HttpError(404, 'NOT_FOUND', t('not_found.assignment'));
     if (assignment.status !== 'completed') {
       throw new HttpError(409, 'ASSIGNMENT_NOT_COMPLETED', `Assignment is ${assignment.status}`);
     }

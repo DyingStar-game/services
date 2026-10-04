@@ -3,6 +3,7 @@
  * report objective progress, complete (reward) or abandon.
  */
 import { Router, type IRouter } from 'express';
+import { t } from '../i18n/index.js';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { HttpError } from '../lib/httpError.js';
@@ -66,6 +67,7 @@ missionsRoutes.post(
     const { mode, mission } = req.body;
     const spec = validateMissionSpec(
       {
+        category: mission.category,
         objectives: mission.objectives,
         prerequisites: mission.prerequisites,
         rewards: mission.rewards,
@@ -124,10 +126,10 @@ missionsRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const result = await getMissionWithObjectives(req.params.missionId);
-    if (!result) throw new HttpError(404, 'NOT_FOUND', 'Mission not found');
+    if (!result) throw new HttpError(404, 'NOT_FOUND', t('not_found.mission_bare'));
     if (result.mission.groupId && !(await isGroupMember(player.id, result.mission.groupId))) {
       // Hidden from players outside the target group.
-      throw new HttpError(404, 'NOT_FOUND', 'Mission not found');
+      throw new HttpError(404, 'NOT_FOUND', t('not_found.mission_bare'));
     }
     const assignment = await getAssignment(req.params.missionId, player.id);
     res.json({ ...result, assignment });

@@ -6383,7 +6383,8 @@ paths:
                 $ref: '#/components/schemas/mission_ValidatedSpec'
         '400':
           description: 'Spec rejected (`MISSING_OBJECTIVES`, `REWARD_REQUIRED`, `UNKNOWN_OBJECTIVE_KIND`, `INVALID_OBJECTIVE_PARAMS`,
-            `UNKNOWN_PREREQ_KIND`, `INVALID_PREREQUISITE_PARAMS`, `ITEM_REWARD_NOT_SPLITABLE`)
+            `UNKNOWN_PREREQ_KIND`, `INVALID_PREREQUISITE_PARAMS`, `ITEM_REWARD_NOT_SPLITABLE`, `OBJECTIVE_NOT_IN_CATEGORY`,
+            `PREREQ_NOT_IN_CATEGORY`)
 
             '
           content:
@@ -8757,6 +8758,15 @@ components:
                 description: Uses targetQuantity/currentProgress accumulation
               summary:
                 type: string
+                description: Localized from the ambient language (`Accept-Language`); `{name}` field references stay literal
+              categories:
+                description: Mission categories this kind may be used on (`all` = every category)
+                oneOf:
+                - type: string
+                  const: all
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/mission_MissionCategory'
               params:
                 type: object
                 additionalProperties: true
@@ -8770,6 +8780,14 @@ components:
                 type: string
               summary:
                 type: string
+              categories:
+                description: Mission categories this prerequisite may be used on (`all` = every category)
+                oneOf:
+                - type: string
+                  const: all
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/mission_MissionCategory'
               params:
                 type: object
                 additionalProperties: true

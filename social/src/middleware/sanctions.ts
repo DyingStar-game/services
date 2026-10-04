@@ -2,6 +2,7 @@
  * Blocks suspended/banned players from the social API (after `playerAuth`).
  */
 import type { NextFunction, Request, Response } from 'express';
+import { t } from '../i18n/index.js';
 
 import { HttpError } from '../lib/httpError.js';
 import { getBlockingSanction } from '../services/sanctions.service.js';
@@ -22,7 +23,13 @@ export async function enforceSanctions(req: Request, _res: Response, next: NextF
         new HttpError(
           403,
           'SANCTIONED',
-          `Account ${sanction.type === 'ban' ? 'banned' : 'suspended'}${sanction.expiresAt ? ` until ${sanction.expiresAt.toISOString()}` : ''}: ${sanction.reason}`,
+          sanction.type === 'ban'
+            ? sanction.expiresAt
+              ? t('sanction.banned_until', { until: sanction.expiresAt.toISOString(), reason: sanction.reason })
+              : t('sanction.banned', { reason: sanction.reason })
+            : sanction.expiresAt
+              ? t('sanction.suspended_until', { until: sanction.expiresAt.toISOString(), reason: sanction.reason })
+              : t('sanction.suspended', { reason: sanction.reason }),
         ),
       );
       return;

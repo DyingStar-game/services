@@ -4,6 +4,7 @@
  * structured 403 naming the kind and the reason.
  */
 import { getPrerequisiteKind } from '../kinds/index.js';
+import { t } from '../i18n/index.js';
 import type { Mission } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
 
@@ -18,7 +19,7 @@ export async function evaluatePrerequisites(mission: Mission, playerId: string):
   for (const prereq of mission.prerequisites ?? []) {
     const kindDef = getPrerequisiteKind(prereq.kind);
     if (!kindDef) {
-      throw new HttpError(500, 'UNKNOWN_PREREQ_KIND', `Prerequisite kind missing from the registry: ${prereq.kind}`);
+      throw new HttpError(500, 'UNKNOWN_PREREQ_KIND', t('prereq.missing_kind', { kind: prereq.kind }));
     }
     const params = kindDef.paramsSchema.parse(prereq.params ?? {}) as Record<string, unknown>;
     const result = await kindDef.check({ playerId, missionId: mission.id, params });

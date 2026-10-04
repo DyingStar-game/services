@@ -2,6 +2,7 @@
  * Friend requests, friendships, online friends and suggestions.
  */
 import { and, desc, eq, inArray, or } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -139,7 +140,7 @@ export async function listRequests(
  */
 export async function sendRequest(requesterId: string, addresseeId: string): Promise<Friendship> {
   if (requesterId === addresseeId) {
-    throw new HttpError(400, 'INVALID_TARGET', 'Cannot send a friend request to yourself');
+    throw new HttpError(400, 'INVALID_TARGET', t('target.friend_self'));
   }
   await requireProfile(addresseeId);
   if (await isBlockedEitherWay(requesterId, addresseeId)) {
@@ -147,8 +148,8 @@ export async function sendRequest(requesterId: string, addresseeId: string): Pro
   }
   const existing = await findRelation(requesterId, addresseeId);
   if (existing) {
-    if (existing.status === 'accepted') throw conflict('Already friends');
-    if (existing.requesterId === requesterId) throw conflict('Request already pending');
+    if (existing.status === 'accepted') throw conflict(t('conflict.already_friends'));
+    if (existing.requesterId === requesterId) throw conflict(t('conflict.request_pending'));
     return acceptRequest(existing.id, requesterId);
   }
   const [created] = await db.insert(friendships).values({ requesterId, addresseeId }).returning();
@@ -160,7 +161,7 @@ export async function sendRequest(requesterId: string, addresseeId: string): Pro
 async function requirePendingRequest(id: number): Promise<Friendship> {
   const rows = await db.select().from(friendships).where(eq(friendships.id, id)).limit(1);
   const request = rows[0];
-  if (!request || request.status !== 'pending') throw notFound(`Friend request ${id} not found`);
+  if (!request || request.status !== 'pending') throw notFound(t('not_found.friend_request', { id: id }));
   return request;
 }
 
@@ -172,7 +173,7 @@ async function requirePendingRequest(id: number): Promise<Friendship> {
  */
 export async function acceptRequest(id: number, playerId: string): Promise<Friendship> {
   const request = await requirePendingRequest(id);
-  if (request.addresseeId !== playerId) throw forbidden('Only the addressee can accept a request');
+  if (request.addresseeId !== playerId) throw forbidden(t('forbidden.addressee_only'));
   const [accepted] = await db
     .update(friendships)
     .set({ status: 'accepted', updatedAt: new Date() })
@@ -191,7 +192,7 @@ export async function acceptRequest(id: number, playerId: string): Promise<Frien
 export async function declineRequest(id: number, playerId: string): Promise<void> {
   const request = await requirePendingRequest(id);
   if (request.addresseeId !== playerId && request.requesterId !== playerId) {
-    throw forbidden('Not a party to this request');
+    throw forbidden(t('forbidden.not_party'));
   }
   await db.delete(friendships).where(eq(friendships.id, id));
   const type = request.addresseeId === playerId ? 'friend_request_declined' : 'friend_request_cancelled';

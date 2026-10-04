@@ -4,6 +4,7 @@
  * opaque `corporationId` shared with the Social service.
  */
 import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -84,7 +85,7 @@ export async function requireCorporationRole(
 ): Promise<CorporationMember> {
   const member = await requireCorporationMember(corporationId, playerId);
   if (!hasCorporationRole(member, min)) {
-    throw new HttpError(403, 'FORBIDDEN', `Requires the ${min} role in this corporation`);
+    throw new HttpError(403, 'FORBIDDEN', t('corp.requires_role', { min }));
   }
   return member;
 }

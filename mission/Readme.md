@@ -68,6 +68,19 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 
 **Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery, transport, generic, mining, farming, crafting, construction, trading, exploration, salvage, combat, reception` — enum élargie en une ligne de code), un émetteur (`issuerType` + `issuerId`), une `visibility` (`public` | `corporation`), un statut, une liste **`rewards[]`**, une liste **`prerequisites[]`** et des **objectifs**. Trois colonnes pilotent le partage : `groupId`, `groupClaimable` (limitée à **1 groupe**), `isEvent`. **La spec est immuable après création** (objectifs, prérequis, récompenses, capacité figés — seul `title`, `description`, `expiresAt`, `isEvent` reste patchable) : le séquestre est pris dessus à la création.
 
+**Catégories contraignantes** : chaque kind (objectif **et** prérequis) déclare ses catégories autorisées (`categories` dans `src/kinds/`), exposées par `GET /api/missions/kinds` — un builder filtre ainsi les kinds selon la catégorie choisie. La validation à la création rejette une incohérence (`400 OBJECTIVE_NOT_IN_CATEGORY` / `PREREQ_NOT_IN_CATEGORY`). Échappatoires : les kinds `'all'` (`custom`, `manual`, `min_reputation`, `corporation_member`) et la catégorie **`generic`** (bypass total). Matrice (hors `'all'`) :
+
+| kind | catégories |
+|---|---|
+| `deliver_material` | delivery, transport, mining, farming, crafting, trading, salvage, reception |
+| `deliver_items` | delivery, trading, reception, mining, farming, salvage |
+| `transport` | transport, delivery, trading, reception |
+| `visit` | exploration, combat, construction, salvage, delivery, reception |
+| `owns_items` (objectif) | mining, farming, crafting, construction, trading, salvage |
+| `has_credits` (objectif) | trading, reception, delivery |
+| `owns_items` (prérequis) | mining, farming, crafting, construction, trading, salvage, delivery |
+| `has_credits` (prérequis) | trading, delivery, construction, reception, mining, farming, crafting |
+
 **Kinds d'objectifs** (registre `src/kinds/objectives/`) — 3 modes d'évaluation :
 - **`game`** — le serveur de jeu soumet la quantité (`reportProgress`) : `deliver_material`, `transport`, `visit`, `custom` ;
 - **`service`** — le service mesure contre l'état des services via **`POST /:missionId/verify`** : `owns_items` (instantané inventaire, peut régresser), `has_credits` (instantané solde), `deliver_items` (transfère les biens disponibles vers `to` **au moment du verify** — livraison terminale, irréversible) ;
@@ -101,6 +114,8 @@ Filtrée au **listing** (SQL, joueur sans position = ne voit que les globales ; 
 Spécification complète (schémas, codes d'erreur) : [`openapi.yaml`](openapi.yaml).
 
 Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les messages d'erreur (codes et texte dynamique) sont rendus dans la langue demandée ; les messages de validation zod restent en anglais. Les identifiants techniques (codes, kinds, champs, `{params}`) ne sont jamais traduits.
 
 ### Public
 | Méthode | Route | Description |

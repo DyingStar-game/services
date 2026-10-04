@@ -4,6 +4,7 @@
  * a trusted caller (game server, market, mission) reports that the exchange happened.
  */
 import { and, eq, sql } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import {
@@ -58,9 +59,9 @@ async function ensureGoodKind(tx: Tx, goodType: string, kind: GoodKind): Promise
     .returning();
   if (created) return created.kind;
   const [existing] = await tx.select().from(goodTypes).where(eq(goodTypes.goodType, goodType)).limit(1);
-  if (!existing) throw new HttpError(500, 'INTERNAL_ERROR', `Failed to register good type ${goodType}`);
+  if (!existing) throw new HttpError(500, 'INTERNAL_ERROR', t('internal.good_type', { goodType }));
   if (existing.kind !== kind) {
-    throw conflict(`Good type "${goodType}" is registered as ${existing.kind}, not ${kind}`);
+    throw conflict(t('conflict.good_kind', { goodType, registered: existing.kind, expected: kind }));
   }
   return existing.kind;
 }
@@ -178,7 +179,7 @@ export async function getStack(holder: Holder, goodType: string): Promise<StackV
  * @returns Updated stack.
  */
 export async function creditStack(holder: Holder, goodType: string, quantity: number): Promise<InventoryStack> {
-  if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', 'Quantity must be positive');
+  if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', t('quantity.positive'));
   return db.transaction(async (tx) => {
     await ensureGoodKind(tx, goodType, 'stack');
     const [row] = await tx
@@ -202,7 +203,7 @@ export async function creditStack(holder: Holder, goodType: string, quantity: nu
  * @throws 409 when the available quantity is insufficient.
  */
 export async function debitStack(holder: Holder, goodType: string, quantity: number): Promise<InventoryStack> {
-  if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', 'Quantity must be positive');
+  if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', t('quantity.positive'));
   return db.transaction(async (tx) => {
     const [stack] = await tx
       .select()
@@ -215,10 +216,10 @@ export async function debitStack(holder: Holder, goodType: string, quantity: num
         ),
       )
       .for('update');
-    if (!stack) throw notFound(`No stack of ${goodType} for this holder`);
+    if (!stack) throw notFound(t('not_found.stack', { id: goodType }));
     const held = await heldQuantity(tx, holder, goodType);
     if (stack.quantity - held < quantity) {
-      throw new HttpError(409, 'INSUFFICIENT_GOODS', `Only ${stack.quantity - held} ${goodType} available`);
+      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available: stack.quantity - held, goodType }));
     }
     const [row] = await tx
       .update(inventoryStacks)
@@ -260,7 +261,7 @@ export async function registerInstance(
       .limit(1);
     if (existing) {
       if (existing.holderType !== holder.holderType || existing.holderId !== holder.holderId) {
-        throw conflict(`Instance ${instanceId} already belongs to another holder`);
+        throw conflict(t('conflict.instance_other', { id: instanceId }));
       }
       return existing;
     }
@@ -295,7 +296,7 @@ export async function setInstanceStatus(
       ),
     )
     .returning();
-  if (!row) throw notFound(`Instance ${instanceId} not owned by this holder`);
+  if (!row) throw notFound(t('not_found.instance_holder', { id: instanceId }));
   return row;
 }
 
@@ -338,9 +339,9 @@ export async function createHold(
           ),
         )
         .limit(1);
-      if (!instance) throw notFound(`Instance ${input.instanceId} not owned by this holder`);
+      if (!instance) throw notFound(t('not_found.instance_holder', { id: input.instanceId }));
       if (await isInstanceHeld(tx, input.instanceId)) {
-        throw conflict(`Instance ${input.instanceId} is already held`);
+        throw conflict(t('conflict.instance_already_held', { id: input.instanceId }));
       }
       const [row] = await tx
         .insert(inventoryHolds)
@@ -360,7 +361,7 @@ export async function createHold(
     }
 
     const quantity = input.quantity ?? 0;
-    if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', 'quantity must be positive for stack holds');
+    if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', t('quantity.stack_positive'));
     const [stack] = await tx
       .select()
       .from(inventoryStacks)
@@ -372,10 +373,10 @@ export async function createHold(
         ),
       )
       .for('update');
-    if (!stack) throw notFound(`No stack of ${input.goodType} for this holder`);
+    if (!stack) throw notFound(t('not_found.stack', { id: input.goodType }));
     const held = await heldQuantity(tx, holder, input.goodType);
     if (stack.quantity - held < quantity) {
-      throw new HttpError(409, 'INSUFFICIENT_GOODS', `Only ${stack.quantity - held} ${input.goodType} available`);
+      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available: stack.quantity - held, goodType: input.goodType }));
     }
     const [row] = await tx
       .insert(inventoryHolds)
@@ -397,8 +398,8 @@ export async function createHold(
 /** Fetches a hold or throws 404. */
 async function requireHold(tx: Tx, holdId: string): Promise<InventoryHold> {
   const [hold] = await tx.select().from(inventoryHolds).where(eq(inventoryHolds.id, holdId)).limit(1);
-  if (!hold) throw notFound(`Hold ${holdId} not found`);
-  if (hold.status !== 'active') throw conflict(`Hold ${holdId} is ${hold.status}`);
+  if (!hold) throw notFound(t('not_found.hold', { id: holdId }));
+  if (hold.status !== 'active') throw conflict(t('conflict.hold_state', { id: holdId, status: hold.status }));
   return hold;
 }
 
@@ -447,7 +448,7 @@ export async function consumeHold(
           ),
         )
         .returning();
-      if (!instance) throw notFound(`Instance ${hold.instanceId} not owned by the hold holder`);
+      if (!instance) throw notFound(t('not_found.instance_hold', { id: hold.instanceId ?? '' }));
       await tx
         .update(inventoryHolds)
         .set({ status: 'consumed', updatedAt: new Date() })
@@ -467,7 +468,7 @@ export async function consumeHold(
         ),
       )
       .returning();
-    if (!stack) throw new HttpError(409, 'INSUFFICIENT_GOODS', 'Held goods are no longer available');
+    if (!stack) throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.held_gone'));
 
     const [toStack] = await tx
       .insert(inventoryStacks)
@@ -497,7 +498,7 @@ export async function transferStack(
   goodType: string,
   quantity: number,
 ): Promise<InventoryStack> {
-  if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', 'Quantity must be positive');
+  if (quantity <= 0) throw new HttpError(400, 'INVALID_QUANTITY', t('quantity.positive'));
   return db.transaction(async (tx) => {
     await ensureGoodKind(tx, goodType, 'stack');
     const [stack] = await tx
@@ -511,10 +512,10 @@ export async function transferStack(
         ),
       )
       .for('update');
-    if (!stack) throw notFound(`No stack of ${goodType} for the source holder`);
+    if (!stack) throw notFound(t('not_found.stack_source', { id: goodType }));
     const held = await heldQuantity(tx, from, goodType);
     if (stack.quantity - held < quantity) {
-      throw new HttpError(409, 'INSUFFICIENT_GOODS', `Only ${stack.quantity - held} ${goodType} available`);
+      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available: stack.quantity - held, goodType }));
     }
     await tx
       .update(inventoryStacks)
@@ -548,7 +549,7 @@ export async function transferStack(
 export async function transferInstance(from: Holder, to: Holder, instanceId: string): Promise<InventoryInstance> {
   return db.transaction(async (tx) => {
     if (await isInstanceHeld(tx, instanceId)) {
-      throw conflict(`Instance ${instanceId} is held`);
+      throw conflict(t('conflict.instance_is_held', { id: instanceId }));
     }
     const [instance] = await tx
       .update(inventoryInstances)
@@ -561,7 +562,7 @@ export async function transferInstance(from: Holder, to: Holder, instanceId: str
         ),
       )
       .returning();
-    if (!instance) throw notFound(`Instance ${instanceId} not owned by the source holder`);
+    if (!instance) throw notFound(t('not_found.instance_source', { id: instanceId }));
     return instance;
   });
 }

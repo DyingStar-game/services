@@ -6,6 +6,8 @@ export class HttpError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    /** Interpolation params for the localized (fr) catalog entry of `code`. */
+    public readonly params?: Record<string, string | number>,
   ) {
     super(message);
     this.name = 'HttpError';
