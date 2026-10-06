@@ -1,6 +1,6 @@
 /**
- * Outbound client for the Social service internal API. The market uses it to authorize
- * corporation orders (membership is authoritative in Social).
+ * Outbound client for the Social service internal API: the central ACL
+ * (`POST /api/internal/authorize`) that decides who may trade for a corporation.
  */
 import { env } from '../config/env.js';
 import { currentLang } from '../i18n/index.js';
@@ -55,21 +55,43 @@ export function isSocialConfigured(): boolean {
   return Boolean(env.social.apiUrl && (env.social.serviceClientSecret || env.social.internalApiKey));
 }
 
+// ── Central authorization (Social is the policy decision point) ─────────────
+
+/** Why Social refused an action. */
+export type AuthorizeReason = 'allowed' | 'not_member' | 'missing_permission';
+
+/** Outcome of `POST /api/internal/authorize` — always a result, never an HTTP error. */
+export interface AuthorizeResult {
+  allowed: boolean;
+  reason: AuthorizeReason;
+  /** Rank/office name held, or null when the player is not a member. */
+  role: string | null;
+  /** True when the rank is the CEO / the office is the head. */
+  leader: boolean;
+  permissions: string[];
+}
+
 /**
- * Whether a player is a member of a corporation (delegated to Social).
- * @param playerId - Player id.
- * @param corporationId - Corporation id.
- * @returns True when the player belongs to that corporation.
+ * Asks Social whether a player holds an action on an organisation. The market never
+ * interprets permissions itself: it maps `reason` onto its own error codes.
+ * @param input - Holder, player and catalogued/free action.
+ * @returns The decision.
  */
-export async function isCorporationMember(playerId: string, corporationId: string): Promise<boolean> {
+export async function authorizeAction(input: {
+  holderType: 'corporation' | 'political';
+  holderId: string;
+  playerId: string;
+  action: string;
+}): Promise<AuthorizeResult> {
   if (!env.social.apiUrl) {
     throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
   }
-  const url = `${env.social.apiUrl}/api/internal/players/${playerId}/corporation?corporationId=${encodeURIComponent(corporationId)}`;
-  const res = await fetch(url, { headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) } });
-  if (res.ok) {
-    return (await res.json()) !== null;
-  }
+  const res = await fetch(`${env.social.apiUrl}/api/internal/authorize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
+    body: JSON.stringify(input),
+  });
+  if (res.ok) return (await res.json()) as AuthorizeResult;
   const text = await res.text().catch(() => '');
   throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`, { status: res.status, body: text });
 }

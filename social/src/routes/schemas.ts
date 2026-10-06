@@ -4,22 +4,47 @@
 import { z } from 'zod';
 
 import {
-  CORPORATION_PERMISSIONS,
   CORPORATION_RECRUITMENT_MODES,
   ENTITY_TYPES,
   ESCALATION_LEVELS,
   GROUP_MAX_MEMBERS,
   GROUP_MIN_MEMBERS,
   POLITICAL_ENTITY_TYPES,
-  POLITICAL_PERMISSIONS,
   PRESENCE_STATUSES,
   REPORT_REASONS,
   REPORT_STATUSES,
   REPORT_TARGET_TYPES,
   SANCTION_TYPES,
 } from '../db/schema/index.js';
+import { ACTION_MAX_LENGTH, ACTION_RE } from '../services/permissionCatalog.js';
 
 export const uuidSchema = z.string().uuid();
+
+/**
+ * Any organisation action: catalogued (`mission:treasury:commit`) or free (exact match
+ * only). Deliberately not an enum — ranks and offices store free actions too.
+ */
+export const actionSchema = z.string().trim().min(1).max(ACTION_MAX_LENGTH).regex(ACTION_RE, 'Invalid action');
+
+/** Holder kinds accepted by the authorization endpoint. */
+export const ORG_KINDS = ['corporation', 'political'] as const;
+
+const authorizeCheck = z.object({
+  holderType: z.enum(ORG_KINDS),
+  holderId: uuidSchema,
+  playerId: uuidSchema,
+  action: actionSchema,
+});
+
+/**
+ * `POST /internal/authorize`: a single check, or `{ checks: [...] }` for a batch.
+ * Answers 200 in both shapes (denials are results, never errors).
+ */
+export const authorizeBody = z.union([
+  authorizeCheck,
+  z.object({ checks: z.array(authorizeCheck).min(1).max(50) }),
+]);
+
 
 export const playerIdParams = z.object({ playerId: uuidSchema });
 
@@ -169,7 +194,7 @@ export const corporationPatchBody = z
 export const rankBody = z.object({
   name: z.string().trim().min(1).max(32),
   priority: z.number().int().min(0).max(99),
-  permissions: z.array(z.enum(CORPORATION_PERMISSIONS)).default([]),
+  permissions: z.array(actionSchema).default([]),
   isDefault: z.boolean().optional(),
 });
 
@@ -178,7 +203,7 @@ export const rankPatchBody = z
   .object({
     name: z.string().trim().min(1).max(32).optional(),
     priority: z.number().int().min(0).max(99).optional(),
-    permissions: z.array(z.enum(CORPORATION_PERMISSIONS)).optional(),
+    permissions: z.array(actionSchema).optional(),
     isDefault: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
@@ -264,7 +289,7 @@ export const politicalMemberOfficeBody = z.object({ officeId: z.number().int().p
 export const politicalOfficeBody = z.object({
   name: z.string().trim().min(1).max(48),
   priority: z.number().int().min(0).max(99),
-  permissions: z.array(z.enum(POLITICAL_PERMISSIONS)).default([]),
+  permissions: z.array(actionSchema).default([]),
   isDefault: z.boolean().optional(),
 });
 
@@ -273,7 +298,7 @@ export const politicalOfficePatchBody = z
   .object({
     name: z.string().trim().min(1).max(48).optional(),
     priority: z.number().int().min(0).max(99).optional(),
-    permissions: z.array(z.enum(POLITICAL_PERMISSIONS)).optional(),
+    permissions: z.array(actionSchema).optional(),
     isDefault: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });

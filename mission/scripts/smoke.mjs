@@ -18,6 +18,10 @@
  * service itself needs SOCIAL_API_URL + credentials to read presence):
  *   BASE=... KEY=... SOCIAL_BASE=http://host.docker.internal:3001 node scripts/smoke.mjs
  *
+ * To exercise `poi` zones against a running Inventory service (the mission service needs
+ * INVENTORY_API_URL + credentials to resolve POI geometry):
+ *   BASE=... KEY=... INVENTORY_BASE=http://host.docker.internal:3002 node scripts/smoke.mjs
+ *
  * Exits with code 1 as soon as one assertion failed.
  */
 
@@ -27,6 +31,10 @@ const ECONOMY_BASE = process.env.ECONOMY_BASE ?? '';
 const ECONOMY_KEY = process.env.ECONOMY_KEY ?? KEY;
 const SOCIAL_BASE = process.env.SOCIAL_BASE ?? '';
 const SOCIAL_KEY = process.env.SOCIAL_KEY ?? KEY;
+
+// POI zones resolve their geometry through the Inventory service.
+const INVENTORY_BASE = process.env.INVENTORY_BASE ?? '';
+const INVENTORY_KEY = process.env.INVENTORY_KEY ?? KEY;
 
 const KC_BASE = process.env.KC_BASE ?? '';
 const KC_REALM = process.env.KC_REALM ?? 'dyingstar';
@@ -403,6 +411,9 @@ let zSystemId;
 let zSceneId;
 let zAreaId;
 {
+  const inventoryAuth = { 'X-Internal-Key': INVENTORY_KEY };
+  const SYSTEM_ID = '00000000-0000-4000-8000-000000000001';
+
   const mk = async (title, zones) => {
     const created = await req(
       'POST',
@@ -412,12 +423,54 @@ let zAreaId;
     );
     return created.json.mission?.id;
   };
-  zSystemId = await mk('Zone système', [{ kind: 'system', system: 'tarsis' }]);
-  zSceneId = await mk('Zone scène', [{ kind: 'scene', system: 'tarsis', scene: 'tarsis_1/new-paris' }]);
-  zAreaId = await mk('Zone area', [{ kind: 'area', system: 'tarsis', center: { x: 0, y: 0, z: 0 }, radiusM: 500 }]);
-  check('zoned missions created', [zSystemId, zSceneId, zAreaId].every(Boolean), true);
 
-  const zoned = [zSystemId, zSceneId, zAreaId];
+  zSystemId = await mk('Zone système', [{ kind: 'system', system: 'tarsis' }]);
+
+  // The `poi` kinds need a running Inventory: mission resolves their geometry through
+  // INVENTORY_API_URL (a missing POI zone never matches, and creation validation fails
+  // open only when Inventory itself is unreachable).
+  if (INVENTORY_BASE) {
+    const scenePoi = await req(
+      'POST',
+      '/api/internal/pois',
+      { owner: { type: 'system', id: SYSTEM_ID }, name: 'smoke zone scene', system: 'tarsis', scene: 'tarsis_1/new-paris', x: 0, y: 0, z: 0 },
+      inventoryAuth,
+      INVENTORY_BASE,
+    );
+    const areaPoi = await req(
+      'POST',
+      '/api/internal/pois',
+      { owner: { type: 'system', id: SYSTEM_ID }, name: 'smoke zone area', system: 'tarsis', x: 100, y: 0, z: 0, radiusM: 500 },
+      inventoryAuth,
+      INVENTORY_BASE,
+    );
+    check('zone POIs created', [scenePoi.status, areaPoi.status], [201, 201]);
+
+    zSceneId = await mk('Zone poi scène', [{ kind: 'poi', poiId: scenePoi.json.id }]);
+    zAreaId = await mk('Zone poi aire', [{ kind: 'poi', poiId: areaPoi.json.id, radiusM: 500 }]);
+    check('zoned missions created', [zSystemId, zSceneId, zAreaId].every(Boolean), true);
+
+    const bogus = await req(
+      'POST',
+      '/api/internal/missions',
+      { title: 'Zone poi fantôme', zones: [{ kind: 'poi', poiId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], objectives: [{ type: 'visit', title: 'x' }] },
+      internal,
+    );
+    check('mission on an unknown POI', [bogus.status, bogus.json.error], [400, 'POI_NOT_FOUND']);
+
+    const legacy = await req(
+      'POST',
+      '/api/internal/missions',
+      { title: 'Zone legacy', zones: [{ kind: 'scene', system: 'tarsis', scene: 'tarsis_1/new-paris' }], objectives: [{ type: 'visit', title: 'x' }] },
+      internal,
+    );
+    check('legacy scene zone rejected', [legacy.status, legacy.json.error], [400, 'VALIDATION_ERROR']);
+  } else {
+    console.log('  skip POI zones (set INVENTORY_BASE + INVENTORY_KEY, mission needs INVENTORY_API_URL)');
+    check('zoned missions created', Boolean(zSystemId), true);
+  }
+
+  const zoned = [zSystemId, zSceneId, zAreaId].filter(Boolean);
   const listed = async (playerId, name) =>
     (await req('GET', '/api/missions', undefined, asPlayer(playerId, name))).json.missions ?? [];
 
@@ -464,7 +517,7 @@ let zAreaId;
       true,
     );
 
-    const rejected = await req('POST', `/api/missions/${zSceneId}/accept`, undefined, asPlayer(D, 'dave'));
+    const rejected = await req('POST', `/api/missions/${zSceneId ?? zSystemId}/accept`, undefined, asPlayer(D, 'dave'));
     check('accept outside the zone', [rejected.status, rejected.json.error], [403, 'OUT_OF_ZONE']);
 
     await putPresence(D, {
@@ -733,6 +786,26 @@ if (ECONOMY_BASE && SOCIAL_BASE) {
     [201, 'held', 'corporation'],
   );
   check('corporation treasury debited', 5000 - (await treasury('corporations', corpId)), 500);
+
+  // ── Big event flag: `mission:event:manage` decided by Social (A is the CEO) ─
+  const eventOn = await req(
+    'POST',
+    `/api/missions/${corpMission.json.mission.id}/event`,
+    { enabled: true, maxAssignees: 500 },
+    asPlayer(A, 'alice'),
+  );
+  check('CEO flags the mission as an event', [eventOn.status, eventOn.json.isEvent], [200, true]);
+  const eventDenied = await req(
+    'POST',
+    `/api/missions/${corpMission.json.mission.id}/event`,
+    { enabled: false },
+    asPlayer(B, 'bob'),
+  );
+  check(
+    'non-member cannot change the event flag',
+    [eventDenied.status, eventDenied.json.error],
+    [403, 'NOT_CORPORATION_MEMBER'],
+  );
 
   const outsider = await req(
     'POST',

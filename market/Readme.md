@@ -37,7 +37,7 @@ routes joueur sans Keycloak : `AUTH_DEV_BYPASS=true` + `X-Player-Id` / `X-Player
 | `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` sans JWT (dev uniquement) |
 | `INVENTORY_API_URL`, `INVENTORY_SERVICE_CLIENT_ID/SECRET`, `INVENTORY_INTERNAL_API_KEY` | Intégration inventaire (transferts de biens) |
 | `ECONOMY_API_URL`, `ECONOMY_SERVICE_CLIENT_ID/SECRET`, `ECONOMY_INTERNAL_API_KEY` | Intégration économie (débit/credit crédits) |
-| `SOCIAL_API_URL`, `SOCIAL_SERVICE_CLIENT_ID/SECRET`, `SOCIAL_INTERNAL_API_KEY` | Intégration sociale (autorisation corporation ; vide = désactivé) |
+| `SOCIAL_API_URL`, `SOCIAL_SERVICE_CLIENT_ID/SECRET`, `SOCIAL_INTERNAL_API_KEY` | Intégration sociale (ACL `market:trade` ; vide = désactivé) |
 | `MARKET_ORDER_TTL_HOURS` | Durée de vie par défaut d'un ordre (0 = jamais) |
 | `MARKET_DEFAULT_LIMIT` | Taille de page par défaut |
 
@@ -83,7 +83,9 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/market/trades?status=&limit=` | Mes trades (acheteur ou vendeur) |
 
 `corporationId` (optionnel) fait trader depuis la trésorerie d'une corporation dont
-l'appelant est membre (vérifié via `social`).
+l'appelant détient l'action **`market:trade`** — accordée à tout membre (`defaultMember`),
+décidée par [`social`](../social/Readme.md) via `POST /api/internal/authorize`
+(`403 NOT_CORPORATION_MEMBER` sinon ; Social indisponible → `503` sauf `AUTH_DEV_BYPASS=true`).
 
 ### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
 | Méthode | Route | Rôle requis | Description |
@@ -125,7 +127,7 @@ Déploiement : `docker/Dockerfile` (image standalone, migrations au démarrage).
 - [x] Carnet d'ordres achat/vente avec matching immédiat au meilleur prix
 - [x] Demandes/contrats avec satisfaction directe
 - [x] Règlement biens (inventory) + argent (economie), idempotent et rejouable
-- [x] Trading pour le compte d'une corporation (autorisation `social`)
+- [x] Trading pour le compte d'une corporation (ACL `market:trade` via `social`)
 - [ ] Escrow des ordres au repos (réserver les biens/crédits dès la pose)
 - [ ] Historique de prix / OHLC par type de bien
 - [ ] Frais de marché et commissions dynamiques

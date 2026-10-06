@@ -49,7 +49,7 @@ curl localhost:3000/api/internal/players/$ID/wallet -H "Authorization: Bearer $T
 | `ECONOMY_TRANSFER_TAX_CEILING` | Plafond absolu de la taxe par transfert (0 = aucun) |
 | `ECONOMY_MIN_TRANSFER` / `ECONOMY_MAX_TRANSFER` | Bornes d'un transfert (0 = pas de plafond) |
 | `ECONOMY_TAX_VAULT_UUID` | Compte système réservé qui encaisse les taxes automatiques |
-| `SOCIAL_API_URL` | URL interne du service social (résolution des pseudos pour l'admin ; vide = désactivé) |
+| `SOCIAL_API_URL` | URL interne du service social (résolution des pseudos pour l'admin **+ ACL** `economie:treasury:manage` ; vide = désactivé) |
 | `SOCIAL_SERVICE_CLIENT_ID` / `SOCIAL_SERVICE_CLIENT_SECRET` | Compte de service Keycloak pour appeler social (`client_credentials`) |
 | `SOCIAL_INTERNAL_API_KEY` | Repli dev : clé partagée envoyée en `X-Internal-Key` si aucun secret n'est défini |
 
@@ -82,16 +82,18 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/corporations/:corporationId/wallet` | Trésorerie (membre) |
 | GET | `/api/corporations/:corporationId/wallet/transactions?limit=` | Journal de trésorerie (membre) |
 | GET | `/api/corporations/:corporationId/members` | Membres et rôles (membre) |
-| GET | `/api/corporations/:corporationId/report?from=&to=` | Bilan financier par devise et par type (leader/trésorier) |
+| GET | `/api/corporations/:corporationId/report?from=&to=` | Bilan financier par devise et par type (`economie:treasury:manage`) |
 | POST | `/api/corporations/:corporationId/donations` `{amount, memo?}` | Don d'un membre (respecte `allowDonations`, taxe interne `taxRateBps`) |
-| GET | `/api/corporations/:corporationId/salaries` | Salaires par rôle + overrides par membre (leader/trésorier) |
-| PUT | `/api/corporations/:corporationId/salaries/roles/:role` `{amount, currency?, enabled?}` | Définir le salaire par défaut d'un rôle (leader/trésorier) |
-| PUT | `/api/corporations/:corporationId/salaries/members/:playerId` `{amount, currency?, enabled?}` | Définir un override de salaire pour un membre (leader/trésorier) |
+| GET | `/api/corporations/:corporationId/salaries` | Salaires par rôle + overrides par membre (`economie:treasury:manage`) |
+| PUT | `/api/corporations/:corporationId/salaries/roles/:role` `{amount, currency?, enabled?}` | Définir le salaire par défaut d'un rôle (`economie:treasury:manage`) |
+| PUT | `/api/corporations/:corporationId/salaries/members/:playerId` `{amount, currency?, enabled?}` | Définir un override de salaire pour un membre (`economie:treasury:manage`) |
 | DELETE | `/api/corporations/:corporationId/salaries/members/:playerId` | Retirer un override (retour au salaire du rôle) |
-| POST | `/api/corporations/:corporationId/payroll?currency=` | Verser les salaires à tous les membres éligibles (leader/trésorier, atomique) |
-| POST | `/api/corporations/:corporationId/members/:playerId/prime` `{amount, currency?, memo?}` | Verser une prime ponctuelle à un membre (leader/trésorier) |
+| POST | `/api/corporations/:corporationId/payroll?currency=` | Verser les salaires à tous les membres éligibles (`economie:treasury:manage`, atomique) |
+| POST | `/api/corporations/:corporationId/members/:playerId/prime` `{amount, currency?, memo?}` | Verser une prime ponctuelle à un membre (`economie:treasury:manage`) |
 
-Rôles de trésorerie : `leader` > `treasurer` > `member`. Un membre peut être un joueur ou un PNJ (`holderType`) ; les salaires et primes sont versés sur le portefeuille correspondant.
+Rôles de trésorerie : `leader` > `treasurer` > `member`. Un membre peut être un joueur ou un PNJ (`holderType`) ; les salaires et primes sont versés sur le portefeuille correspondant. Ces rôles restent la source locale des **paliers de salaire** et du `holderType`.
+
+**Qui opère la trésorerie** est décidé par [`social`](../social/Readme.md) : les 8 routes ci-dessus appellent `requireTreasuryPermission` → `POST /api/internal/authorize` avec l'action **`economie:treasury:manage`** (`403 NOT_CORPORATION_MEMBER` si non-membre, `403 FORBIDDEN` sinon). Cette action n'a **aucun `satisfiedBy`** : seul le CEO (ou un grade à qui elle est accordée explicitement) passe — voir `KEYCLOAK_SOCIAL_AUTHORIZE.md` §4 pour le seed des grades. Social non configuré → `503 SOCIAL_NOT_CONFIGURED` (sauf `AUTH_DEV_BYPASS=true`, où le joueur authentifié est cru).
 
 ### Politique — trésorerie, taxes & émission (`Authorization: Bearer`)
 Chaque entité politique (commune, agglomération, département, région, pays, fédération — possédée par le service [`social`](../social/Readme.md)) dispose d'une **trésorerie** (compte `political`). La fiscalité fonctionne **comme un loyer** : une **assiette** calcule et **inscrit une dette**, puis le **redevable** déclenche le paiement. La **création monétaire** est réservée aux pays/fédérations via le serveur de jeu.
@@ -101,7 +103,7 @@ Chaque entité politique (commune, agglomération, département, région, pays, 
 | GET | `/api/me/taxes` | Mes dettes fiscales (joueur) |
 | POST | `/api/me/taxes/pay` `{currency?, entityId?}` | Régler mes dettes échues payables (partiel toléré) |
 | GET | `/api/corporations/:corporationId/taxes` | Dettes fiscales de la corporation (membre) |
-| POST | `/api/corporations/:corporationId/taxes/pay` `{currency?, entityId?}` | Régler les dettes de la corporation (trésorier+) |
+| POST | `/api/corporations/:corporationId/taxes/pay` `{currency?, entityId?}` | Régler les dettes de la corporation (`economie:treasury:manage`) |
 
 **Assiette** (`POST /api/internal/politics/:entityId/taxes/assess`) : taxe corporative = `corporateTaxBps` × solde de trésorerie des corporations **rattachées** (`politicalEntityId`) ; impôt citoyen = `incomeTaxBps` × revenus (`salary`, `prime`, `mission_reward`) reçus par les membres depuis la dernière assiette. Le paiement débite le portefeuille du redevable et crédite la trésorerie politique (`type: tax`). Solde insuffisant → les dettes payables sont réglées, les autres restent dues (`409 INSUFFICIENT_FUNDS` si aucune ne l'est).
 
@@ -164,7 +166,7 @@ src/
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
-  services/         logique métier (une fonction exportée par cas d'usage) ; social.client.ts (résolution des pseudos)
+  services/         logique métier (une fonction exportée par cas d'usage) ; social.client.ts (pseudos + `authorizeAction`)
 ```
 
 Déploiement : `docker/Dockerfile` (image standalone, migrations au démarrage), workflows `.github/workflows/build-*-economie.yaml`.
@@ -214,6 +216,7 @@ Ce service est dédié à la partie économique du jeu ; les features ci-dessous
 
 ### API & Intégrations
 - [x] API interne synchronisée avec les serveurs du jeu (transactions, gains, marchés)
+- [x] Droits de trésorerie délégués à l'ACL centralisé (`economie:treasury:manage` via `POST /api/internal/authorize`)
 - [x] Auth service-à-service par comptes de service Keycloak et rôles de capacité (fin des secrets partagés)
 - [~] API publique sécurisée (JWT Keycloak en place ; clés tierces à venir)
 - [ ] Conversion de devises et marché (prix, historique, commissions dynamiques)

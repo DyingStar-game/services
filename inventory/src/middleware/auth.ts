@@ -36,6 +36,7 @@ export const SERVICE_ROLES = {
   transfer: 'inventory:transfer',
   credit: 'inventory:credit',
   corporationManage: 'inventory:corporation:manage',
+  poiManage: 'inventory:poi:manage',
 } as const;
 
 /** Moderation roles, lowest to highest; used by the admin read endpoints. */

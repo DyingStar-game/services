@@ -1,5 +1,5 @@
 /**
- * Corporation inventory reads (`/api/corporations`). Corporation membership is
+ * Corporation inventory & POI reads (`/api/corporations`). Corporation membership is
  * authoritative in the Social service; this service delegates the check.
  */
 import { Router, type IRouter } from 'express';
@@ -10,8 +10,9 @@ import { HttpError } from '../lib/httpError.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { getHolderInventory, getStack } from '../services/inventory.service.js';
+import { getPoiView, listOrgPois, requireOrgRead, requirePoi } from '../services/pois.service.js';
 import { isSocialConfigured, isCorporationMember } from '../services/social.client.js';
-import { corporationParams, corporationStackParams } from './schemas.js';
+import { corporationParams, corporationPoiParams, corporationStackParams } from './schemas.js';
 
 /** Router mounted at `/api/corporations`. */
 export const corporationsRoutes: IRouter = Router();
@@ -57,5 +58,31 @@ corporationsRoutes.get(
       return;
     }
     res.json(stack);
+  }),
+);
+
+/** GET /:corporationId/pois — POIs owned by / granted to the corporation (member only). */
+corporationsRoutes.get(
+  '/:corporationId/pois',
+  validate(corporationParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId } = req.params;
+    await requireCorporationAccess(corporationId, player.id);
+    res.json(await listOrgPois('corporation', corporationId));
+  }),
+);
+
+/** GET /:corporationId/pois/:poiId — One POI of the corporation's scope (member only). */
+corporationsRoutes.get(
+  '/:corporationId/pois/:poiId',
+  validate(corporationPoiParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    const { corporationId } = req.params;
+    await requireCorporationAccess(corporationId, player.id);
+    const poi = await requirePoi(req.params.poiId);
+    await requireOrgRead(poi, 'corporation', corporationId);
+    res.json(await getPoiView(poi.id));
   }),
 );

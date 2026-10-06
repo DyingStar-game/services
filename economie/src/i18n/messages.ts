@@ -37,6 +37,7 @@ export const en = {
   "auth.service_account_token": "Token is not issued to a service account",
   "auth.requires_service_role": "Requires service role {role}",
   "corp.requires_role": "Requires the {min} role in this corporation",
+  "corp.requires_permission": "Requires the {action} permission in this corporation",
 } as const;
 
 /** Keys of the construction-time catalog (typed from the English source). */
@@ -69,6 +70,7 @@ export const fr: Record<MessageKey, string> = {
   "auth.service_account_token": "Le token n'est pas émis pour un compte de service",
   "auth.requires_service_role": "Nécessite le rôle de service {role}",
   "corp.requires_role": "Nécessite le rôle {min} dans cette corporation",
+  "corp.requires_permission": "Nécessite la permission {action} dans cette corporation",
 };
 
 /** French overrides keyed by error code (English remains the thrown message). */

@@ -21,7 +21,7 @@ import {
   type TradeStatus,
 } from '../db/schema/index.js';
 import { HttpError, conflict, notFound } from '../lib/httpError.js';
-import { ensureCorporationMember } from './authorization.js';
+import { ensureCorporationTrade } from './authorization.js';
 import { creditHolder, debitHolder, isEconomyConfigured } from './economy.client.js';
 import { isInventoryConfigured, transferInstance, transferStack, type Holder } from './inventory.client.js';
 
@@ -324,7 +324,7 @@ export async function placeOrder(party: Party, input: PlaceOrderInput): Promise<
   if (input.kind === 'instance' && !input.instanceId) {
     throw new HttpError(400, 'INSTANCE_REQUIRED', 'instanceId is required for an instance sell order');
   }
-  await ensureCorporationMember(party, party.actorId);
+  await ensureCorporationTrade(party, party.actorId);
 
   const [order] = await db
     .insert(marketOrders)
@@ -398,7 +398,7 @@ export async function createDemand(party: Party, input: CreateDemandInput): Prom
     // An instance demand may target a specific instance; without one it targets any instance of the type.
     // We keep it optional and match on type when absent.
   }
-  await ensureCorporationMember(party, party.actorId);
+  await ensureCorporationTrade(party, party.actorId);
   const [demand] = await db
     .insert(marketDemands)
     .values({
@@ -452,7 +452,7 @@ export async function fulfillDemand(demandId: string, seller: Party, unitPrice: 
   if (unitPrice > demand.maxPrice) {
     throw new HttpError(400, 'PRICE_ABOVE_MAX', `Unit price ${unitPrice} exceeds the demand max ${demand.maxPrice}`, { price: unitPrice, max: demand.maxPrice });
   }
-  await ensureCorporationMember(seller, seller.actorId);
+  await ensureCorporationTrade(seller, seller.actorId);
 
   const trade = await createTrade({
     goodType: demand.goodType,

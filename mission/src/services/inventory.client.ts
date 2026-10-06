@@ -140,6 +140,65 @@ export function systemHolder(): Holder {
   return { holderType: 'system', holderId: env.inventory.systemHolderId };
 }
 
+// ── POIs (zone geometry) ─────────────────────────────────────────────────────
+
+/** Geometry of a POI, as needed to match a mission zone (Inventory is authoritative). */
+export interface PoiGeometry {
+  id: string;
+  system: string | null;
+  scene: string | null;
+  x: number;
+  y: number;
+  z: number;
+  radiusM: number | null;
+  [key: string]: unknown;
+}
+
+/** POI geometry cache: listings resolve the same POIs on every request. */
+const POI_TTL_MS = 60_000;
+interface PoiCacheEntry {
+  value: PoiGeometry | null;
+  expiresAt: number;
+}
+const poiCache = new Map<string, PoiCacheEntry>();
+
+/**
+ * Resolves POI geometries through the Inventory internal API (batched, 60 s cache).
+ * Unknown ids are absent from the returned map (a zone on a deleted POI never matches).
+ * @param ids - Distinct POI ids referenced by mission zones.
+ * @returns POI id → geometry, empty when nothing resolves.
+ * @throws 502/503 when Inventory is unreachable — callers treat that as "no geometry".
+ */
+export async function resolvePois(ids: string[]): Promise<Map<string, PoiGeometry>> {
+  const wanted = [...new Set(ids)];
+  const resolved = new Map<string, PoiGeometry>();
+  if (wanted.length === 0) return resolved;
+
+  const now = Date.now();
+  const missing: string[] = [];
+  for (const id of wanted) {
+    const hit = poiCache.get(id);
+    if (hit && hit.expiresAt > now) {
+      if (hit.value) resolved.set(id, hit.value);
+      continue;
+    }
+    missing.push(id);
+  }
+
+  if (missing.length > 0) {
+    const body = await call<{ pois: PoiGeometry[] }>('POST', '/api/internal/pois/resolve', {
+      ids: missing,
+    });
+    const found = new Map(body.pois.map((poi) => [poi.id, poi]));
+    for (const id of missing) {
+      const value = found.get(id) ?? null;
+      poiCache.set(id, { value, expiresAt: Date.now() + POI_TTL_MS });
+      if (value) resolved.set(id, value);
+    }
+  }
+  return resolved;
+}
+
 /** One fungible stack with its reserved and available quantities. */
 export interface StackView {
   goodType: string;

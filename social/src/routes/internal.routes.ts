@@ -10,6 +10,7 @@ import { HttpError } from '../lib/httpError.js';
 import { requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { recordActivity } from '../services/activity.service.js';
+import { authorize, authorizeAll, permissionCatalog } from '../services/authorize.service.js';
 import { recordEncounter } from '../services/encounters.service.js';
 import {
   addNpcCorporationMember,
@@ -49,6 +50,7 @@ import { adjustReputation, rehabilitate } from '../services/reputation.service.j
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
   activityBody,
+  authorizeBody,
   corporationIdParams,
   corporationMemberParams,
   corporationPatchBody,
@@ -485,5 +487,36 @@ internalRoutes.post(
   asyncHandler(async (req, res) => {
     await recordEncounter(req.body.playerId, req.body.otherPlayerId);
     res.status(204).send();
+  }),
+);
+
+// ── Authorization (policy decision point) ───────────────────────────────────
+
+/**
+ * POST /authorize — Does `playerId` hold `action` on `holderType`/`holderId`?
+ * Accepts one check or `{ checks: [...] }` (up to 50) and always answers 200: a refusal
+ * is a result (`allowed: false`, `reason: not_member | missing_permission`), never an
+ * error, so a batch never loses its other answers. Callers map `reason` onto their own
+ * error codes and messages.
+ */
+internalRoutes.post(
+  '/authorize',
+  requireServiceRole(SERVICE_ROLES.authorize),
+  validate(authorizeBody),
+  asyncHandler(async (req, res) => {
+    if (Array.isArray(req.body.checks)) {
+      res.json({ results: await authorizeAll(req.body.checks) });
+      return;
+    }
+    res.json(await authorize(req.body));
+  }),
+);
+
+/** GET /permissions/catalog — Every catalogued action and its rules, localized. */
+internalRoutes.get(
+  '/permissions/catalog',
+  requireServiceRole(SERVICE_ROLES.authorize),
+  asyncHandler(async (_req, res) => {
+    res.json({ actions: permissionCatalog() });
   }),
 );

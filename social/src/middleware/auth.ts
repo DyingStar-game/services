@@ -41,6 +41,7 @@ export const SERVICE_ROLES = {
   politicsWrite: 'social:politics:write',
   sanctionsRead: 'social:sanctions:read',
   reputationWrite: 'social:reputation:write',
+  authorize: 'social:authorize',
 } as const;
 
 /** Moderation roles, lowest to highest; each level implies the ones below. */

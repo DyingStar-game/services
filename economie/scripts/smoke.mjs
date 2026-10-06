@@ -10,6 +10,10 @@
  *   BASE=http://host.docker.internal:3000 KEY=test-internal-key \
  *   DATABASE_URL=postgresql://user:password@host.docker.internal:5432/economie node scripts/smoke.mjs
  *
+ * The treasury ACL is decided by Social (`POST /api/internal/authorize`), so the access
+ * rules below need a running Social service (Economy must have SOCIAL_API_URL set):
+ *   BASE=... KEY=... SOCIAL_BASE=http://host.docker.internal:3001 node scripts/smoke.mjs
+ *
  * Against production-style auth (Keycloak service accounts), provide:
  *   KC_BASE=http://keycloak:8080 KC_CLIENT_ID=svc-game KC_CLIENT_SECRET=... \
  *   KC_MARKET_CLIENT_ID=svc-market KC_MARKET_CLIENT_SECRET=... node scripts/smoke.mjs
@@ -23,6 +27,9 @@ const BASE = process.env.BASE ?? 'http://localhost:3000';
 const KEY = process.env.KEY ?? 'test-internal-key';
 const DATABASE_URL = process.env.DATABASE_URL ?? '';
 const TAX_VAULT = process.env.ECONOMY_TAX_VAULT_UUID ?? '00000000-0000-0000-0000-000000000001';
+/** Central permission decisions live in Social; unset to skip the treasury ACL block. */
+const SOCIAL_BASE = process.env.SOCIAL_BASE ?? '';
+const SOCIAL_KEY = process.env.SOCIAL_KEY ?? KEY;
 
 const KC_BASE = process.env.KC_BASE ?? '';
 const KC_REALM = process.env.KC_REALM ?? 'dyingstar';
@@ -45,6 +52,9 @@ const IDEMPOTENT_CREDIT = 7;
 /** Makes idempotency keys unique per run so the script can be replayed. */
 const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const asPlayer = (id, name = 'alice') => ({ 'X-Player-Id': id, 'X-Player-Name': name });
+const socialAuth = { 'X-Internal-Key': SOCIAL_KEY };
+/** Ticker for the Social fixture corporation (alphanumeric, <= 5 chars). */
+const socialTicker = `E${runId.replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase()}`;
 
 /** Fetches a Keycloak service-account token (client_credentials grant). */
 async function serviceToken(clientId, clientSecret) {
@@ -87,8 +97,8 @@ function check(label, actual, expected) {
 }
 
 /** Calls the API; never throws on 4xx so error responses can be asserted. */
-async function req(method, path, body, headers = {}) {
-  const res = await fetch(BASE + path, {
+async function req(method, path, body, headers = {}, base = BASE) {
+  const res = await fetch(base + path, {
     method,
     headers: { 'Content-Type': 'application/json', ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -159,9 +169,35 @@ for (const id of [A, B, D, E]) {
 if (serviceTokenValue) {
   check('service caller recorded in the ledger', firstCredit.json.transaction.caller, KC_CLIENT_ID);
 }
-await req('PUT', `/api/internal/corporations/${C}/members/${A}`, { role: 'member' }, internal);
-await req('PUT', `/api/internal/corporations/${C}/members/${E}`, { role: 'treasurer' }, internal);
-const settings = await req('PUT', `/api/internal/corporations/${C}/settings`, { taxRateBps: 500, allowDonations: true }, internal);
+// The treasury ACL asks Social who may operate a corporation's treasury, so the fixture
+// corporation must exist there (CEO = A) to be reachable at all. Without Social the local
+// id is kept and every treasury check falls back to the dev bypass.
+let CORP = C;
+if (SOCIAL_BASE) {
+  for (const [id, displayName] of [
+    [A, 'Alice'],
+    [B, 'Bob'],
+    [D, 'Dave'],
+  ]) {
+    const profile = await req('PUT', `/api/internal/players/${id}`, { displayName }, socialAuth, SOCIAL_BASE);
+    check(`social profile ensured for ${displayName}`, profile.status, 200);
+  }
+  const socialCorp = await req(
+    'POST',
+    '/api/internal/corporations',
+    { ceoId: A, name: `Acl ${runId}`, ticker: socialTicker, recruitment: 'open' },
+    socialAuth,
+    SOCIAL_BASE,
+  );
+  check('social corporation created (CEO = A)', [socialCorp.status, socialCorp.json.ceoId], [201, A]);
+  CORP = socialCorp.json.id;
+} else {
+  console.log('  note SOCIAL_BASE unset: the treasury ACL falls back to the dev bypass');
+}
+
+await req('PUT', `/api/internal/corporations/${CORP}/members/${A}`, { role: 'member' }, internal);
+await req('PUT', `/api/internal/corporations/${CORP}/members/${E}`, { role: 'treasurer' }, internal);
+const settings = await req('PUT', `/api/internal/corporations/${CORP}/settings`, { taxRateBps: 500, allowDonations: true }, internal);
 check('corporation settings: taxRateBps 500, donations allowed', [settings.json.taxRateBps, settings.json.allowDonations], [500, true]);
 
 // ── Health and authentication ────────────────────────────────────────────────
@@ -197,7 +233,7 @@ console.log('\n# health and auth');
       });
       check('svc-market can read wallets (has the role)', allowed.status, 200);
 
-      const denied = await req('PUT', `/api/internal/corporations/${C}/settings`, { taxRateBps: 500 }, {
+      const denied = await req('PUT', `/api/internal/corporations/${CORP}/settings`, { taxRateBps: 500 }, {
         Authorization: `Bearer ${marketToken}`,
       });
       check('svc-market cannot manage corporations (missing role)', [denied.status, denied.json.error], [403, 'FORBIDDEN']);
@@ -262,17 +298,17 @@ console.log('\n# donation (tax stays in the corporation)');
   // Scoped with `from` so the assertion holds on a database with older donations.
   const from = new Date(Date.now() - 1000).toISOString();
   const aBefore = await playerBalance(A);
-  const cBefore = await corpBalance(C);
+  const cBefore = await corpBalance(CORP);
 
-  const { status, json } = await req('POST', `/api/corporations/${C}/donations`, { amount: 1000, memo: 'smoke' }, asPlayer(A));
+  const { status, json } = await req('POST', `/api/corporations/${CORP}/donations`, { amount: 1000, memo: 'smoke' }, asPlayer(A));
   check('donation accepted', status, 201);
   check('donation tax is 5%', [json.amount, json.taxAmount], [1000, 50]);
   check('donor debited amount + tax', await playerBalance(A), aBefore - 1050);
-  check('treasury credited amount + tax', await corpBalance(C), cBefore + 1050);
+  check('treasury credited amount + tax', await corpBalance(CORP), cBefore + 1050);
   check('reported receiver balance is truthful', json.toBalance, cBefore + 1050);
   check('tax destination recorded in details', json.transaction.details.taxTo, json.transaction.toAccountId);
 
-  const report = await req('GET', `/api/corporations/${C}/report?from=${from}`, undefined, asPlayer(E));
+  const report = await req('GET', `/api/corporations/${CORP}/report?from=${from}`, undefined, asPlayer(A));
   const donationRow = report.json.byType?.find((r) => r.type === 'donation');
   check('report counts the retained tax as inflow', donationRow?.inflow, 1050);
   check('report total matches the treasury inflow', report.json.totals?.[0]?.inflow, 1050);
@@ -282,48 +318,93 @@ console.log('\n# donation (tax stays in the corporation)');
 
 console.log('\n# donation tax boundaries');
 {
-  await req('PUT', `/api/internal/corporations/${C}/settings`, { taxRateBps: 0 }, internal);
-  const cBefore = await corpBalance(C);
-  const { json } = await req('POST', `/api/corporations/${C}/donations`, { amount: 1000 }, asPlayer(A));
+  await req('PUT', `/api/internal/corporations/${CORP}/settings`, { taxRateBps: 0 }, internal);
+  const cBefore = await corpBalance(CORP);
+  const { json } = await req('POST', `/api/corporations/${CORP}/donations`, { amount: 1000 }, asPlayer(A));
   check('no internal tax', json.taxAmount, 0);
-  check('treasury credited exactly the amount', await corpBalance(C), cBefore + 1000);
+  check('treasury credited exactly the amount', await corpBalance(CORP), cBefore + 1000);
 
-  await req('PUT', `/api/internal/corporations/${C}/settings`, { taxRateBps: 10000 }, internal);
-  const cBefore2 = await corpBalance(C);
-  const full = await req('POST', `/api/corporations/${C}/donations`, { amount: 1000 }, asPlayer(A));
-  check('100% internal tax doubles the treasury', [full.json.taxAmount, await corpBalance(C)], [1000, cBefore2 + 2000]);
+  await req('PUT', `/api/internal/corporations/${CORP}/settings`, { taxRateBps: 10000 }, internal);
+  const cBefore2 = await corpBalance(CORP);
+  const full = await req('POST', `/api/corporations/${CORP}/donations`, { amount: 1000 }, asPlayer(A));
+  check('100% internal tax doubles the treasury', [full.json.taxAmount, await corpBalance(CORP)], [1000, cBefore2 + 2000]);
 
-  await req('PUT', `/api/internal/corporations/${C}/settings`, { taxRateBps: 500 }, internal);
+  await req('PUT', `/api/internal/corporations/${CORP}/settings`, { taxRateBps: 500 }, internal);
 }
 
 // ── Donation policy and membership ───────────────────────────────────────────
 
 console.log('\n# donation access rules');
 {
-  await req('PUT', `/api/internal/corporations/${C}/settings`, { allowDonations: false }, internal);
-  const disabled = await req('POST', `/api/corporations/${C}/donations`, { amount: 100 }, asPlayer(A));
+  await req('PUT', `/api/internal/corporations/${CORP}/settings`, { allowDonations: false }, internal);
+  const disabled = await req('POST', `/api/corporations/${CORP}/donations`, { amount: 100 }, asPlayer(A));
   check('donations disabled', [disabled.status, disabled.json.error], [403, 'DONATIONS_DISABLED']);
 
-  const outsider = await req('POST', `/api/corporations/${C}/donations`, { amount: 100 }, asPlayer(D, 'dave'));
+  const outsider = await req('POST', `/api/corporations/${CORP}/donations`, { amount: 100 }, asPlayer(D, 'dave'));
   check('donation by a non-member', [outsider.status, outsider.json.error], [403, 'NOT_CORPORATION_MEMBER']);
 
-  const memberReport = await req('GET', `/api/corporations/${C}/report`, undefined, asPlayer(A));
+  await req('PUT', `/api/internal/corporations/${CORP}/settings`, { allowDonations: true }, internal);
+}
+
+// ── Treasury ACL: `economie:treasury:manage` is decided by Social ───────────
+
+console.log('\n# treasury ACL (central permission decision in Social)');
+if (SOCIAL_BASE) {
+  const report = (playerId, name) => req('GET', `/api/corporations/${CORP}/report`, undefined, asPlayer(playerId, name));
+
+  // A is the CEO of the Social corporation: the leader holds everything implicitly.
+  const ceoReport = await report(A, 'alice');
+  check('CEO reads the treasury report', ceoReport.status, 200);
+
+  // A plain member holds no permission: refused with the local error code.
+  const join = await req('POST', `/api/corporations/${CORP}/join`, {}, asPlayer(B, 'bob'), SOCIAL_BASE);
+  check('B joined the social corporation (default rank)', [join.status, join.json.joined], [200, true]);
+  const memberReport = await report(B, 'bob');
   check('report refused to a plain member', [memberReport.status, memberReport.json.error], [403, 'FORBIDDEN']);
 
-  const treasurerReport = await req('GET', `/api/corporations/${C}/report`, undefined, asPlayer(E, 'erin'));
-  check('report allowed to a treasurer', treasurerReport.status, 200);
+  // The free action can be granted on a rank, which is the only way in for a non-leader.
+  const rank = await req(
+    'POST',
+    `/api/corporations/${CORP}/ranks`,
+    { name: 'Treasurer', priority: 40, permissions: ['economie:treasury:manage'] },
+    asPlayer(A, 'alice'),
+    SOCIAL_BASE,
+  );
+  check('rank granted economie:treasury:manage', [rank.status, rank.json.permissions], [201, ['economie:treasury:manage']]);
+  const seated = await req(
+    'PATCH',
+    `/api/corporations/${CORP}/members/${B}`,
+    { rankId: rank.json.id },
+    asPlayer(A, 'alice'),
+    SOCIAL_BASE,
+  );
+  check('B seated in the treasurer rank', seated.status, 200);
+  const grantedReport = await report(B, 'bob');
+  check('granted member reads the treasury report', grantedReport.status, 200);
 
-  await req('PUT', `/api/internal/corporations/${C}/settings`, { allowDonations: true }, internal);
+  // The local economie role does not grant anything by itself.
+  const localTreasurer = await report(E, 'erin');
+  check('local treasurer without a Social grant is refused', [localTreasurer.status, localTreasurer.json.error], [
+    403,
+    'NOT_CORPORATION_MEMBER',
+  ]);
+  const outsiderReport = await report(D, 'dave');
+  check('non-member refused the report', [outsiderReport.status, outsiderReport.json.error], [
+    403,
+    'NOT_CORPORATION_MEMBER',
+  ]);
+} else {
+  console.log('  skip treasury ACL checks (set SOCIAL_BASE, Economy needs SOCIAL_API_URL)');
 }
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
 console.log('\n# validation');
 {
-  const badTax = await req('PUT', `/api/internal/corporations/${C}/settings`, { taxRateBps: 10001 }, internal);
+  const badTax = await req('PUT', `/api/internal/corporations/${CORP}/settings`, { taxRateBps: 10001 }, internal);
   check('taxRateBps above 10000', [badTax.status, badTax.json.error], [400, 'VALIDATION_ERROR']);
 
-  const zeroDonation = await req('POST', `/api/corporations/${C}/donations`, { amount: 0 }, asPlayer(A));
+  const zeroDonation = await req('POST', `/api/corporations/${CORP}/donations`, { amount: 0 }, asPlayer(A));
   check('donation of zero', [zeroDonation.status, zeroDonation.json.error], [400, 'VALIDATION_ERROR']);
 
   const selfTransfer = await req('POST', '/api/transfers', { toPlayerId: A, amount: 10 }, asPlayer(A));

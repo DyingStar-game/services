@@ -12,8 +12,9 @@ info:
     Three kinds of callers:
 
     * **Players** send a Keycloak JWT (`Authorization: Bearer`). A player can trade from
-      their own wallet, or from a corporation by passing `corporationId` (membership checked
-      in the Social service). Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id` / `X-Player-Name`.
+      their own wallet, or from a corporation by passing `corporationId` (`market:trade`
+      decided by the Social service — granted to every member). Dev only
+      (`AUTH_DEV_BYPASS=true`): `X-Player-Id` / `X-Player-Name`.
     * **The game server** authenticates with a Keycloak service-account token whose `azp` is
       an allowed client and whose `aud` targets `market-api`; each `/api/internal/*` route
       needs a capability role (e.g. `market:manage`). Dev only (`INTERNAL_DEV_BYPASS=true`):
@@ -538,7 +539,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Forbidden:
-      description: Not the resource owner (`FORBIDDEN`) or not a corporation member (`NOT_CORPORATION_MEMBER`)
+      description: Not the resource owner (`FORBIDDEN`), or the corporation `market:trade` check refused (`NOT_CORPORATION_MEMBER`)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }

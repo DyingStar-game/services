@@ -23,6 +23,15 @@ import {
   type Holder,
 } from '../services/inventory.service.js';
 import {
+  createPoi,
+  deletePoi,
+  getPoiView,
+  listHolderPois,
+  resolvePois,
+  updatePoi,
+} from '../services/pois.service.js';
+import type { PoiOwnerType } from '../db/schema/index.js';
+import {
   consumeHoldBody,
   createHoldBody,
   creditBody,
@@ -31,9 +40,14 @@ import {
   holdIdParams,
   instanceParams,
   instanceStatusBody,
+  internalCreatePoiBody,
+  poiHolderParams,
+  poiParams,
   registerInstanceBody,
+  resolvePoisBody,
   transferInstanceBody,
   transferStackBody,
+  updatePoiBody,
 } from './schemas.js';
 
 /** Router for trusted-service driven updates. */
@@ -174,5 +188,78 @@ internalRoutes.post(
   validate(consumeHoldBody),
   asyncHandler(async (req, res) => {
     res.json(await consumeHold(req.params.holdId, req.body.to));
+  }),
+);
+
+// ── POIs ─────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /pois/resolve — Batch geometry resolution (mission zone matching).
+ * Unknown ids are omitted from the result rather than failing the call.
+ */
+internalRoutes.post(
+  '/pois/resolve',
+  requireServiceRole(SERVICE_ROLES.read),
+  validate(resolvePoisBody),
+  asyncHandler(async (req, res) => {
+    res.json({ pois: await resolvePois(req.body.ids) });
+  }),
+);
+
+/** GET /pois/:poiId — One POI with its shares. */
+internalRoutes.get(
+  '/pois/:poiId',
+  requireServiceRole(SERVICE_ROLES.read),
+  validate(poiParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const view = await getPoiView(req.params.poiId);
+    if (!view) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'POI not found', status: 404 });
+      return;
+    }
+    res.json(view);
+  }),
+);
+
+/** GET /holders/:holderType/:holderId/pois — POIs owned by a holder (incl. `political`). */
+internalRoutes.get(
+  '/holders/:holderType/:holderId/pois',
+  requireServiceRole(SERVICE_ROLES.read),
+  validate(poiHolderParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await listHolderPois(req.params.holderType as PoiOwnerType, req.params.holderId));
+  }),
+);
+
+/** POST /pois — Create a POI on behalf of any holder (game server / system). */
+internalRoutes.post(
+  '/pois',
+  requireServiceRole(SERVICE_ROLES.poiManage),
+  validate(internalCreatePoiBody),
+  asyncHandler(async (req, res) => {
+    const { owner, ...input } = req.body;
+    res.status(201).json(await createPoi({ ownerType: owner.type, ownerId: owner.id }, input));
+  }),
+);
+
+/** PATCH /pois/:poiId — Edit a POI (geometry, name, visibility...). */
+internalRoutes.patch(
+  '/pois/:poiId',
+  requireServiceRole(SERVICE_ROLES.poiManage),
+  validate(poiParams, 'params'),
+  validate(updatePoiBody),
+  asyncHandler(async (req, res) => {
+    res.json(await updatePoi(req.params.poiId, req.body));
+  }),
+);
+
+/** DELETE /pois/:poiId — Delete a POI (shares cascade). */
+internalRoutes.delete(
+  '/pois/:poiId',
+  requireServiceRole(SERVICE_ROLES.poiManage),
+  validate(poiParams, 'params'),
+  asyncHandler(async (req, res) => {
+    await deletePoi(req.params.poiId);
+    res.status(204).end();
   }),
 );

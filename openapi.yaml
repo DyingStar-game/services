@@ -1034,7 +1034,7 @@ paths:
     post:
       tags:
       - economie
-      summary: Pay a one-off prime to a member from the treasury (leader/treasurer only)
+      summary: Pay a one-off prime to a member from the treasury (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_playerId'
@@ -1117,7 +1117,7 @@ paths:
     post:
       tags:
       - economie
-      summary: Pay every member's salary now from the treasury (leader/treasurer only)
+      summary: Pay every member's salary now from the treasury (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_currencyQuery'
@@ -1141,6 +1141,57 @@ paths:
     servers:
     - url: http://economie:3000
       description: economie
+  /api/corporations/{corporationId}/pois:
+    get:
+      tags:
+      - inventory
+      summary: Corporation POIs (member only, membership checked in Social)
+      parameters:
+      - $ref: '#/components/parameters/inventory_corporationId'
+      responses:
+        '200':
+          description: POIs owned by or granted to the corporation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/inventory_Poi'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_Forbidden'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/corporations/{corporationId}/pois/{poiId}:
+    get:
+      tags:
+      - inventory
+      summary: One POI of the corporation's scope (member only)
+      parameters:
+      - $ref: '#/components/parameters/inventory_corporationId'
+      - $ref: '#/components/parameters/inventory_poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_PoiView'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_Forbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
   /api/corporations/{corporationId}/politics:
     put:
       tags:
@@ -1300,7 +1351,7 @@ paths:
     get:
       tags:
       - economie
-      summary: Financial report (leader/treasurer only)
+      summary: Financial report (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_from'
@@ -1395,7 +1446,7 @@ paths:
     get:
       tags:
       - economie
-      summary: Role defaults and per-member salary overrides (leader/treasurer only)
+      summary: Role defaults and per-member salary overrides (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       responses:
@@ -1416,7 +1467,7 @@ paths:
     put:
       tags:
       - economie
-      summary: Set a per-member salary override (leader/treasurer only)
+      summary: Set a per-member salary override (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_playerId'
@@ -1448,7 +1499,7 @@ paths:
     delete:
       tags:
       - economie
-      summary: Remove a per-member salary override (leader/treasurer only)
+      summary: Remove a per-member salary override (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_playerId'
@@ -1466,7 +1517,7 @@ paths:
     put:
       tags:
       - economie
-      summary: Set the default salary for a role (leader/treasurer only)
+      summary: Set the default salary for a role (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_role'
@@ -1545,7 +1596,7 @@ paths:
     post:
       tags:
       - economie
-      summary: Settle the corporation's affordable due taxes (treasurer+)
+      summary: Settle the corporation's affordable due taxes (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       requestBody:
@@ -2119,6 +2170,63 @@ paths:
                   version:
                     type: string
                     example: 0.1.0
+  /api/internal/authorize:
+    post:
+      tags:
+      - social
+      operationId: internalAuthorize
+      summary: Decide whether a player holds an action on an organisation
+      description: 'Central ACL. Accepts one check or `{ "checks": [...] }` (max 50) and **always
+
+        answers 200**: a refusal is a result, never an error, so a batch keeps all of its
+
+        answers. Requires the `social:authorize` capability role.
+
+        '
+      security:
+      - serviceAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - $ref: '#/components/schemas/social_AuthorizeCheck'
+              - type: object
+                required:
+                - checks
+                properties:
+                  checks:
+                    type: array
+                    minItems: 1
+                    maxItems: 50
+                    items:
+                      $ref: '#/components/schemas/social_AuthorizeCheck'
+      responses:
+        '200':
+          description: 'The decision (single check → one result, batch → `{ results: [...] }`)'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/social_AuthorizeResult'
+                - type: object
+                  required:
+                  - results
+                  properties:
+                    results:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/social_AuthorizeResult'
+        '400':
+          $ref: '#/components/responses/social_ValidationError'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_ServiceForbidden'
+    servers:
+    - url: http://social:3000
+      description: social
   /api/internal/catalog:
     get:
       tags:
@@ -3008,6 +3116,34 @@ paths:
     servers:
     - url: http://inventory:3000
       description: inventory
+  /api/internal/holders/{holderType}/{holderId}/pois:
+    get:
+      tags:
+      - inventory
+      summary: POIs owned by a holder (incl. political entities)
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiHolderType'
+      - $ref: '#/components/parameters/inventory_holderId'
+      responses:
+        '200':
+          description: POI list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/inventory_Poi'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_ServiceForbidden'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
   /api/internal/holders/{holderType}/{holderId}/stacks/{goodType}:
     get:
       tags:
@@ -3889,6 +4025,36 @@ paths:
     servers:
     - url: http://market:3000
       description: market
+  /api/internal/permissions/catalog:
+    get:
+      tags:
+      - social
+      operationId: internalPermissionCatalog
+      summary: Every catalogued action and its evaluation rules
+      description: Localized through `Accept-Language`. Requires the `social:authorize` capability role.
+      security:
+      - serviceAuth: []
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - actions
+                properties:
+                  actions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/social_PermissionCatalogRow'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_ServiceForbidden'
+    servers:
+    - url: http://social:3000
+      description: social
   /api/internal/players:
     get:
       tags:
@@ -4732,6 +4898,152 @@ paths:
     servers:
     - url: http://economie:3000
       description: economie
+  /api/internal/pois:
+    post:
+      tags:
+      - inventory
+      summary: Create a POI on behalf of any holder (game server / system)
+      security:
+      - serviceAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory_PoiInternalCreateBody'
+      responses:
+        '201':
+          description: The created POI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_Poi'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_ServiceForbidden'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/internal/pois/resolve:
+    post:
+      tags:
+      - inventory
+      summary: Batch POI geometry resolution (mission zone matching)
+      description: Unknown ids are omitted instead of failing the call (fail-closed for callers).
+      security:
+      - serviceAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ids
+              properties:
+                ids:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: Resolved POIs (unknown ids absent)
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - pois
+                properties:
+                  pois:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/inventory_Poi'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_ServiceForbidden'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/internal/pois/{poiId}:
+    get:
+      tags:
+      - inventory
+      summary: One POI with its shares
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_PoiView'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_ServiceForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+    patch:
+      tags:
+      - inventory
+      summary: Edit a POI (geometry, name, visibility …)
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory_PoiUpdateBody'
+      responses:
+        '200':
+          description: The updated POI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_Poi'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_ServiceForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+    delete:
+      tags:
+      - inventory
+      summary: Delete a POI (shares cascade)
+      security:
+      - serviceAuth: []
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_ServiceForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
   /api/internal/politics:
     post:
       tags:
@@ -6060,6 +6372,267 @@ paths:
     servers:
     - url: http://mission:3000
       description: mission
+  /api/me/missions-created:
+    get:
+      tags:
+      - mission
+      summary: The missions created by the caller
+      description: 'Every mission whose `createdBy` is the calling player, all statuses, with no zone, group or free-slot
+        filtering — the creator''s management view, unlike the browse.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/mission_MissionStatus'
+      - $ref: '#/components/parameters/mission_Limit'
+      responses:
+        '200':
+          description: Missions created by the caller
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - missions
+                properties:
+                  missions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/mission_Mission'
+        '401':
+          $ref: '#/components/responses/mission_Unauthorized'
+    servers:
+    - url: http://mission:3000
+      description: mission
+  /api/me/pois:
+    get:
+      tags:
+      - inventory
+      summary: POIs of the caller's scope (owned, granted, public)
+      description: Owned POIs ∪ read-only grants held by the caller ∪ POIs published `public`.
+      responses:
+        '200':
+          description: POI list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/inventory_Poi'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+    post:
+      tags:
+      - inventory
+      summary: Create a POI (own, or for a corporation/political entity the caller manages)
+      description: 'Defaults to a player-owned POI. Pass `owner` to create it for an organization; the caller must hold the
+        `inventory:poi:manage` action there (decided by Social: CEO/head, or `manage_corporation` / `manage_entity`).
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory_PoiCreateBody'
+      responses:
+        '201':
+          description: The created POI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_Poi'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_PoiForbidden'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/me/pois/{poiId}:
+    get:
+      tags:
+      - inventory
+      summary: One POI with its shares (owned, granted or public)
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_PoiView'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_PoiForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+    patch:
+      tags:
+      - inventory
+      summary: Edit a POI the caller manages (ownership unchanged)
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/inventory_PoiUpdateBody'
+      responses:
+        '200':
+          description: The updated POI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_Poi'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_PoiForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    delete:
+      tags:
+      - inventory
+      summary: Delete a POI the caller manages (shares cascade)
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_PoiForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/me/pois/{poiId}/shares:
+    post:
+      tags:
+      - inventory
+      summary: Grant read-only access to a player/NPC/corporation/political entity
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - granteeType
+              - granteeId
+              properties:
+                granteeType:
+                  $ref: '#/components/schemas/inventory_PoiGranteeType'
+                granteeId:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: The created grant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_PoiShare'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_PoiForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+        '409':
+          $ref: '#/components/responses/inventory_PoiConflict'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/me/pois/{poiId}/shares/{granteeType}/{granteeId}:
+    delete:
+      tags:
+      - inventory
+      summary: Revoke a read-only grant
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      - $ref: '#/components/parameters/inventory_granteeType'
+      - $ref: '#/components/parameters/inventory_granteeId'
+      responses:
+        '204':
+          description: Revoked
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_PoiForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_PoiNotFound'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/me/pois/{poiId}/transfer:
+    post:
+      tags:
+      - inventory
+      summary: Hand POI ownership over to a player/NPC/corporation/political entity
+      description: Ownership moves and the previous owner keeps no implicit grant.
+      parameters:
+      - $ref: '#/components/parameters/inventory_poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - toType
+              - toId
+              properties:
+                toType:
+                  $ref: '#/components/schemas/inventory_PoiGranteeType'
+                toId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: The transferred POI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_Poi'
+        '400':
+          $ref: '#/components/responses/inventory_ValidationError'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_PoiForbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+        '409':
+          $ref: '#/components/responses/inventory_PoiConflict'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
   /api/me/politics:
     get:
       tags:
@@ -6293,8 +6866,8 @@ paths:
       summary: Create a player-sponsored mission (economic reward escrowed from the caller)
       description: 'Reward components are escrowed until settlement or refund: items are held from the creator''s inventory,
         and the credits component is debited either from the creator''s wallet (`escrowSource: creator`, default) or from
-        the issuing organization''s treasury (`escrowSource: issuer` — corporation or political entity, requires membership
-        plus CEO/`manage_corporation` or an office with `manage_treasury`).
+        the issuing organization''s treasury (`escrowSource: issuer` — corporation or political entity, requires the `mission:treasury:commit`
+        action decided by Social: CEO/head, or the `manage_corporation` / `manage_treasury` permission).
 
         '
       requestBody:
@@ -6600,8 +7173,8 @@ paths:
       - mission
       summary: Declare (or lift) the "big event" flag on a corporation mission
       description: 'Events are the exception to the capacity cap: they allow up to 1000 assignees and stay listed as long
-        as they have a free slot. Requires the CEO rank or the `manage_corporation` permission in the issuing corporation.
-        Lifting the flag requires `maxAssignees` ≤ 100.
+        as they have a free slot. Requires the `mission:event:manage` action in the issuing corporation (decided by Social:
+        CEO or `manage_corporation`). Lifting the flag requires `maxAssignees` ≤ 100.
 
         '
       parameters:
@@ -6633,7 +7206,7 @@ paths:
                 forbidden:
                   value:
                     error: EVENT_FORBIDDEN
-                    message: Requires the manage_corporation permission
+                    message: Requires the mission:event:manage permission
                     status: 403
         '404':
           $ref: '#/components/responses/mission_NotFound'
@@ -7319,6 +7892,57 @@ paths:
     servers:
     - url: http://social:3000
       description: social
+  /api/politics/{entityId}/pois:
+    get:
+      tags:
+      - inventory
+      summary: Political-entity POIs (member only, membership checked in Social)
+      parameters:
+      - $ref: '#/components/parameters/inventory_entityId'
+      responses:
+        '200':
+          description: POIs owned by or granted to the entity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/inventory_Poi'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_Forbidden'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
+  /api/politics/{entityId}/pois/{poiId}:
+    get:
+      tags:
+      - inventory
+      summary: One POI of the entity's scope (member only)
+      parameters:
+      - $ref: '#/components/parameters/inventory_entityId'
+      - $ref: '#/components/parameters/inventory_poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/inventory_PoiView'
+        '401':
+          $ref: '#/components/responses/inventory_Unauthorized'
+        '403':
+          $ref: '#/components/responses/inventory_Forbidden'
+        '404':
+          $ref: '#/components/responses/inventory_NotFound'
+        '503':
+          $ref: '#/components/responses/inventory_SocialUnavailable'
+    servers:
+    - url: http://inventory:3000
+      description: inventory
   /api/politics/{entityId}/transfer:
     post:
       tags:
@@ -7823,6 +8447,39 @@ components:
       schema:
         type: string
         format: uuid
+    inventory_poiId:
+      name: poiId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    inventory_entityId:
+      name: entityId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    inventory_granteeType:
+      name: granteeType
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/inventory_PoiGranteeType'
+    inventory_granteeId:
+      name: granteeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    inventory_poiHolderType:
+      name: holderType
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/inventory_PoiOwnerType'
     market_id:
       name: id
       in: path
@@ -7978,8 +8635,8 @@ components:
           schema:
             $ref: '#/components/schemas/economie_Error'
     economie_Forbidden:
-      description: 'Missing role / not a corporation member (`FORBIDDEN`, `NOT_CORPORATION_MEMBER`), account is locked/frozen
-        (`ACCOUNT_LOCKED`), or donations disabled (`DONATIONS_DISABLED`)
+      description: 'Missing `economie:treasury:manage` / not a corporation member (`FORBIDDEN`, `NOT_CORPORATION_MEMBER`),
+        account is locked/frozen (`ACCOUNT_LOCKED`), or donations disabled (`DONATIONS_DISABLED`)
 
         '
       content:
@@ -8049,6 +8706,40 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/inventory_Error'
+    inventory_PoiNotFound:
+      description: POI or one of its grants not found (`NOT_FOUND`, `POI_NOT_SHARED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_PoiForbidden:
+      description: 'Not the owner (`NOT_POI_OWNER`), a system-owned POI (`POI_SYSTEM_OWNER_FORBIDDEN`), not a member or without
+        the organization''s management permission (`NOT_CORPORATION_MEMBER`, `NOT_POLITICAL_MEMBER`, `ORG_PERMISSION_REQUIRED`),
+        or missing role (`FORBIDDEN`)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_PoiConflict:
+      description: 'POI state conflict: `POI_ALREADY_SHARED`, `POI_SELF_SHARE` (grantee already owns it) or `POI_TRANSFER_SELF`
+        (target already owns it)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
+    inventory_SocialUnavailable:
+      description: 'The Social service is unreachable or not configured while checking organization membership (`SOCIAL_NOT_CONFIGURED`,
+        `SOCIAL_LOOKUP_FAILED`, `SOCIAL_AUTH_FAILED`)
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/inventory_Error'
     market_ValidationError:
       description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
       content:
@@ -8062,7 +8753,7 @@ components:
           schema:
             $ref: '#/components/schemas/market_Error'
     market_Forbidden:
-      description: Not the resource owner (`FORBIDDEN`) or not a corporation member (`NOT_CORPORATION_MEMBER`)
+      description: Not the resource owner (`FORBIDDEN`), or the corporation `market:trade` check refused (`NOT_CORPORATION_MEMBER`)
       content:
         application/json:
           schema:
@@ -8219,9 +8910,12 @@ components:
           additionalProperties: true
           description: Kind-specific structured params (schemas served by GET /api/missions/kinds)
     mission_MissionZone:
-      description: 'One availability zone, matched against the presence location reported by the game server. `scene` is a
-        hierarchical path (`tarsis_1/new-paris`) matched by equality or path prefix (`tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`,
-        never `tarsis_10`). Coordinates share the units of `location.position` (meters assumed).
+      description: 'One availability zone, matched against the presence location reported by the game server. A `system` zone
+        matches the star system. A `poi` zone references a point of interest in the Inventory service: a POI carrying a `scene`
+        and no radius matches its hierarchical scene subtree (`tarsis_1` matches `tarsis_1/new-paris`, never `tarsis_10`);
+        a radius (declared on the zone, overriding the POI''s own) matches the area around the POI centre; otherwise only
+        the exact position matches. A POI that cannot be resolved never matches (fail closed), and creating a zone on an unknown
+        POI is rejected with `POI_NOT_FOUND`. Coordinates share the units of `location.position` (meters assumed).
 
         '
       oneOf:
@@ -8238,46 +8932,19 @@ components:
       - type: object
         required:
         - kind
-        - scene
+        - poiId
         properties:
           kind:
-            const: scene
-          system:
+            const: poi
+          poiId:
             type: string
-            maxLength: 64
-            description: 'Optional: restricts the scene to one system'
-          scene:
-            type: string
-            maxLength: 128
-            description: Hierarchical scene path, e.g. `tarsis_1/new-paris`
-      - type: object
-        required:
-        - kind
-        - center
-        - radiusM
-        properties:
-          kind:
-            const: area
-          system:
-            type: string
-            maxLength: 64
-          center:
-            type: object
-            required:
-            - x
-            - y
-            - z
-            properties:
-              x:
-                type: number
-              y:
-                type: number
-              z:
-                type: number
+            format: uuid
+            description: POI id owned by the Inventory service
           radiusM:
             type: integer
             minimum: 1
             maximum: 1000000
+            description: Overrides the POI's own radius to match an area (metres)
     mission_Mission:
       type: object
       properties:
@@ -8709,7 +9376,8 @@ components:
           - issuer
           default: creator
           description: '`creator` debits the creator''s wallet (default); `issuer` debits the issuing organization''s treasury
-            (corporation or political entity — requires membership plus CEO/`manage_corporation` or an office with `manage_treasury`/head)
+            (corporation or political entity — requires the `mission:treasury:commit` action: CEO/head, or `manage_corporation`
+            / `manage_treasury`)
 
             '
         rewards:
@@ -8918,6 +9586,115 @@ components:
           type: string
         entityType:
           $ref: '#/components/schemas/social_ProfileKind'
+    social_Action:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: ^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)*$
+      description: 'Organisation action. Catalogued actions (`mission:treasury:commit`, `economie:treasury:manage`, `market:trade`,
+        `inventory:poi:manage`, legacy `manage_*` names) carry evaluation rules; any other string is a *free* action and only
+        ever matches an exact permission stored on the rank/office.
+
+        '
+    social_AuthorizeCheck:
+      type: object
+      required:
+      - holderType
+      - holderId
+      - playerId
+      - action
+      properties:
+        holderType:
+          type: string
+          enum:
+          - corporation
+          - political
+        holderId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        action:
+          $ref: '#/components/schemas/social_Action'
+    social_AuthorizeResult:
+      type: object
+      required:
+      - holderType
+      - holderId
+      - playerId
+      - action
+      - allowed
+      - reason
+      - role
+      - leader
+      - permissions
+      properties:
+        holderType:
+          type: string
+          enum:
+          - corporation
+          - political
+        holderId:
+          type: string
+          format: uuid
+        playerId:
+          type: string
+          format: uuid
+        action:
+          $ref: '#/components/schemas/social_Action'
+        allowed:
+          type: boolean
+        reason:
+          type: string
+          enum:
+          - allowed
+          - not_member
+          - missing_permission
+          description: Callers map it onto their own error codes (`not_member` → 403 membership, `missing_permission` → 403
+            permission).
+        role:
+          type:
+          - string
+          - 'null'
+          description: Rank/office name held, null for a non-member
+        leader:
+          type: boolean
+          description: CEO rank / head office — implicitly holds every action
+        permissions:
+          type: array
+          items:
+            type: string
+          description: Permissions actually held by the rank/office
+    social_PermissionCatalogRow:
+      type: object
+      required:
+      - action
+      - holder
+      - legacy
+      - description
+      properties:
+        action:
+          $ref: '#/components/schemas/social_Action'
+        holder:
+          type: string
+          enum:
+          - corporation
+          - political
+        legacy:
+          type: boolean
+          description: Stored as-is on ranks/offices (pre-ACL permission)
+        defaultMember:
+          type: boolean
+          description: Granted to every member without any permission
+        satisfiedBy:
+          type: array
+          items:
+            type: string
+          description: Legacy permissions that satisfy this action
+        description:
+          type: string
+          description: Localized through Accept-Language
     social_PresenceStatus:
       type: string
       enum:
@@ -8931,7 +9708,7 @@ components:
       - apply
       - closed
     social_CorporationPermission:
-      type: string
+      description: Legacy corporation permissions (kept for reference; ranks accept any `Action`).
       enum:
       - manage_corporation
       - manage_ranks
@@ -9398,7 +10175,7 @@ components:
         permissions:
           type: array
           items:
-            $ref: '#/components/schemas/social_CorporationPermission'
+            $ref: '#/components/schemas/social_Action'
         isCeo:
           type: boolean
           description: Unique, undeletable, implicitly has all permissions
@@ -9423,7 +10200,7 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/social_CorporationPermission'
+            $ref: '#/components/schemas/social_Action'
         isDefault:
           type: boolean
     social_RankPatch:
@@ -9441,7 +10218,7 @@ components:
         permissions:
           type: array
           items:
-            $ref: '#/components/schemas/social_CorporationPermission'
+            $ref: '#/components/schemas/social_Action'
         isDefault:
           type: boolean
     social_CorporationMembership:
@@ -9801,7 +10578,7 @@ components:
       - federation
       description: '`commune` covers villages and towns; `federation` is the highest, optional level (a country may stay independent)'
     social_PoliticalPermission:
-      type: string
+      description: Legacy political permissions (kept for reference; offices accept any `Action`).
       enum:
       - manage_entity
       - manage_offices
@@ -9972,7 +10749,7 @@ components:
         permissions:
           type: array
           items:
-            $ref: '#/components/schemas/social_PoliticalPermission'
+            $ref: '#/components/schemas/social_Action'
         isHead:
           type: boolean
           description: Unique, undeletable, implicitly has all permissions
@@ -9997,7 +10774,7 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/social_PoliticalPermission'
+            $ref: '#/components/schemas/social_Action'
         isDefault:
           type: boolean
     social_PoliticalOfficePatch:
@@ -10015,7 +10792,7 @@ components:
         permissions:
           type: array
           items:
-            $ref: '#/components/schemas/social_PoliticalPermission'
+            $ref: '#/components/schemas/social_Action'
         isDefault:
           type: boolean
     social_PoliticalMemberBody:
@@ -11344,6 +12121,12 @@ components:
           - NOT_FOUND
           - CONFLICT
           - INSUFFICIENT_GOODS
+          - NOT_POI_OWNER
+          - POI_ALREADY_SHARED
+          - POI_NOT_SHARED
+          - POI_SELF_SHARE
+          - POI_TRANSFER_SELF
+          - ORG_PERMISSION_REQUIRED
           - INTERNAL_ERROR
         message:
           type: string
@@ -11383,6 +12166,26 @@ components:
       - market_order
       - mission_escrow
       - manual
+    inventory_PoiOwnerType:
+      type: string
+      enum:
+      - player
+      - npc
+      - corporation
+      - political
+      - system
+    inventory_PoiGranteeType:
+      type: string
+      enum:
+      - player
+      - npc
+      - corporation
+      - political
+    inventory_PoiVisibility:
+      type: string
+      enum:
+      - private
+      - public
     inventory_Holder:
       type: object
       required:
@@ -11635,6 +12438,247 @@ components:
           format: date-time
         details:
           type: object
+          additionalProperties: true
+    inventory_Poi:
+      type: object
+      description: 'A GPS point, optionally widened into a zone by `radiusM`. Owned by exactly one holder and readable by
+        its owner, its grantees and (when `public`) every player.
+
+        '
+      required:
+      - id
+      - ownerType
+      - ownerId
+      - name
+      - x
+      - y
+      - z
+      - visibility
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerType:
+          $ref: '#/components/schemas/inventory_PoiOwnerType'
+        ownerId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 128
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        system:
+          type:
+          - string
+          - 'null'
+          maxLength: 64
+          description: Star system (null = unscoped)
+        scene:
+          type:
+          - string
+          - 'null'
+          maxLength: 128
+          description: Hierarchical scene path matched by equality or segment prefix (`tarsis_1` matches `tarsis_1/new-paris`,
+            never `tarsis_10`)
+        parentId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Opaque parent object id in Persistence (no cross-service foreign key)
+        x:
+          type: number
+          description: Game units (metres assumed)
+        y:
+          type: number
+        z:
+          type: number
+        radiusM:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+          maximum: 1000000
+          description: '`null` = plain point (exact position); `>= 0` = zone radius in metres'
+        visibility:
+          $ref: '#/components/schemas/inventory_PoiVisibility'
+        metadata:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    inventory_PoiShare:
+      type: object
+      description: Read-only grant of a POI (the grantee never gets write access).
+      required:
+      - poiId
+      - granteeType
+      - granteeId
+      - createdAt
+      properties:
+        poiId:
+          type: string
+          format: uuid
+        granteeType:
+          $ref: '#/components/schemas/inventory_PoiGranteeType'
+        granteeId:
+          type: string
+          format: uuid
+        sharedBy:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Player who created the grant (audit)
+        createdAt:
+          type: string
+          format: date-time
+    inventory_PoiView:
+      allOf:
+      - $ref: '#/components/schemas/inventory_Poi'
+      - type: object
+        required:
+        - shares
+        properties:
+          shares:
+            type: array
+            items:
+              $ref: '#/components/schemas/inventory_PoiShare'
+    inventory_PoiCreateBody:
+      type: object
+      required:
+      - name
+      - x
+      - y
+      - z
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description:
+          type: string
+          maxLength: 2000
+        system:
+          type: string
+          minLength: 1
+          maxLength: 64
+        scene:
+          type: string
+          minLength: 1
+          maxLength: 128
+        parentId:
+          type: string
+          format: uuid
+        x:
+          type: number
+        y:
+          type: number
+        z:
+          type: number
+        radiusM:
+          type: number
+          minimum: 0
+          maximum: 1000000
+        visibility:
+          $ref: '#/components/schemas/inventory_PoiVisibility'
+        metadata:
+          type: object
+          additionalProperties: true
+        owner:
+          type: object
+          description: 'Organization owning the POI (default: the caller)'
+          required:
+          - type
+          - id
+          properties:
+            type:
+              type: string
+              enum:
+              - corporation
+              - political
+            id:
+              type: string
+              format: uuid
+    inventory_PoiInternalCreateBody:
+      allOf:
+      - $ref: '#/components/schemas/inventory_PoiCreateBody'
+      - type: object
+        required:
+        - owner
+        properties:
+          owner:
+            type: object
+            required:
+            - type
+            - id
+            properties:
+              type:
+                $ref: '#/components/schemas/inventory_PoiOwnerType'
+              id:
+                type: string
+                format: uuid
+    inventory_PoiUpdateBody:
+      type: object
+      description: Partial patch; at least one field must be present.
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        system:
+          type:
+          - string
+          - 'null'
+          minLength: 1
+          maxLength: 64
+        scene:
+          type:
+          - string
+          - 'null'
+          minLength: 1
+          maxLength: 128
+        parentId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        x:
+          type: number
+        y:
+          type: number
+        z:
+          type: number
+        radiusM:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+          maximum: 1000000
+        visibility:
+          $ref: '#/components/schemas/inventory_PoiVisibility'
+        metadata:
+          type:
+          - object
+          - 'null'
           additionalProperties: true
     market_Error:
       type: object

@@ -43,7 +43,7 @@ mettre `INTERNAL_DEV_BYPASS=true` et passer `X-Internal-Key: <INTERNAL_API_KEY>`
 | `INTERNAL_API_KEY` | Secret hérité de `X-Internal-Key` — **dev uniquement** |
 | `INTERNAL_DEV_BYPASS` | Accepter `X-Internal-Key` sur `/api/internal/*` (ignoré en production) |
 | `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` (+ `X-Player-Name`, `X-Player-Roles`) sans JWT (dev uniquement) |
-| `SOCIAL_API_URL` | URL interne du service social (autorisation des inventaires de corporation ; vide = désactivé) |
+| `SOCIAL_API_URL` | URL interne du service social (membres corporation/politique : inventaires corpo + permissions POI ; vide = désactivé) |
 | `SOCIAL_SERVICE_CLIENT_ID` / `SOCIAL_SERVICE_CLIENT_SECRET` | Compte de service Keycloak pour appeler social |
 | `SOCIAL_INTERNAL_API_KEY` | Repli dev : clé partagée envoyée en `X-Internal-Key` si aucun secret n'est défini |
 
@@ -58,7 +58,16 @@ mettre `INTERNAL_DEV_BYPASS=true` et passer `X-Internal-Key: <INTERNAL_API_KEY>`
   opération en attente (commande de marché, escrow de mission). Un hold ne change pas la
   propriété : `available = quantity - held`. La consommation d'un hold (`consume`) transfère
   réellement la propriété ; sa libération (`release`) rend les biens disponibles.
-- Aucune notion de position ni d'interaction avec `persistence`/`resourcesDynamic`.
+- **POI** (`inventory_pois`) : point GPS `{x, y, z}` éventuellement entouré d'une zone
+  (`radiusM`), rattaché à une `scene` (préfixe) et/ou un `system`, avec un propriétaire
+  (`player`/`npc`/`corporation`/`political`/`system`) et une visibilité
+  (`private`/`public`). `parentId` est un uuid d'objet persistence opaque (nullable,
+  pas de FK). La table `inventory_poi_shares` ajoute des grants **lecture seule**
+  (player/npc/corporation/political) ; le propriétaire reste le seul à écrire.
+  Transfert de propriété : `POST /api/me/pois/:poiId/transfer` (ou API interne).
+  Lecture : owned ∪ granted ∪ public, plus les lectures `inventory:read` internes.
+- Aucune notion de position ni d'interaction avec `persistence`/`resourcesDynamic`
+  (hors référence `parentId` opaque).
 
 ## Endpoints
 
@@ -79,6 +88,16 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/me/inventory/stacks/:goodType` | Une pile, avec held/available |
 | GET | `/api/corporations/:corporationId/inventory` | Inventaire d'une corporation (membre, via social) |
 | GET | `/api/corporations/:corporationId/inventory/stacks/:goodType` | Une pile de corporation (membre) |
+| GET | `/api/me/pois` | Mes POI (owned, granted, public) |
+| POST | `/api/me/pois` | Créer un POI (propre, ou pour une corpo/entité politique gérée) |
+| GET | `/api/me/pois/:poiId` | Un POI avec ses shares |
+| PATCH | `/api/me/pois/:poiId` | Éditer un POI géré (ownership inchangé) |
+| DELETE | `/api/me/pois/:poiId` | Supprimer un POI géré (shares en cascade) |
+| POST | `/api/me/pois/:poiId/shares` `{granteeType, granteeId}` | Grant **lecture seule** |
+| DELETE | `/api/me/pois/:poiId/shares/:granteeType/:granteeId` | Révoquer un grant |
+| POST | `/api/me/pois/:poiId/transfer` `{toType, toId}` | Transférer la propriété |
+| GET | `/api/corporations/:corporationId/pois[/:poiId]` | POI de la corporation (membre) |
+| GET | `/api/politics/:entityId/pois[/:poiId]` | POI de l'entité politique (membre) |
 
 ### Interne — serveur de jeu / market / mission (token Keycloak de service + rôle de capacité)
 | Méthode | Route | Rôle requis | Description |
@@ -94,10 +113,30 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/internal/holders/:holderType/:holderId/holds` `{kind, goodType, quantity?, instanceId?, refType, refId?}` | `inventory:hold` | Réserver des biens |
 | POST | `/api/internal/holds/:holdId/release` | `inventory:hold` | Libérer un hold |
 | POST | `/api/internal/holds/:holdId/consume` `{to}` | `inventory:transfer` | Consommer un hold (transfert) |
+| POST | `/api/internal/pois/resolve` `{ids}` | `inventory:read` | Résolution batch de géométrie POI (zones de mission) |
+| GET | `/api/internal/pois/:poiId` | `inventory:read` | Un POI avec ses shares |
+| GET | `/api/internal/holders/:holderType/:holderId/pois` | `inventory:read` | POI d'un détenteur (dont `political`) |
+| POST | `/api/internal/pois` | `inventory:poi:manage` | Créer un POI pour n'importe quel propriétaire |
+| PATCH | `/api/internal/pois/:poiId` | `inventory:poi:manage` | Éditer un POI |
+| DELETE | `/api/internal/pois/:poiId` | `inventory:poi:manage` | Supprimer un POI (shares en cascade) |
 
 **Auth de service** : le garde est monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`).
 Un crédit/débit/transfert n'est appliqué que sur confirmation d'un appelant de confiance —
 c'est la garantie « pas de transfert magique ».
+
+### Permissions POI (échec = `403`)
+
+| Action | Joueur | Corporation | Entité politique |
+|---|---|---|---|
+| Lister / lire | owned ∪ granted ∪ public (`/api/me/pois`) | membre via social (`/api/corporations/…`) | membre via social (`/api/politics/…`) |
+
+Les deux lignes d'écriture passent par **`POST /api/internal/authorize`** (`social:authorize`, action
+`inventory:poi:manage`) : inventory n'interprète plus `rank.permissions` / `office.permissions`.
+Un refus mappe sur `403 NOT_CORPORATION_MEMBER` / `NOT_POLITICAL_MEMBER` (non-membre) ou
+`403 ORG_PERMISSION_REQUIRED` (membre sans l'action) ; Social indisponible → `502/503` (fail closed).
+| Créer `/api/me/pois` | soi-même (ou `owner` passé) | action `inventory:poi:manage` (CEO ou `manage_corporation`) | action `inventory:poi:manage` (chef ou `manage_entity`) |
+| Éditer / supprimer / partager / transférer | propriétaire `player` | propriétaire `corporation` | propriétaire `political` |
+| Propriétaire `system` / `npc` | interdit (`403 NOT_POI_OWNER` / `POI_SYSTEM_OWNER_FORBIDDEN`) — API interne uniquement | | |
 
 ## Structure
 
@@ -105,11 +144,13 @@ c'est la garantie « pas de transfert magique ».
 src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
-  db/schema/        tables drizzle (goods, holds, holders)
+  db/schema/        tables drizzle (goods, holds, holders, pois)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
   middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
-  routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
-  services/         logique métier (inventory.service.ts) ; social.client.ts (autorisation corpo)
+  routes/           un routeur par ressource (me, politics, corporations, internal),
+                    schémas zod dans routes/schemas.ts
+  services/         logique métier (inventory.service.ts, pois.service.ts) ;
+                    social.client.ts (membres corpo/politique)
 ```
 
 Déploiement : `docker/Dockerfile` (image standalone, migrations au démarrage).
@@ -121,6 +162,8 @@ Déploiement : `docker/Dockerfile` (image standalone, migrations au démarrage).
 - [x] Réservations (holds) avec suivi `available = quantity - held`
 - [x] Transferts directs et consommation de hold (règlement d'échange)
 - [x] Autorisation des inventaires de corporation déléguée à `social`
+- [x] Écriture des POI d'organisation déléguée à l'ACL centralisé (`inventory:poi:manage` via `POST /api/internal/authorize`)
+- [x] POI (point/zone GPS, propriétaire, scènes, partage lecture seule, transfert)
 - [ ] Expiration automatique des holds dépassés (balayage)
 - [ ] Sous-entrepôts par rang/permission de corporation
 - [ ] Intégration marché (offres/ordres) et récompenses item de mission

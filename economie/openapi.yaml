@@ -221,7 +221,7 @@ paths:
   /api/corporations/{corporationId}/report:
     get:
       tags: [corporations]
-      summary: Financial report (leader/treasurer only)
+      summary: Financial report (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/from'
@@ -266,7 +266,7 @@ paths:
   /api/corporations/{corporationId}/salaries:
     get:
       tags: [corporations]
-      summary: Role defaults and per-member salary overrides (leader/treasurer only)
+      summary: Role defaults and per-member salary overrides (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
       responses:
@@ -281,7 +281,7 @@ paths:
   /api/corporations/{corporationId}/salaries/roles/{role}:
     put:
       tags: [corporations]
-      summary: Set the default salary for a role (leader/treasurer only)
+      summary: Set the default salary for a role (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/role'
@@ -303,7 +303,7 @@ paths:
   /api/corporations/{corporationId}/salaries/members/{playerId}:
     put:
       tags: [corporations]
-      summary: Set a per-member salary override (leader/treasurer only)
+      summary: Set a per-member salary override (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/playerId'
@@ -328,7 +328,7 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
     delete:
       tags: [corporations]
-      summary: Remove a per-member salary override (leader/treasurer only)
+      summary: Remove a per-member salary override (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/playerId'
@@ -340,7 +340,7 @@ paths:
   /api/corporations/{corporationId}/payroll:
     post:
       tags: [corporations]
-      summary: Pay every member's salary now from the treasury (leader/treasurer only)
+      summary: Pay every member's salary now from the treasury (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/currencyQuery'
@@ -361,7 +361,7 @@ paths:
   /api/corporations/{corporationId}/members/{playerId}/prime:
     post:
       tags: [corporations]
-      summary: Pay a one-off prime to a member from the treasury (leader/treasurer only)
+      summary: Pay a one-off prime to a member from the treasury (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/playerId'
@@ -892,7 +892,7 @@ paths:
   /api/corporations/{corporationId}/taxes/pay:
     post:
       tags: [corporations]
-      summary: Settle the corporation's affordable due taxes (treasurer+)
+      summary: Settle the corporation's affordable due taxes (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
       requestBody:
@@ -1330,7 +1330,7 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     Forbidden:
       description: >
-        Missing role / not a corporation member (`FORBIDDEN`, `NOT_CORPORATION_MEMBER`),
+        Missing `economie:treasury:manage` / not a corporation member (`FORBIDDEN`, `NOT_CORPORATION_MEMBER`),
         account is locked/frozen (`ACCOUNT_LOCKED`), or donations disabled (`DONATIONS_DISABLED`)
       content:
         application/json:

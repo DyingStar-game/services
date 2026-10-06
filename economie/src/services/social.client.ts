@@ -98,3 +98,47 @@ export function resolveProfiles(playerIds: string[]): Promise<ProfileIdentity[]>
   if (playerIds.length === 0) return Promise.resolve([]);
   return fetchProfiles(new URLSearchParams({ playerIds: playerIds.join(',') }));
 }
+
+// ── Central authorization (Social is the policy decision point) ─────────────
+
+/** Why Social refused an action. */
+export type AuthorizeReason = 'allowed' | 'not_member' | 'missing_permission';
+
+/** Outcome of `POST /api/internal/authorize` — always a result, never an HTTP error. */
+export interface AuthorizeResult {
+  allowed: boolean;
+  reason: AuthorizeReason;
+  /** Rank/office name held, or null when the player is not a member. */
+  role: string | null;
+  /** True when the rank is the CEO / the office is the head. */
+  leader: boolean;
+  permissions: string[];
+}
+
+/**
+ * Asks Social whether a player holds an action on an organisation. Economie never
+ * interprets permissions itself: it maps `reason` onto its own error codes.
+ * @param input - Holder, player and catalogued/free action.
+ * @returns The decision.
+ */
+export async function authorizeAction(input: {
+  holderType: 'corporation' | 'political';
+  holderId: string;
+  playerId: string;
+  action: string;
+}): Promise<AuthorizeResult> {
+  if (!env.social.apiUrl) {
+    throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
+  }
+  const res = await fetch(`${env.social.apiUrl}/api/internal/authorize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
+    body: JSON.stringify(input),
+  });
+  if (res.ok) return (await res.json()) as AuthorizeResult;
+  const text = await res.text().catch(() => '');
+  throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`, {
+    status: res.status,
+    body: text,
+  });
+}

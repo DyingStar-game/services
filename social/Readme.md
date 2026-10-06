@@ -17,7 +17,7 @@ pnpm install
 pnpm dev                      # tsx watch ; les migrations de ./drizzle sont appliquées au démarrage
 ```
 
-Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`.
+Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`. Smoke test ACL : `node scripts/smoke.mjs`.
 
 Sans Keycloak, mettre `AUTH_DEV_BYPASS=true` (ignoré en production) et passer `X-Player-Id: <uuid>` (+ `X-Player-Name`) à la place du bearer :
 
@@ -115,7 +115,7 @@ Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur tout
 | POST | `/api/corporations/:corporationId/requests/:id/accept` | Accepter une candidature (`recruit`) |
 | POST | `/api/corporations/:corporationId/requests/:id/decline` | Refuser une candidature (`recruit`) ou retirer une invitation (`invite`) |
 
-Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `invite`, `recruit`. Le grade CEO (unique, indélébile) les a toutes. Grades créés par défaut : CEO (100), Director (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
+Permissions de grade : `manage_corporation`, `manage_ranks`, `manage_members`, `invite`, `recruit` — plus toute **action ACL** (format `action` ou `domaine:action`, voir « ACL centralisée »). Le grade CEO (unique, indélébile) les a toutes. Grades créés par défaut : CEO (100), Director (50 : invite, recruit, manage_members), Member (0, grade par défaut). Une candidature croisée avec une invitation est acceptée automatiquement.
 
 **Multi-appartenance & hiérarchie** : un joueur/PNJ peut être membre de plusieurs corporations (aucune contrainte d'unicité par joueur ; les doublons sont interdits par corporation). Une corporation peut être rattachée à une **maison mère** via `parentId` : la page publique expose `parent` (référence) et `subsidiaries` (filiales directes), `GET /api/corporations/:id/subsidiaries` liste les filiales et `PUT /api/corporations/:id/parent` rattache/détache (les cycles sont refusés). Dissoudre une maison mère laisse ses filiales indépendantes (`ON DELETE SET NULL`).
 
@@ -156,7 +156,7 @@ Catégorie sociale hiérarchique : **commune** (villages/villes, avec maire et c
 | PATCH | `/api/politics/:entityId/offices/:officeId` | Modifier (`manage_offices` ; l'office de tête n'accepte qu'un renommage) |
 | DELETE | `/api/politics/:entityId/offices/:officeId` | Supprimer (membres déplacés vers l'office par défaut) |
 
-Permissions d'office : `manage_entity`, `manage_offices`, `manage_members`, `manage_hierarchy`, `manage_treasury` (dépenser/configurer la trésorerie), `issue_currency` (créer de la monnaie, pays/fédération). L'office de tête (unique, indélébile) les a toutes. Offices semés : `commune` → Maire (tête) / Deputy / Councilor / Citizen (défaut) ; niveaux intermédiaires → President (tête) / Vice President / Conseiller / Resident ; `country` → Head of State / Minister / Deputy / Citizen ; `federation` → President / Representative / Citizen.
+Permissions d'office : `manage_entity`, `manage_offices`, `manage_members`, `manage_hierarchy`, `manage_treasury` (dépenser/configurer la trésorerie), `issue_currency` (créer de la monnaie, pays/fédération) — plus toute **action ACL** (voir « ACL centralisée »). L'office de tête (unique, indélébile) les a toutes. Offices semés : `commune` → Maire (tête) / Deputy / Councilor / Citizen (défaut) ; niveaux intermédiaires → President (tête) / Vice President / Conseiller / Resident ; `country` → Head of State / Minister / Deputy / Citizen ; `federation` → President / Representative / Citizen.
 
 La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées par le service [`economie`](../economie/Readme.md) (l'entité politique y possède un compte `political`) : le serveur de jeu vérifie le niveau et l'office ici, puis appelle `economie`.
 
@@ -212,10 +212,65 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | DELETE | `/api/internal/players/:playerId/politics?entityId=` | `social:politics:write` | Retirer un **PNJ** d'une entité politique |
 | GET | `/api/internal/players/:playerId/politics?entityId=` | `social:politics:read` | Avec `entityId` : cette adhésion ou `null` ; sans : la liste des adhésions politiques |
 | POST | `/api/internal/encounters` `{playerId, otherPlayerId}` | `social:reputation:write` | Enregistrer une rencontre (alimente les suggestions) |
+| POST | `/api/internal/authorize` `{holderType, holderId, playerId, action}` (ou `{checks:[…]}`) | `social:authorize` | **Décision ACL** : réponse **toujours 200** `{allowed, reason, role, leader, permissions}` (voir « ACL centralisée ») |
+| GET | `/api/internal/permissions/catalog` | `social:authorize` | Catalogue des actions : règles (`defaultMember`, `satisfiedBy`) + description localisée (`Accept-Language`) |
 
 **Auth de service** : garde monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`) ; `azp` ∈ `INTERNAL_SERVICE_CLIENTS`, `aud` = `social-api`, puis rôle de capacité sinon `403 SERVICE_FORBIDDEN`/`FORBIDDEN`. Un token joueur ne peut pas porter un `azp` de service : c'est la garantie de non-contournement.
 
 Les **PNJ** sont des profils `entityType: "npc"` (id UUID attribué par le serveur de jeu) : visibles dans la recherche (`?entityType=npc`), amiables, présents dans les corporations comme membres avec un grade, et **exclus** de la réputation, des sanctions et des signalements (réponse `400 NPC_NOT_APPLICABLE`). Un PNJ **peut** être le CEO d'une corporation (via l'API interne) : le jeu peut ainsi créer des corporations entièrement PNJ.
+
+### ACL centralisée (décision de permission)
+
+`POST /api/internal/authorize` (rôle `social:authorize`) est le **point de décision** pour toute
+vérification d'action d'organisation. Mission, inventory, economie, market et le serveur de jeu
+n'interprètent plus `corporation_ranks.permissions` / `political_offices.permissions` eux-mêmes :
+ils envoient une action et mapent le refus sur leurs propres codes d'erreur.
+
+```bash
+curl -X POST $SOCIAL/api/internal/authorize -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -H 'Accept-Language: fr' \
+  -d '{"holderType":"corporation","holderId":"…","playerId":"…","action":"mission:treasury:commit"}'
+```
+
+Corps : un contrôle, ou `{ "checks": [ … ] }` (≤ 50) pour un lot. Réponse **200 dans les deux
+cas** — un refus est un résultat, jamais une erreur :
+
+```json
+{ "holderType": "corporation", "holderId": "…", "playerId": "…", "action": "…",
+  "allowed": false, "reason": "missing_permission", "role": "Director", "leader": false,
+  "permissions": ["invite"] }
+```
+
+`reason` ∈ `allowed | not_member | missing_permission`.
+
+**Ordre de résolution** (fail-closed, pas de règle deny, pas de wildcard) :
+
+1. non-membre → `not_member` ;
+2. grade CEO / office de tête → accordé (`leader: true`) ;
+3. `action` présente dans `permissions` — **match exact**, unique chemin pour une *action libre* ;
+4. `satisfiedBy` du catalogue (rétrocompatibilité des permissions legacy) ;
+5. `defaultMember` → accordé à tout membre ;
+6. sinon → `missing_permission`.
+
+**Catalogue** (`GET /api/internal/permissions/catalog`, source de vérité : `src/services/permissionCatalog.ts`) :
+
+| Action | Orga | Règle | Appelé par |
+|---|---|---|---|
+| `manage_corporation`, `manage_ranks`, `manage_members`, `invite`, `recruit` | corporation | legacy (stocké tel quel) | Social (interne) |
+| `manage_entity`, `manage_offices`, `manage_members`, `manage_hierarchy`, `manage_treasury`, `issue_currency` | politique | legacy | Social (interne) |
+| `mission:treasury:commit` | corp ← `manage_corporation` ; pol ← `manage_treasury` | rétrocompatible | Mission (escrow `issuer`) |
+| `mission:event:manage` | corporation ← `manage_corporation` | rétrocompatible | Mission (flag event) |
+| `inventory:poi:manage` | corp ← `manage_corporation` ; pol ← `manage_entity` | rétrocompatible | Inventory (POI d'organisation) |
+| `economie:treasury:manage` | corporation | **grant explicite** : aucun `satisfiedBy`, seul le CEO passe d'office | Economie (8 routes trésorerie) |
+| `market:trade` | corporation | `defaultMember: true` (tout membre) | Market |
+
+Un grade/office peut porter **n'importe quelle action** au format
+`^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)*$` (≤ 64) : une action hors catalogue n'est jamais accordée
+implicitement, elle doit être écrite telle quelle dans `permissions`. **Aucune migration** —
+les colonnes sont déjà `text[]`.
+
+Social lui-même ne passe pas par l'endpoint : `requireCorporationPermission` /
+`requirePoliticalPermission` restent des appels internes directs.
 
 ## Structure
 
@@ -287,6 +342,7 @@ Ce service est dédié à la partie sociale du jeu ; les features ci-dessous son
 ### API & Intégration
 - [x] API interne connectée au serveur du jeu (mise à jour régulière)
 - [x] Auth service-à-service par comptes de service Keycloak et rôles de capacité (fin des secrets partagés)
+- [x] ACL centralisée configurable : `POST /api/internal/authorize` + catalogue d'actions (corporations & entités politiques)
 - [~] API publique sécurisée (OAuth2, clés d'accès) — JWT Keycloak en place, clés d'accès tierces à venir
 - [ ] Webhooks d'événements (nouvelle corporation, changement de réputation, etc.)
 - [ ] Support des outils externes (bots, extensions, overlays)

@@ -1,8 +1,8 @@
 /**
- * Outbound client for the Social service internal API. Used to verify a player's
- * corporation membership when creating or accepting a corporation-scoped mission.
- * Authentication mirrors `economy.client`: mission's own Keycloak service account
- * (`client_credentials`) with a dev-only `X-Internal-Key` fallback.
+ * Outbound client for the Social service internal API: membership reads (visibility,
+ * prerequisites) and the central ACL (`POST /api/internal/authorize`) that gates every
+ * organization-scoped check. Authentication mirrors `economy.client`: mission's own
+ * Keycloak service account (`client_credentials`) with a dev-only `X-Internal-Key` fallback.
  */
 import { env } from '../config/env.js';
 import { currentLang } from '../i18n/index.js';
@@ -95,6 +95,60 @@ async function fetchInternal<T>(path: string): Promise<T> {
       status: res.status,
       body: text,
     });
+}
+
+/** POSTs a JSON body to a Social internal endpoint and returns the parsed body. */
+async function postInternal<T>(path: string, body: unknown): Promise<T> {
+  if (!env.social.apiUrl) {
+    throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
+  }
+  const res = await fetch(`${env.social.apiUrl}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    return (await res.json()) as T;
+  }
+  const text = await res.text().catch(() => '');
+  throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`, {
+    status: res.status,
+    body: text,
+  });
+}
+
+// ── Central authorization (Social is the policy decision point) ─────────────
+
+/** Holder kinds understood by Social's authorization endpoint. */
+export type AuthorizeHolderType = 'corporation' | 'political';
+
+/** Why Social refused an action (`allowed` never carries a reason of refusal). */
+export type AuthorizeReason = 'allowed' | 'not_member' | 'missing_permission';
+
+/** Outcome of `POST /api/internal/authorize` — always a result, never an HTTP error. */
+export interface AuthorizeResult {
+  allowed: boolean;
+  reason: AuthorizeReason;
+  /** Rank/office name held, or null when the player is not a member. */
+  role: string | null;
+  /** True when the rank is the CEO / the office is the head. */
+  leader: boolean;
+  permissions: string[];
+}
+
+/**
+ * Asks Social whether a player holds an action on an organisation. Mission never
+ * interprets permissions itself: it maps `reason` onto its own error codes.
+ * @param input - Holder, player and catalogued/free action.
+ * @returns The decision.
+ */
+export async function authorizeAction(input: {
+  holderType: AuthorizeHolderType;
+  holderId: string;
+  playerId: string;
+  action: string;
+}): Promise<AuthorizeResult> {
+  return postInternal<AuthorizeResult>('/api/internal/authorize', input);
 }
 
 /** Calls the Social internal corporation endpoint and returns the parsed body. */
@@ -200,37 +254,4 @@ export interface PlayerPresence {
  */
 export async function getPlayerPresence(playerId: string): Promise<PlayerPresence> {
   return fetchInternal<PlayerPresence>(`/api/internal/players/${playerId}/presence`);
-}
-
-/** Political membership of a player in an entity, with their office (Social internal API). */
-export interface PoliticalMembership {
-  id: string;
-  type: string;
-  name: string;
-  office: {
-    id: number;
-    name: string;
-    priority: number;
-    permissions: string[];
-    isHead: boolean;
-    isDefault: boolean;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
-/**
- * A player's membership in a political entity (with their office and its permissions),
- * or null. Used to gate missions funded by the entity's treasury (`manage_treasury`).
- * @param playerId - Player id.
- * @param entityId - Political entity id.
- * @returns Membership, or null.
- */
-export async function getPlayerPoliticalMembership(
-  playerId: string,
-  entityId: string,
-): Promise<PoliticalMembership | null> {
-  return fetchInternal<PoliticalMembership | null>(
-    `/api/internal/players/${playerId}/politics?entityId=${encodeURIComponent(entityId)}`,
-  );
 }

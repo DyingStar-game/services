@@ -65,6 +65,8 @@ export const en = {
   'treasury.no_corp_permission': 'Requires the CEO role or the manage_corporation permission',
   'treasury.not_politics_member': 'You are not a member of the political entity funding this mission',
   'treasury.no_treasury_permission': 'Requires an office with the manage_treasury permission (or the head)',
+  // ── zones ──
+  'zones.poi_not_found': 'POI {id} does not exist',
 } as const;
 
 /** Keys of the construction-time catalog (typed from the English source). */
@@ -119,6 +121,8 @@ export const fr: Record<MessageKey, string> = {
   'treasury.no_corp_permission': 'Nécessite le rôle CEO ou la permission manage_corporation',
   'treasury.not_politics_member': 'Vous n\'êtes pas membre de l\'entité politique qui finance cette mission',
   'treasury.no_treasury_permission': 'Nécessite un office avec la permission manage_treasury (ou le chef)',
+  // ── zones ──
+  'zones.poi_not_found': "Le POI {id} n'existe pas",
 };
 
 /**
@@ -131,6 +135,7 @@ export const frCodeMessages: Record<string, string> = {
   DELIVERY_TARGET_SELF: 'La cible de livraison doit différer du détenteur',
   NOT_MISSION_ISSUER: 'Seul le créateur de la mission peut confirmer ses objectifs',
   OUT_OF_ZONE: "Vous n'êtes pas dans une zone où cette mission est disponible",
+  POI_NOT_FOUND: "Le POI référencé par la zone n'existe pas",
   MISSING_OBJECTIVES: 'Une mission nécessite au moins un objectif',
   REWARD_REQUIRED: 'Les missions créées par des joueurs nécessitent au moins un composant de récompense',
   ALREADY_ASSIGNED: 'Vous avez déjà accepté cette mission',
@@ -146,7 +151,7 @@ export const frCodeMessages: Record<string, string> = {
   OBJECTIVE_NOT_CONFIRMABLE: "Seuls les objectifs confirmés par l'émetteur peuvent être confirmés",
   NOT_MISSION_MANAGER: 'Seul le créateur de la mission peut la gérer',
   NOT_CORPORATION_MISSION: 'Seules les missions corporation peuvent être déclarées en event',
-  EVENT_FORBIDDEN: 'Nécessite la permission manage_corporation',
+  EVENT_FORBIDDEN: 'Nécessite la permission mission:event:manage',
   MISSION_NOT_OPEN: 'La mission est {status}',
   MISSION_EXPIRED: 'La mission a expiré',
   MISSION_COMPLETED: 'Une mission complétée ne peut pas être annulée',

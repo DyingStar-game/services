@@ -109,6 +109,30 @@ paths:
                     items: { $ref: '#/components/schemas/PlayerMission' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /api/me/missions-created:
+    get:
+      tags: [me]
+      summary: The missions created by the caller
+      description: >
+        Every mission whose `createdBy` is the calling player, all statuses, with no zone,
+        group or free-slot filtering — the creator's management view, unlike the browse.
+      parameters:
+        - $ref: '#/components/parameters/MissionStatus'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Missions created by the caller
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [missions]
+                properties:
+                  missions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Mission' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   # ── Missions ───────────────────────────────────────────────────────────────
   /api/missions:
     get:
@@ -151,8 +175,9 @@ paths:
         Reward components are escrowed until settlement or refund: items are held from the
         creator's inventory, and the credits component is debited either from the creator's
         wallet (`escrowSource: creator`, default) or from the issuing organization's
-        treasury (`escrowSource: issuer` — corporation or political entity, requires
-        membership plus CEO/`manage_corporation` or an office with `manage_treasury`).
+        treasury (`escrowSource: issuer` — corporation or political entity, requires the
+        `mission:treasury:commit` action decided by Social: CEO/head, or the
+        `manage_corporation` / `manage_treasury` permission).
       requestBody:
         required: true
         content:
@@ -187,7 +212,7 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
               examples:
                 treasury:
-                  value: { error: TREASURY_FORBIDDEN, message: Requires the CEO role or the manage_corporation permission, status: 403 }
+                  value: { error: TREASURY_FORBIDDEN, message: 'Requires the CEO role or the manage_corporation permission', status: 403 }
         '409':
           description: Escrow refused (insufficient funds)
           content:
@@ -549,9 +574,9 @@ paths:
       summary: Declare (or lift) the "big event" flag on a corporation mission
       description: >
         Events are the exception to the capacity cap: they allow up to 1000 assignees and
-        stay listed as long as they have a free slot. Requires the CEO rank or the
-        `manage_corporation` permission in the issuing corporation. Lifting the flag
-        requires `maxAssignees` ≤ 100.
+        stay listed as long as they have a free slot. Requires the `mission:event:manage`
+        action in the issuing corporation (decided by Social: CEO or
+        `manage_corporation`). Lifting the flag requires `maxAssignees` ≤ 100.
       parameters:
         - $ref: '#/components/parameters/MissionId'
       requestBody:
@@ -574,7 +599,7 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
               examples:
                 forbidden:
-                  value: { error: EVENT_FORBIDDEN, message: 'Requires the manage_corporation permission', status: 403 }
+                  value: { error: EVENT_FORBIDDEN, message: 'Requires the mission:event:manage permission', status: 403 }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ── Internal ───────────────────────────────────────────────────────────────
@@ -1171,9 +1196,14 @@ components:
     MissionZone:
       description: >
         One availability zone, matched against the presence location reported by the game
-        server. `scene` is a hierarchical path (`tarsis_1/new-paris`) matched by equality
-        or path prefix (`tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`, never
-        `tarsis_10`). Coordinates share the units of `location.position` (meters assumed).
+        server. A `system` zone matches the star system. A `poi` zone references a point of
+        interest in the Inventory service: a POI carrying a `scene` and no radius matches its
+        hierarchical scene subtree (`tarsis_1` matches `tarsis_1/new-paris`, never
+        `tarsis_10`); a radius (declared on the zone, overriding the POI's own) matches the
+        area around the POI centre; otherwise only the exact position matches. A POI that
+        cannot be resolved never matches (fail closed), and creating a zone on an unknown POI
+        is rejected with `POI_NOT_FOUND`. Coordinates share the units of `location.position`
+        (meters assumed).
       oneOf:
         - type: object
           required: [kind, system]
@@ -1181,24 +1211,15 @@ components:
             kind: { const: system }
             system: { type: string, maxLength: 64 }
         - type: object
-          required: [kind, scene]
+          required: [kind, poiId]
           properties:
-            kind: { const: scene }
-            system: { type: string, maxLength: 64, description: 'Optional: restricts the scene to one system' }
-            scene: { type: string, maxLength: 128, description: 'Hierarchical scene path, e.g. `tarsis_1/new-paris`' }
-        - type: object
-          required: [kind, center, radiusM]
-          properties:
-            kind: { const: area }
-            system: { type: string, maxLength: 64 }
-            center:
-              type: object
-              required: [x, y, z]
-              properties:
-                x: { type: number }
-                y: { type: number }
-                z: { type: number }
-            radiusM: { type: integer, minimum: 1, maximum: 1000000 }
+            kind: { const: poi }
+            poiId: { type: string, format: uuid, description: POI id owned by the Inventory service }
+            radiusM:
+              type: integer
+              minimum: 1
+              maximum: 1000000
+              description: Overrides the POI's own radius to match an area (metres)
 
     Mission:
       type: object
@@ -1467,8 +1488,9 @@ components:
           default: creator
           description: >
             `creator` debits the creator's wallet (default); `issuer` debits the issuing
-            organization's treasury (corporation or political entity — requires membership
-            plus CEO/`manage_corporation` or an office with `manage_treasury`/head)
+            organization's treasury (corporation or political entity — requires the
+            `mission:treasury:commit` action: CEO/head, or `manage_corporation` /
+            `manage_treasury`)
         rewards:
           type: array
           minItems: 1

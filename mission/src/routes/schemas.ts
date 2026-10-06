@@ -50,6 +50,11 @@ export const assignmentListQuery = limitQuery.extend({
   status: z.enum(ASSIGNMENT_STATUSES).optional(),
 });
 
+/** Query filter for the caller's own creations (`GET /me/missions-created`). */
+export const missionCreatedListQuery = limitQuery.extend({
+  status: z.enum(MISSION_STATUSES).optional(),
+});
+
 /** Free-form location / payload objects (opaque to this service). */
 const jsonObject = z.record(z.string(), z.unknown());
 
@@ -104,23 +109,19 @@ export const prerequisiteSchema = z
 // ── Zones ────────────────────────────────────────────────────────────────────
 
 const zoneSystem = z.string().trim().min(1).max(64);
-const zoneScene = z.string().trim().min(1).max(128);
-const zoneCenter = z
-  .object({ x: z.number(), y: z.number(), z: z.number() })
-  .strict();
 
-/** One availability zone, matched against the player's presence location. */
+/**
+ * One availability zone, matched against the player's presence location. Geometry
+ * (scenes, areas) lives in the Inventory POI registry: a `poi` zone references a POI,
+ * with an optional `radiusM` overriding the POI's own radius.
+ */
 export const missionZoneSchema = z.union([
   z.object({ kind: z.literal('system'), system: zoneSystem }).strict(),
   z
-    .object({ kind: z.literal('scene'), system: zoneSystem.optional(), scene: zoneScene })
-    .strict(),
-  z
     .object({
-      kind: z.literal('area'),
-      system: zoneSystem.optional(),
-      center: zoneCenter,
-      radiusM: z.number().int().min(1).max(1_000_000),
+      kind: z.literal('poi'),
+      poiId: z.string().uuid(),
+      radiusM: z.number().int().min(1).max(1_000_000).optional(),
     })
     .strict(),
 ]);

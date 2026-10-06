@@ -2068,6 +2068,73 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
+  # ── Authorization (policy decision point) ─────────────────────────────────
+  /api/internal/authorize:
+    post:
+      tags: [internal]
+      operationId: internalAuthorize
+      summary: Decide whether a player holds an action on an organisation
+      description: |
+        Central ACL. Accepts one check or `{ "checks": [...] }` (max 50) and **always
+        answers 200**: a refusal is a result, never an error, so a batch keeps all of its
+        answers. Requires the `social:authorize` capability role.
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/AuthorizeCheck'
+                - type: object
+                  required: [checks]
+                  properties:
+                    checks:
+                      type: array
+                      minItems: 1
+                      maxItems: 50
+                      items: { $ref: '#/components/schemas/AuthorizeCheck' }
+      responses:
+        '200':
+          description: 'The decision (single check → one result, batch → `{ results: [...] }`)'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AuthorizeResult'
+                  - type: object
+                    required: [results]
+                    properties:
+                      results:
+                        type: array
+                        items: { $ref: '#/components/schemas/AuthorizeResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/permissions/catalog:
+    get:
+      tags: [internal]
+      operationId: internalPermissionCatalog
+      summary: Every catalogued action and its evaluation rules
+      description: Localized through `Accept-Language`. Requires the `social:authorize` capability role.
+      security: [{ serviceAuth: [] }]
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actions]
+                properties:
+                  actions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PermissionCatalogRow' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+
   # ── Politics ────────────────────────────────────────────────────────────────
   /api/me/politics:
     get:
@@ -2868,6 +2935,58 @@ components:
         displayName: { type: string }
         entityType: { $ref: '#/components/schemas/ProfileKind' }
 
+    # ── ACL (central authorization) ──
+    Action:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)*$'
+      description: >
+        Organisation action. Catalogued actions (`mission:treasury:commit`,
+        `economie:treasury:manage`, `market:trade`, `inventory:poi:manage`, legacy
+        `manage_*` names) carry evaluation rules; any other string is a *free* action and
+        only ever matches an exact permission stored on the rank/office.
+    AuthorizeCheck:
+      type: object
+      required: [holderType, holderId, playerId, action]
+      properties:
+        holderType: { type: string, enum: [corporation, political] }
+        holderId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        action: { $ref: '#/components/schemas/Action' }
+    AuthorizeResult:
+      type: object
+      required: [holderType, holderId, playerId, action, allowed, reason, role, leader, permissions]
+      properties:
+        holderType: { type: string, enum: [corporation, political] }
+        holderId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        action: { $ref: '#/components/schemas/Action' }
+        allowed: { type: boolean }
+        reason:
+          type: string
+          enum: [allowed, not_member, missing_permission]
+          description: Callers map it onto their own error codes (`not_member` → 403 membership, `missing_permission` → 403 permission).
+        role: { type: [string, 'null'], description: 'Rank/office name held, null for a non-member' }
+        leader: { type: boolean, description: CEO rank / head office — implicitly holds every action }
+        permissions:
+          type: array
+          items: { type: string }
+          description: Permissions actually held by the rank/office
+    PermissionCatalogRow:
+      type: object
+      required: [action, holder, legacy, description]
+      properties:
+        action: { $ref: '#/components/schemas/Action' }
+        holder: { type: string, enum: [corporation, political] }
+        legacy: { type: boolean, description: Stored as-is on ranks/offices (pre-ACL permission) }
+        defaultMember: { type: boolean, description: Granted to every member without any permission }
+        satisfiedBy:
+          type: array
+          items: { type: string }
+          description: Legacy permissions that satisfy this action
+        description: { type: string, description: Localized through Accept-Language }
+
     # ── Enums ──
     PresenceStatus:
       type: string
@@ -2876,7 +2995,7 @@ components:
       type: string
       enum: [open, apply, closed]
     CorporationPermission:
-      type: string
+      description: Legacy corporation permissions (kept for reference; ranks accept any `Action`).
       enum: [manage_corporation, manage_ranks, manage_members, invite, recruit]
     CorporationRequestKind:
       type: string
@@ -3093,7 +3212,7 @@ components:
         priority: { type: integer, description: Higher wins; a member may only act on ranks strictly below their own }
         permissions:
           type: array
-          items: { $ref: '#/components/schemas/CorporationPermission' }
+          items: { $ref: '#/components/schemas/Action' }
         isCeo: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
         isDefault: { type: boolean, description: Rank given to new members }
 
@@ -3106,7 +3225,7 @@ components:
         permissions:
           type: array
           default: []
-          items: { $ref: '#/components/schemas/CorporationPermission' }
+          items: { $ref: '#/components/schemas/Action' }
         isDefault: { type: boolean }
 
     RankPatch:
@@ -3117,7 +3236,7 @@ components:
         priority: { type: integer, minimum: 0, maximum: 99 }
         permissions:
           type: array
-          items: { $ref: '#/components/schemas/CorporationPermission' }
+          items: { $ref: '#/components/schemas/Action' }
         isDefault: { type: boolean }
 
     CorporationMembership:
@@ -3302,7 +3421,7 @@ components:
       description: '`commune` covers villages and towns; `federation` is the highest, optional level (a country may stay independent)'
 
     PoliticalPermission:
-      type: string
+      description: Legacy political permissions (kept for reference; offices accept any `Action`).
       enum: [manage_entity, manage_offices, manage_members, manage_hierarchy, manage_treasury, issue_currency]
 
     PoliticalEntityRef:
@@ -3382,7 +3501,7 @@ components:
         priority: { type: integer, description: Higher wins; a member may only act on offices strictly below their own }
         permissions:
           type: array
-          items: { $ref: '#/components/schemas/PoliticalPermission' }
+          items: { $ref: '#/components/schemas/Action' }
         isHead: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
         isDefault: { type: boolean, description: Office given to newly appointed members }
 
@@ -3395,7 +3514,7 @@ components:
         permissions:
           type: array
           default: []
-          items: { $ref: '#/components/schemas/PoliticalPermission' }
+          items: { $ref: '#/components/schemas/Action' }
         isDefault: { type: boolean }
 
     PoliticalOfficePatch:
@@ -3406,7 +3525,7 @@ components:
         priority: { type: integer, minimum: 0, maximum: 99 }
         permissions:
           type: array
-          items: { $ref: '#/components/schemas/PoliticalPermission' }
+          items: { $ref: '#/components/schemas/Action' }
         isDefault: { type: boolean }
 
     PoliticalMemberBody:

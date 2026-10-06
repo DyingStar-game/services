@@ -42,8 +42,8 @@ export const internalRoutes: IRouter = Router();
 
 /**
  * Resolves the trading party from an explicit holder (game server acting for a player,
- * an NPC or a corporation). Corporation membership is authoritative in Social when an
- * `actor` player is supplied.
+ * an NPC or a corporation). When an `actor` player is supplied, `market:trade` on a
+ * corporation holder is decided by Social.
  */
 function internalParty(input: {
   holderType: 'player' | 'npc' | 'corporation' | 'system';

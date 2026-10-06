@@ -30,14 +30,9 @@ import { HttpError, notFound } from '../lib/httpError.js';
 import { creditHolder, debitHolder, type WalletHolderType } from './economy.client.js';
 import { createHold, releaseHold } from './inventory.client.js';
 import { settledTotal } from './rewards.service.js';
-import {
-  getGroup,
-  isCorporationMember,
-  getPlayerCorporationIn,
-  getPlayerPoliticalMembership,
-} from './social.client.js';
+import { authorizeAction, getGroup, isCorporationMember } from './social.client.js';
 import { validateMissionSpec, type SpecObjectiveInput } from './spec.service.js';
-import { zoneFilterSql } from './zones.service.js';
+import { assertPoiZonesExist, resolveListingPoiGeometry, zoneFilterSql } from './zones.service.js';
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -108,6 +103,11 @@ export interface MissionFilters {
   isEvent?: boolean;
   /** Only missions with at least one free assignee slot (full missions disappear). */
   hasFreeSlots?: boolean;
+  /**
+   * Only missions created by this id (player id for player-made missions, Keycloak client
+   * id for service-made ones). Powers the caller's "missions I created" listing.
+   */
+  createdBy?: string;
   /**
    * The viewer's group (Social). Missions shared with a group are only visible to its
    * members; pass `undefined` to disable the group filter, e.g. on the internal API.
@@ -211,6 +211,7 @@ export async function listMissions(filters: MissionFilters, limit: number): Prom
   if (filters.groupId) conditions.push(eq(missions.groupId, filters.groupId));
   if (filters.groupClaimable !== undefined) conditions.push(eq(missions.groupClaimable, filters.groupClaimable));
   if (filters.isEvent !== undefined) conditions.push(eq(missions.isEvent, filters.isEvent));
+  if (filters.createdBy) conditions.push(eq(missions.createdBy, filters.createdBy));
   if (filters.hasFreeSlots) {
     conditions.push(
       sql`(select count(*) from ${missionAssignments} where ${missionAssignments.missionId} = ${missions.id} and ${missionAssignments.status} = 'active') < ${missions.maxAssignees}`,
@@ -220,7 +221,9 @@ export async function listMissions(filters: MissionFilters, limit: number): Prom
     conditions.push(sql`(${missions.groupId} is null or ${missions.groupId} = ${filters.viewerGroupId})`);
   }
   if (filters.viewerLocation !== undefined) {
-    conditions.push(zoneFilterSql(filters.viewerLocation));
+    // POI zones resolve their geometry through Inventory (cached; empty = no mission
+    // references a POI, so Inventory is never touched in that case).
+    conditions.push(zoneFilterSql(filters.viewerLocation, await resolveListingPoiGeometry()));
   }
 
   return db
@@ -252,6 +255,7 @@ export async function createMission(
     },
     { escrowed: false },
   );
+  await assertPoiZonesExist(input.zones);
 
   const expiresAt =
     input.expiresAt ??
@@ -308,9 +312,9 @@ export async function createMission(
  */
 /**
  * Whether the player may commit an organization's treasury (corporation or political
- * entity) to fund a mission: membership plus the organization's spending permission —
- * CEO/`manage_corporation` for a corporation, head office or `manage_treasury` for a
- * political entity.
+ * entity) to fund a mission. The decision is delegated to Social (`mission:treasury:commit`,
+ * satisfied by `manage_corporation` for a corporation and `manage_treasury` for a
+ * political entity); mission only maps the refusal onto its own error.
  * @param issuerType - `corporation` or `politics`.
  * @param issuerId - Organization id (opaque, owned by Social).
  * @param playerId - Acting player.
@@ -321,24 +325,26 @@ async function assertTreasuryAccess(
   issuerId: string,
   playerId: string,
 ): Promise<void> {
-  if (issuerType === 'corporation') {
-    const membership = await getPlayerCorporationIn(playerId, issuerId);
-    if (!membership) {
-      throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.not_corp_member'));
-    }
-    if (!membership.rank.isCeo && !membership.rank.permissions.includes('manage_corporation')) {
-      throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.no_corp_permission'));
-    }
-    return;
+  const corporate = issuerType === 'corporation';
+  const decision = await authorizeAction({
+    holderType: corporate ? 'corporation' : 'political',
+    holderId: issuerId,
+    playerId,
+    action: 'mission:treasury:commit',
+  });
+  if (decision.allowed) return;
+  if (decision.reason === 'not_member') {
+    throw new HttpError(
+      403,
+      'TREASURY_FORBIDDEN',
+      t(corporate ? 'treasury.not_corp_member' : 'treasury.not_politics_member'),
+    );
   }
-  const membership = await getPlayerPoliticalMembership(playerId, issuerId);
-  if (!membership) {
-    throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.not_politics_member'));
-  }
-  const office = membership.office;
-  if (!office.isHead && !(office.permissions ?? []).includes('manage_treasury')) {
-    throw new HttpError(403, 'TREASURY_FORBIDDEN', t('treasury.no_treasury_permission'));
-  }
+  throw new HttpError(
+    403,
+    'TREASURY_FORBIDDEN',
+    t(corporate ? 'treasury.no_corp_permission' : 'treasury.no_treasury_permission'),
+  );
 }
 
 export async function createPlayerMission(
@@ -355,6 +361,7 @@ export async function createPlayerMission(
     },
     { escrowed: true, requireReward: true },
   );
+  await assertPoiZonesExist(input.zones);
 
   const visibility = input.visibility ?? 'public';
   if (visibility === 'corporation') {
@@ -550,6 +557,7 @@ export async function updateMission(
     zones?: MissionZone[];
   },
 ): Promise<Mission> {
+  if (patch.zones) await assertPoiZonesExist(patch.zones);
   const [updated] = await db
     .update(missions)
     .set({ ...patch, updatedAt: new Date() })
@@ -667,8 +675,8 @@ export async function unshareMission(
 
 /**
  * Declares (or lifts) a "big event" flag on a corporation mission. Events allow a capacity
- * up to 1000 assignees; the flag can only be set by the CEO or a member holding the
- * `manage_corporation` permission of the issuing corporation.
+ * up to 1000 assignees; the flag can only be set by a member authorized by Social
+ * (`mission:event:manage`, satisfied by `manage_corporation` — the CEO passes implicitly).
  * @param missionId - Mission id.
  * @param playerId - Acting player.
  * @param opts.enabled - Whether the mission is an event.
@@ -684,13 +692,17 @@ export async function setMissionEvent(
   if (mission.issuerType !== 'corporation' || !mission.issuerId) {
     throw new HttpError(403, 'NOT_CORPORATION_MISSION', 'Only corporation missions can be flagged as events');
   }
-  const membership = await getPlayerCorporationIn(playerId, mission.issuerId);
-  if (!membership) {
+  const decision = await authorizeAction({
+    holderType: 'corporation',
+    holderId: mission.issuerId,
+    playerId,
+    action: 'mission:event:manage',
+  });
+  if (decision.reason === 'not_member') {
     throw new HttpError(403, 'NOT_CORPORATION_MEMBER', t('corp.not_member_manage'));
   }
-  const { rank } = membership;
-  if (!rank.isCeo && !rank.permissions.includes('manage_corporation')) {
-    throw new HttpError(403, 'EVENT_FORBIDDEN', 'Requires the manage_corporation permission');
+  if (!decision.allowed) {
+    throw new HttpError(403, 'EVENT_FORBIDDEN', 'Requires the mission:event:manage permission');
   }
 
   const maxAssignees = opts.maxAssignees ?? mission.maxAssignees;

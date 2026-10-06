@@ -8,7 +8,7 @@ import { Router, type IRouter } from 'express';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
-import { ensureCorporationMember } from '../services/authorization.js';
+import { ensureCorporationTrade } from '../services/authorization.js';
 import { listCatalog } from '../services/catalog.service.js';
 import {
   cancelDemand,
@@ -40,13 +40,13 @@ export const marketRoutes: IRouter = Router();
 
 /**
  * Resolves the trading party from the request: the caller's corporation when
- * `corporationId` is provided (membership checked in Social), the player otherwise.
+ * `corporationId` is provided (`market:trade` decided by Social), the player otherwise.
  */
 async function resolveParty(req: { body: { corporationId?: string } }, playerId: string): Promise<Party> {
   const corporationId = req.body.corporationId;
   if (corporationId) {
     const party: Party = { holderType: 'corporation', holderId: corporationId, isCorporation: true, actorId: playerId };
-    await ensureCorporationMember(party, playerId);
+    await ensureCorporationTrade(party, playerId);
     return party;
   }
   return { holderType: 'player', holderId: playerId, isCorporation: false, actorId: playerId };

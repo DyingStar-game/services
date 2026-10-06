@@ -19,6 +19,13 @@ info:
       (e.g. `inventory:hold`). Dev only (`INTERNAL_DEV_BYPASS=true`): the legacy
       `X-Internal-Key` header is accepted.
 
+    Beyond goods, the service stores **POIs** (points of interest): a GPS position
+    (`x`/`y`/`z`), optionally a zone (`radiusM`), scoped to a `system`/`scene`, owned by a
+    player, NPC, corporation, political entity or the reserved `system`. POIs are shared
+    **read-only** (`/pois/{id}/shares`) and their ownership can be transferred
+    (`/pois/{id}/transfer`). The mission service resolves them in batch on
+    `POST /api/internal/pois/resolve` to match its availability zones.
+
     Every error is `{ "error": "CODE", "message": "...", "status": 4xx }`.
 
 
@@ -33,9 +40,11 @@ tags:
   - name: public
     description: Unauthenticated endpoints
   - name: me
-    description: The authenticated player's own inventory
+    description: The authenticated player's own inventory and POIs
   - name: corporations
-    description: Corporation inventories (membership delegated to the Social service)
+    description: Corporation inventories and POIs (membership delegated to the Social service)
+  - name: politics
+    description: Political-entity POIs (membership delegated to the Social service)
   - name: internal
     description: Game-server / market / mission integration (service accounts, capability roles)
 
@@ -148,6 +157,239 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── POIs (points of interest / zones) ────────────────────────────────────────
+  /api/me/pois:
+    get:
+      tags: [me]
+      summary: POIs of the caller's scope (owned, granted, public)
+      description: Owned POIs ∪ read-only grants held by the caller ∪ POIs published `public`.
+      responses:
+        '200':
+          description: POI list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Poi' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [me]
+      summary: Create a POI (own, or for a corporation/political entity the caller manages)
+      description: >
+        Defaults to a player-owned POI. Pass `owner` to create it for an organization; the
+        caller must hold the `inventory:poi:manage` action there (decided by Social: CEO/head,
+        or `manage_corporation` / `manage_entity`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoiCreateBody' }
+      responses:
+        '201':
+          description: The created POI
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poi' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/PoiForbidden' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  /api/me/pois/{poiId}:
+    get:
+      tags: [me]
+      summary: One POI with its shares (owned, granted or public)
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoiView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/PoiForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [me]
+      summary: Edit a POI the caller manages (ownership unchanged)
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoiUpdateBody' }
+      responses:
+        '200':
+          description: The updated POI
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poi' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/PoiForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+    delete:
+      tags: [me]
+      summary: Delete a POI the caller manages (shares cascade)
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/PoiForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  /api/me/pois/{poiId}/shares:
+    post:
+      tags: [me]
+      summary: Grant read-only access to a player/NPC/corporation/political entity
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [granteeType, granteeId]
+              properties:
+                granteeType: { $ref: '#/components/schemas/PoiGranteeType' }
+                granteeId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: The created grant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoiShare' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/PoiForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/PoiConflict' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  /api/me/pois/{poiId}/shares/{granteeType}/{granteeId}:
+    delete:
+      tags: [me]
+      summary: Revoke a read-only grant
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+        - $ref: '#/components/parameters/granteeType'
+        - $ref: '#/components/parameters/granteeId'
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/PoiForbidden' }
+        '404': { $ref: '#/components/responses/PoiNotFound' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  /api/me/pois/{poiId}/transfer:
+    post:
+      tags: [me]
+      summary: Hand POI ownership over to a player/NPC/corporation/political entity
+      description: Ownership moves and the previous owner keeps no implicit grant.
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toType, toId]
+              properties:
+                toType: { $ref: '#/components/schemas/PoiGranteeType' }
+                toId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The transferred POI
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poi' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/PoiForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/PoiConflict' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  # ── POIs of an organization ─────────────────────────────────────────────────
+  /api/corporations/{corporationId}/pois:
+    get:
+      tags: [corporations]
+      summary: Corporation POIs (member only, membership checked in Social)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: POIs owned by or granted to the corporation
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Poi' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  /api/corporations/{corporationId}/pois/{poiId}:
+    get:
+      tags: [corporations]
+      summary: One POI of the corporation's scope (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoiView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  /api/politics/{entityId}/pois:
+    get:
+      tags: [politics]
+      summary: Political-entity POIs (member only, membership checked in Social)
+      parameters:
+        - $ref: '#/components/parameters/entityId'
+      responses:
+        '200':
+          description: POIs owned by or granted to the entity
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Poi' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
+
+  /api/politics/{entityId}/pois/{poiId}:
+    get:
+      tags: [politics]
+      summary: One POI of the entity's scope (member only)
+      parameters:
+        - $ref: '#/components/parameters/entityId'
+        - $ref: '#/components/parameters/poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoiView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/SocialUnavailable' }
 
   # ── Internal (game server / market / mission) ──────────────────────────────
   /api/internal/holders/{holderType}/{holderId}:
@@ -408,6 +650,130 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  # ── Internal POIs (game server / mission zones) ─────────────────────────────
+  /api/internal/pois/resolve:
+    post:
+      tags: [internal]
+      summary: Batch POI geometry resolution (mission zone matching)
+      description: Unknown ids are omitted instead of failing the call (fail-closed for callers).
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  maxItems: 100
+                  items: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Resolved POIs (unknown ids absent)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pois]
+                properties:
+                  pois:
+                    type: array
+                    items: { $ref: '#/components/schemas/Poi' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/pois:
+    post:
+      tags: [internal]
+      summary: Create a POI on behalf of any holder (game server / system)
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoiInternalCreateBody' }
+      responses:
+        '201':
+          description: The created POI
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poi' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/pois/{poiId}:
+    get:
+      tags: [internal]
+      summary: One POI with its shares
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      responses:
+        '200':
+          description: The POI and its grants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoiView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [internal]
+      summary: Edit a POI (geometry, name, visibility …)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoiUpdateBody' }
+      responses:
+        '200':
+          description: The updated POI
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Poi' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [internal]
+      summary: Delete a POI (shares cascade)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/holders/{holderType}/{holderId}/pois:
+    get:
+      tags: [internal]
+      summary: POIs owned by a holder (incl. political entities)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/poiHolderType'
+        - $ref: '#/components/parameters/holderId'
+      responses:
+        '200':
+          description: POI list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Poi' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -459,6 +825,31 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    poiId:
+      name: poiId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    entityId:
+      name: entityId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    granteeType:
+      name: granteeType
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/PoiGranteeType' }
+    granteeId:
+      name: granteeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    poiHolderType:
+      name: holderType
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/PoiOwnerType' }
 
   responses:
     ValidationError:
@@ -495,6 +886,34 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+    PoiNotFound:
+      description: POI or one of its grants not found (`NOT_FOUND`, `POI_NOT_SHARED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PoiForbidden:
+      description: >
+        Not the owner (`NOT_POI_OWNER`), a system-owned POI (`POI_SYSTEM_OWNER_FORBIDDEN`),
+        not a member or without the organization's management permission
+        (`NOT_CORPORATION_MEMBER`, `NOT_POLITICAL_MEMBER`, `ORG_PERMISSION_REQUIRED`),
+        or missing role (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PoiConflict:
+      description: >
+        POI state conflict: `POI_ALREADY_SHARED`, `POI_SELF_SHARE` (grantee already owns it)
+        or `POI_TRANSFER_SELF` (target already owns it)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SocialUnavailable:
+      description: >
+        The Social service is unreachable or not configured while checking organization
+        membership (`SOCIAL_NOT_CONFIGURED`, `SOCIAL_LOOKUP_FAILED`, `SOCIAL_AUTH_FAILED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
     Error:
@@ -504,7 +923,7 @@ components:
         error:
           type: string
           description: Machine-readable code
-          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, INTERNAL_ERROR]
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, NOT_POI_OWNER, POI_ALREADY_SHARED, POI_NOT_SHARED, POI_SELF_SHARE, POI_TRANSFER_SELF, ORG_PERMISSION_REQUIRED, INTERNAL_ERROR]
         message: { type: string }
         status: { type: integer }
 
@@ -527,6 +946,15 @@ components:
     HoldRefType:
       type: string
       enum: [market_order, mission_escrow, manual]
+    PoiOwnerType:
+      type: string
+      enum: [player, npc, corporation, political, system]
+    PoiGranteeType:
+      type: string
+      enum: [player, npc, corporation, political]
+    PoiVisibility:
+      type: string
+      enum: [private, public]
 
     # ── Model ──
     Holder:
@@ -645,3 +1073,112 @@ components:
         refId: { type: string, maxLength: 128, description: Required for non-manual holds }
         expiresAt: { type: string, format: date-time }
         details: { type: object, additionalProperties: true }
+
+    # ── POIs ──
+    Poi:
+      type: object
+      description: >
+        A GPS point, optionally widened into a zone by `radiusM`. Owned by exactly one holder
+        and readable by its owner, its grantees and (when `public`) every player.
+      required: [id, ownerType, ownerId, name, x, y, z, visibility, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        ownerType: { $ref: '#/components/schemas/PoiOwnerType' }
+        ownerId: { type: string, format: uuid }
+        name: { type: string, maxLength: 128 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        system: { type: [string, 'null'], maxLength: 64, description: Star system (null = unscoped) }
+        scene:
+          type: [string, 'null']
+          maxLength: 128
+          description: Hierarchical scene path matched by equality or segment prefix (`tarsis_1` matches `tarsis_1/new-paris`, never `tarsis_10`)
+        parentId:
+          type: [string, 'null']
+          format: uuid
+          description: Opaque parent object id in Persistence (no cross-service foreign key)
+        x: { type: number, description: Game units (metres assumed) }
+        y: { type: number }
+        z: { type: number }
+        radiusM:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1000000
+          description: '`null` = plain point (exact position); `>= 0` = zone radius in metres'
+        visibility: { $ref: '#/components/schemas/PoiVisibility' }
+        metadata: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PoiShare:
+      type: object
+      description: Read-only grant of a POI (the grantee never gets write access).
+      required: [poiId, granteeType, granteeId, createdAt]
+      properties:
+        poiId: { type: string, format: uuid }
+        granteeType: { $ref: '#/components/schemas/PoiGranteeType' }
+        granteeId: { type: string, format: uuid }
+        sharedBy: { type: [string, 'null'], format: uuid, description: Player who created the grant (audit) }
+        createdAt: { type: string, format: date-time }
+
+    PoiView:
+      allOf:
+        - $ref: '#/components/schemas/Poi'
+        - type: object
+          required: [shares]
+          properties:
+            shares:
+              type: array
+              items: { $ref: '#/components/schemas/PoiShare' }
+
+    PoiCreateBody:
+      type: object
+      required: [name, x, y, z]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        system: { type: string, minLength: 1, maxLength: 64 }
+        scene: { type: string, minLength: 1, maxLength: 128 }
+        parentId: { type: string, format: uuid }
+        x: { type: number }
+        y: { type: number }
+        z: { type: number }
+        radiusM: { type: number, minimum: 0, maximum: 1000000 }
+        visibility: { $ref: '#/components/schemas/PoiVisibility' }
+        metadata: { type: object, additionalProperties: true }
+        owner:
+          type: object
+          description: 'Organization owning the POI (default: the caller)'
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [corporation, political] }
+            id: { type: string, format: uuid }
+
+    PoiInternalCreateBody:
+      allOf:
+        - $ref: '#/components/schemas/PoiCreateBody'
+        - type: object
+          required: [owner]
+          properties:
+            owner:
+              type: object
+              required: [type, id]
+              properties:
+                type: { $ref: '#/components/schemas/PoiOwnerType' }
+                id: { type: string, format: uuid }
+
+    PoiUpdateBody:
+      type: object
+      description: Partial patch; at least one field must be present.
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        system: { type: [string, 'null'], minLength: 1, maxLength: 64 }
+        scene: { type: [string, 'null'], minLength: 1, maxLength: 128 }
+        parentId: { type: [string, 'null'], format: uuid }
+        x: { type: number }
+        y: { type: number }
+        z: { type: number }
+        radiusM: { type: [number, 'null'], minimum: 0, maximum: 1000000 }
+        visibility: { $ref: '#/components/schemas/PoiVisibility' }
+        metadata: { type: [object, 'null'], additionalProperties: true }

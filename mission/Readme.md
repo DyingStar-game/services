@@ -55,7 +55,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `SOCIAL_API_URL` | Base URL du service social (vérification d'appartenance à une corporation) ; vide = missions corporation désactivées |
 | `SOCIAL_SERVICE_CLIENT_ID` / `SOCIAL_SERVICE_CLIENT_SECRET` | Compte de service Keycloak (`svc-mission`) pour l'API interne sociale |
 | `SOCIAL_INTERNAL_API_KEY` | Repli dev : `X-Internal-Key` envoyé à social |
-| `INVENTORY_API_URL` | Base URL du service inventory (séquestre et octroi des récompenses item) ; vide = récompenses item désactivées |
+| `INVENTORY_API_URL` | Base URL du service inventory (séquestre et octroi des récompenses item, **résolution des zones `poi`**) ; vide = récompenses item et zones POI désactivées |
 | `INVENTORY_SERVICE_CLIENT_ID` / `INVENTORY_SERVICE_CLIENT_SECRET` | Compte de service Keycloak (`svc-mission`) pour l'API interne inventaire |
 | `INVENTORY_INTERNAL_API_KEY` | Repli dev : `X-Internal-Key` envoyé à inventory |
 | `INVENTORY_SYSTEM_HOLDER_ID` | Détenteur `system` servant de source aux récompenses item non séquestrées |
@@ -94,20 +94,57 @@ Un push `reportProgress` sur un kind non-`game` → `409 OBJECTIVE_NOT_PUSHABLE`
 
 **Zones** (`zones[]`, vide = **globale**) : la dispo peut être restreinte à la **position du joueur** — scopes mappés sur la présence social (`PUT/GET /api/internal/players/:id/presence`) :
 - `{kind:'system', system}` — même système ;
-- `{kind:'scene', system?, scene}` — **chemin hiérarchique** de scène (`tarsis_1/new-paris`), match par égalité ou **préfixe de segment** (`tarsis_1` accepte `tarsis_1/new-paris`, jamais `tarsis_10`) → couvre planète, ville, district, donjon… **Convention jeu : encoder la hiérarchie dans `location.scene`** ;
-- `{kind:'area', system?, center{x,y,z}, radiusM}` — POI local (distance euclidienne, unités jeu = mètres supposés).
+- `{kind:'poi', poiId, radiusM?}` — **point ou zone du registre POI** d'`inventory` (résolution batch `POST /api/internal/pois/resolve`, cache 60 s) :
+  - POI sans rayon mais avec une `scene` → **sous-arbre de scène** (égalité ou préfixe de segment : `tarsis_1` accepte `tarsis_1/new-paris`, jamais `tarsis_10`) → couvre planète, ville, district, donjon… **Convention jeu : encoder la hiérarchie dans `location.scene`** ;
+  - `radiusM` déclaré sur la **zone** (prioritaire) ou sur le **POI** → **aire** : distance euclidienne au centre (unités jeu = mètres supposés) ;
+  - sinon → **point** : position exacte du POI.
 
-Filtrée au **listing** (SQL, joueur sans position = ne voit que les globales ; panne Social = idem, fail-safe) **et à l'acceptation** (`403 OUT_OF_ZONE`, échec ferme). Zéro coût Social pour les missions globales. `zones` est **modifiable via l'API interne uniquement** (le jeu re-zone un event en direct ; sans impact séquestre).
+  Un `system` porté par le POI doit être égal à `location.system`. Un POI inconnu/supprimé → la zone **ne matche jamais** (échec ferme) ; le registre refuse la création d'une zone sur un POI inexistant (`400 POI_NOT_FOUND`). L'ancien couple `scene`/`area` en dur a été retiré (migration `0002` purge les kinds legacy).
+
+Filtrée au **listing** (SQL, géométries POI injectées en jsonb ; joueur sans position = ne voit que les globales ; panne Social **ou** inventory = idem, fail-safe) **et à l'acceptation** (`403 OUT_OF_ZONE`, échec ferme). Zéro coût Social/inventory pour les missions globales. `zones` est **modifiable via l'API interne uniquement** (le jeu re-zone un event en direct ; sans impact séquestre).
 
 **Groupes & partage** (`groupId`) : toute mission peut être **partagée à un groupe** (`POST /api/missions/:missionId/share`) — visible/acceptable uniquement par ses membres, comptée comme prise par eux (`409 MISSION_HAS_ASSIGNEES` tant qu'il y a des assignés actifs). Les missions `groupClaimable` sont **réclamées par le premier groupe** qui les accepte (`403 NO_GROUP` / `GROUP_ALREADY_CLAIMED`). Vérification via `social:group:read`.
 
-**Missions event** (`isEvent`) : déclarées par le jeu (interne) ou une corporation (CEO / `manage_corporation`, `POST /:missionId/event`) — cap **1000 assignés** (sinon 100), retirer le flag exige `maxAssignees` ≤ 100 (`400 EVENT_CAPACITY_REQUIRES_FLAG`).
+**Missions event** (`isEvent`) : déclarées par le jeu (interne) ou par une corporation autorisée (`mission:event:manage` via Social : CEO ou `manage_corporation`, `POST /:missionId/event`) — cap **1000 assignés** (sinon 100), retirer le flag exige `maxAssignees` ≤ 100 (`400 EVENT_CAPACITY_REQUIRES_FLAG`).
 
 **Multijoueur** : `maxAssignees` = capacité (`1` unique, `N` places limitées, 1000 en event), combinable avec le partage à un groupe (places comptées **au sein du groupe claimant**). Objectifs partagés ; à la complétion, tous les participants actifs sont complétés d'un coup et reçoivent un **part égal de chaque composant de récompense**, figé dans **`rewardShares`** (rejeu de règlement déterministe). Composant **instance unique** ou **item séquestré** refusé en multijoueur (`400 ITEM_REWARD_NOT_SPLITABLE`).
 
 **Missions joueurs** (`POST /api/missions`) : `rewards[]` **séquestrés à la création** — le composant crédits est débité du portefeuille du créateur (`economie:wallet:debit`, `externalId = mission-escrow:<missionId>`), **chaque** composant item est réservé en hold (`escrowItemHoldIds[]`, un par item). Remboursé si annulation/expiration (`mission-refund:<missionId>`). `visibility: corporation` vérifiée via social.
 
-**Financement par un trésor d'organisation** (`escrowSource`) : une mission émise par une **corporation** (`corporationId`) ou une **entité politique** (`politicalEntityId`, commune → fédération ; `issuerType: politics`) peut être prélevée sur **le compte bancaire de l'organisation** plutôt que sur le portefeuille du créateur : `escrowSource: 'issuer'` (défaut `'creator'` = comportement classuel, le joueur paie de sa poche). Garde-fous : le créateur doit être **membre de l'émetteur** et détenir la permission de dépense — **CEO ou `manage_corporation`** pour une corporation, **office chef ou `manage_treasury`** pour une entité politique (`403 TREASURY_FORBIDDEN`, `400 ESCROW_SOURCE_INVALID` si émetteur absent). Le remboursement (annulation/expiration) revient sur le même compte (`escrowPayerType` : `player|corporation|politics`, clés `mission-refund:<id>` identiques).
+**Financement par un trésor d'organisation** (`escrowSource`) : une mission émise par une **corporation** (`corporationId`) ou une **entité politique** (`politicalEntityId`, commune → fédération ; `issuerType: politics`) peut être prélevée sur **le compte bancaire de l'organisation** plutôt que sur le portefeuille du créateur : `escrowSource: 'issuer'` (défaut `'creator'` = comportement classuel, le joueur paie de sa poche). Garde-fous : le créateur doit être **membre de l'émetteur** et détenir l'action **`mission:treasury:commit`** — accordée par Social au CEO (ou à un grade portant `manage_corporation`) pour une corporation, au chef (ou à un office portant `manage_treasury`) pour une entité politique (`403 TREASURY_FORBIDDEN`, `400 ESCROW_SOURCE_INVALID` si émetteur absent). La décision passe par `POST /api/internal/authorize` (`social:authorize`) : mission n'interprète plus les permissions lui-même. Le remboursement (annulation/expiration) revient sur le même compte (`escrowPayerType` : `player|corporation|politics`, clés `mission-refund:<id>` identiques).
+
+**Créer une mission au nom d'une corporation ou d'une entité politique** : pas d'endpoint dédié — c'est `POST /api/missions` (JWT joueur) qui porte l'émetteur ; `issuerType` est résolu automatiquement (`politics` > `corporation` > `player`, `missions.service.ts`). Le créateur est tracé dans `createdBy` et retrouve ses créations via `GET /api/me/missions-created`.
+
+```jsonc
+// Corporation (créateur = membre ; action mission:treasury:commit : CEO ou manage_corporation)
+POST /api/missions
+{
+  "title": "Livraison de minerai",
+  "corporationId": "11111111-1111-1111-1111-111111111111",
+  "visibility": "corporation",          // limitée aux membres de la corporation (optionnel : "public")
+  "escrowSource": "issuer",             // débité du trésor corpo ; "creator" (défaut) = mon portefeuille
+  "rewards": [{ "type": "credits", "amount": 5000 }],
+  "objectives": [
+    { "type": "deliver_material", "title": "Livrer 10 minerais", "targetQuantity": 10,
+      "params": { "itemId": "iron_ore" } }
+  ],
+  "zones": [{ "kind": "system", "system": "sol" }]
+}
+
+// Entité politique (créateur = membre ; action mission:treasury:commit : chef ou manage_treasury)
+POST /api/missions
+{
+  "title": "Patrouille de la commune",
+  "politicalEntityId": "22222222-2222-2222-2222-222222222222",
+  "escrowSource": "issuer",             // débité du trésor politique
+  "rewards": [{ "type": "credits", "amount": 2500 }],
+  "objectives": [
+    { "type": "visit", "title": "Visiter la place du village", "targetQuantity": 1 }
+  ]
+}
+```
+
+Erreurs typées : `403 NOT_CORPORATION_MEMBER` (visibilité corporation hors corp), `400 ESCROW_SOURCE_INVALID` (`issuer` sans `corporationId`/`politicalEntityId`), `403 TREASURY_FORBIDDEN` (pas la permission de dépense), `409 INSUFFICIENT_FUNDS` (trésor insuffisant). À noter : les composants **items** sont toujours séquestrés dans l'inventaire **du créateur** même en `escrowSource: 'issuer'` — le trésor ne finance que le composant crédits ; et sans `escrowSource: 'issuer'`, c'est le créateur qui paie, même si l'émetteur est l'organisation.
 
 **Règlement** : à la complétion, **revérification** des objectifs `service` (sauf `force`) puis paiement composant par composant : crédits idempotents via `externalId = mission:<missionId>:<playerId>` ; items = **claim atomique** dans `settledComponents` (`item:<itemId>`) *avant* le transfert (hold séquestré consommé, sinon faucet `system`) — un échec partiel se rejoue sans jamais double-payer. Rejouer via `POST /api/internal/missions/:missionId/settle`.
 
@@ -138,11 +175,12 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/missions/:missionId/objectives/:objectiveId/confirm` | Confirmer un objectif `manual` (**créateur** de la mission uniquement) |
 | POST | `/api/missions/:missionId/share` `{groupId}` | Partager la mission à un groupe (créateur ou membre corp ; `409 MISSION_HAS_ASSIGNEES`) |
 | DELETE | `/api/missions/:missionId/share` | Retirer le partage (mêmes règles) |
-| POST | `/api/missions/:missionId/event` `{enabled, maxAssignees?}` | Déclarer/retirer le flag **event** (mission corporation, CEO ou `manage_corporation`) |
+| POST | `/api/missions/:missionId/event` `{enabled, maxAssignees?}` | Déclarer/retirer le flag **event** (mission corporation, action `mission:event:manage` : CEO ou `manage_corporation`) |
 | POST | `/api/missions/:missionId/abandon` | Abandonner l'assignation |
 | POST | `/api/missions/:missionId/objectives/:objectiveId/progress` `{quantity}` | Reporter la progression d'un objectif **`game`** uniquement (`409 OBJECTIVE_NOT_PUSHABLE` sinon) |
 | POST | `/api/missions/:missionId/complete` | Compléter : **revérifie** les objectifs `service`, puis répartit chaque composant de récompense |
 | GET | `/api/me/missions?status=&limit=` | Mes missions (assignations + mission) |
+| GET | `/api/me/missions-created?status=&limit=` | **Mes missions créées** (`createdBy` = moi), tous statuts, **sans filtre zone/groupe/place libre** — vue de gestion du créateur (le browse `/api/missions` reste filtré par zone) |
 
 ### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
 | Méthode | Route | Rôle requis | Description |
@@ -205,7 +243,7 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Capacité (`maxAssignees`) : mission unique (1), places limitées (N) ou event (jusqu'à 1000)
 - [x] Les missions sans place libre disparaissent de la liste des missions dispo
 - [x] Missions réservées à 1 groupe (premier groupe claimant) et partage de toute mission à un groupe
-- [x] Missions event déclarées par le jeu ou une corporation (CEO / `manage_corporation`)
+- [x] Missions event déclarées par le jeu ou une corporation (action `mission:event:manage`)
 - [ ] Branches/conditions dans les scénarios (échec, embranchements)
 
 ### Système programmable (registre de kinds)
@@ -217,8 +255,8 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Livraison vérifiée avant paiement : kind `deliver_items` (transfert au verify vers la cible)
 - [x] Kind `manual` : confirmation par l'émetteur (contrat type Eco)
 - [x] Catégories ouvertes (enum élargie : mining, farming, crafting, …)
-- [x] Missions financées par un **trésor d'organisation** (`escrowSource: 'issuer'` : corporation → CEO/`manage_corporation`, entité politique → chef/`manage_treasury`)
-- [x] Missions **zonées** : dispo par système / scène hiérarchique (`scene` en chemin) / area (rayon) — filtrées au listing et à l'acceptation (`403 OUT_OF_ZONE`) selon la présence social
+- [x] Missions financées par un **trésor d'organisation** (`escrowSource: 'issuer'` : action `mission:treasury:commit` décidée par Social)
+- [x] Missions **zonées** : dispo par système ou **POI** (`inventory` : scène hiérarchique / aire / point) — filtrées au listing et à l'acceptation (`403 OUT_OF_ZONE`) selon la présence social
 - [x] Spec immuable après création (précédent FTB : le séquestre est pris dessus)
 - [x] **Break propre** : ancienne forme `reward` retirée, serveur de jeu à adapter (corps `rewards[]`, `params`, verify/confirm)
 - [ ] Composition booléenne des prérequis (all/any/none), caution du contractor, missions répétables, chaînes `nextMissionId` (phase 2)

@@ -6,6 +6,7 @@
 import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
+import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
 import {
   corporationMembers,
@@ -24,6 +25,7 @@ import {
   ensurePlayerAccount,
   getCorporationAccounts,
 } from './accounts.service.js';
+import { authorizeAction, isSocialConfigured } from './social.client.js';
 import { transfer, type MovementResult } from './transactions.service.js';
 
 const ROLE_RANK: Record<CorporationRole, number> = { member: 1, treasurer: 2, leader: 3 };
@@ -88,6 +90,37 @@ export async function requireCorporationRole(
     throw new HttpError(403, 'FORBIDDEN', t('corp.requires_role', { min }));
   }
   return member;
+}
+
+/** Catalogued action gating every corporate-treasury operation of this service. */
+export const TREASURY_ACTION = 'economie:treasury:manage';
+
+/**
+ * Requires the `economie:treasury:manage` action on the corporation, decided by Social
+ * (only the CEO passes implicitly: the action has no legacy fallback, so a rank must
+ * grant it explicitly). The local leader/treasurer mirror is not consulted — it stays the
+ * source of truth for salaries and holder types only.
+ * @param corporationId - Corporation id.
+ * @param playerId - Acting player.
+ * @throws 503 when Social is unavailable, 403 `NOT_CORPORATION_MEMBER` / `FORBIDDEN`.
+ */
+export async function requireTreasuryPermission(corporationId: string, playerId: string): Promise<void> {
+  if (!isSocialConfigured()) {
+    // Local dev without Social: trust the authenticated player.
+    if (env.authDevBypass) return;
+    throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
+  }
+  const decision = await authorizeAction({
+    holderType: 'corporation',
+    holderId: corporationId,
+    playerId,
+    action: TREASURY_ACTION,
+  });
+  if (decision.allowed) return;
+  if (decision.reason === 'not_member') {
+    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'You are not a member of this corporation');
+  }
+  throw new HttpError(403, 'FORBIDDEN', t('corp.requires_permission', { action: TREASURY_ACTION }));
 }
 
 /**
