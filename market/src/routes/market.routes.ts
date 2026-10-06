@@ -60,24 +60,26 @@ marketRoutes.get(
   }),
 );
 
-/** GET /book?goodType= — Order book depth (open buy/sell counts). */
+/** GET /book?goodType=&limit=&offset= — Order book page (bids and asks, best price first). */
 marketRoutes.get(
   '/book',
   validate(bookQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await bookDepth(String(req.query.goodType)));
+    res.json(await bookDepth(String(req.query.goodType), Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 
-/** GET /orders?goodType=&side=&status=&limit= — Public order book. */
+/** GET /orders?goodType=&side=&status=&limit=&offset= — Public order book. */
 marketRoutes.get(
   '/orders',
   validate(ordersQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const q = req.query as unknown as { goodType?: string; side?: never; status?: never; limit: number };
-    res.json(await listOrders({ goodType: q.goodType, side: q.side, status: q.status, limit: Number(q.limit) }));
+    const q = req.query as unknown as { goodType?: string; side?: never; status?: never; limit: number; offset: number };
+    res.json(
+      await listOrders({ goodType: q.goodType, side: q.side, status: q.status, limit: Number(q.limit), offset: Number(q.offset) }),
+    );
   }),
 );
 
@@ -113,13 +115,15 @@ marketRoutes.post(
 
 // ── Demands / contracts ───────────────────────────────────────────────────────
 
-/** GET /demands?goodType=&status=&limit= — Open demands. */
+/** GET /demands?goodType=&status=&limit=&offset= — Open demands. */
 marketRoutes.get(
   '/demands',
   validate(demandsQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const q = req.query as unknown as { goodType?: string; status?: never; limit: number };
-    res.json(await listDemands({ goodType: q.goodType, status: q.status, limit: Number(q.limit) }));
+    const q = req.query as unknown as { goodType?: string; status?: never; limit: number; offset: number };
+    res.json(
+      await listDemands({ goodType: q.goodType, status: q.status, limit: Number(q.limit), offset: Number(q.offset) }),
+    );
   }),
 );
 
@@ -167,13 +171,21 @@ marketRoutes.post(
 
 // ── Trades ────────────────────────────────────────────────────────────────────
 
-/** GET /trades?status=&limit= — Trades where the caller is buyer or seller. */
+/** GET /trades?status=&limit=&offset= — Trades where the caller is buyer or seller. */
 marketRoutes.get(
   '/trades',
   validate(tradesQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    const q = req.query as unknown as { status?: never; limit: number };
-    res.json(await listTrades({ holderType: 'player', holderId: player.id, status: q.status, limit: Number(q.limit) }));
+    const q = req.query as unknown as { status?: never; limit: number; offset: number };
+    res.json(
+      await listTrades({
+        holderType: 'player',
+        holderId: player.id,
+        status: q.status,
+        limit: Number(q.limit),
+        offset: Number(q.offset),
+      }),
+    );
   }),
 );

@@ -31,12 +31,12 @@ import {
 /** Router for corporations, their members, ranks and join requests. */
 export const corporationsRoutes: IRouter = Router();
 
-/** GET /?search=&limit= — Public corporation directory. */
+/** GET /?search=&limit=&offset= — Public directory (`{ items, total, limit, offset }`). */
 corporationsRoutes.get(
   '/',
   validate(searchQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await corporations.listCorporations(String(req.query.search ?? ''), Number(req.query.limit)));
+    res.json(await corporations.listCorporations(String(req.query.search ?? ''), Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -78,13 +78,14 @@ corporationsRoutes.delete(
   }),
 );
 
-/** GET /:corporationId/subsidiaries — Direct subsidiaries (public). */
+/** GET /:corporationId/subsidiaries — Direct subsidiaries (public, paginated). */
 corporationsRoutes.get(
   '/:corporationId/subsidiaries',
   validate(corporationIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     await corporations.requireCorporation(req.params.corporationId);
-    res.json(await corporations.listSubsidiaries(req.params.corporationId));
+    res.json(await corporations.listSubsidiaries(req.params.corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -137,19 +138,20 @@ corporationsRoutes.get(
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     await corporations.requireCorporationMember(req.params.corporationId, requirePlayer(req).id);
-    res.json(await listCorporationActivity(req.params.corporationId, Number(req.query.limit)));
+    res.json(await listCorporationActivity(req.params.corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
 // ── Members ─────────────────────────────────────────────────────────────────
 
-/** GET /:corporationId/members — Members with rank and presence. */
+/** GET /:corporationId/members — Members with rank and presence (paginated). */
 corporationsRoutes.get(
   '/:corporationId/members',
   validate(corporationIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     await corporations.requireCorporation(req.params.corporationId);
-    res.json(await corporations.listCorporationMembers(req.params.corporationId));
+    res.json(await corporations.listCorporationMembers(req.params.corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -253,12 +255,13 @@ corporationsRoutes.post(
   }),
 );
 
-/** GET /:corporationId/requests — Pending applications and invitations (recruit or invite). */
+/** GET /:corporationId/requests — Pending applications and invitations (recruit or invite, paginated). */
 corporationsRoutes.get(
   '/:corporationId/requests',
   validate(corporationIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await requests.listCorporationRequests(req.params.corporationId, requirePlayer(req).id));
+    res.json(await requests.listCorporationRequests(req.params.corporationId, requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

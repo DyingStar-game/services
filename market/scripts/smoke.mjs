@@ -100,10 +100,12 @@ console.log('\n# orders');
   check('order is publicly readable', [got.status, got.json.id], [200, orderId]);
 
   const book = await req('GET', `/api/market/book?goodType=${GOOD}`, undefined, asPlayer(B));
-  check('book depth counts the sell', [book.json.buy, book.json.sell], [0, 1]);
+  check('book depth counts the sell', [book.json.bidTotal, book.json.askTotal], [0, 1]);
+  check('book page carries its bounds', [book.json.asks.length, typeof book.json.limit, typeof book.json.offset], [1, 'number', 'number']);
 
   const listed = await req('GET', `/api/market/orders?goodType=${GOOD}`, undefined, asPlayer(B));
-  check('order appears in the book', listed.json.length, 1);
+  check('order appears in the book', [listed.json.items.length, listed.json.total], [1, 1]);
+  check('order list is a page', [typeof listed.json.limit, typeof listed.json.offset], ['number', 'number']);
 
   const cancelByOther = await req('POST', `/api/market/orders/${orderId}/cancel`, {}, asPlayer(B));
   check('cannot cancel another player order', [cancelByOther.status, cancelByOther.json.error], [403, 'FORBIDDEN']);
@@ -125,7 +127,8 @@ console.log('\n# demands');
 
   const demandId = demand.json.id;
   const listed = await req('GET', `/api/market/demands?goodType=${GOOD}`, undefined, asPlayer(A));
-  check('demand listed', listed.json.some((d) => d.id === demandId), true);
+  check('demand listed', listed.json.items.some((d) => d.id === demandId), true);
+  check('demand list is a page', [typeof listed.json.total, typeof listed.json.limit, typeof listed.json.offset], ['number', 'number', 'number']);
 
   const cancelByOther = await req('POST', `/api/market/demands/${demandId}/cancel`, {}, asPlayer(A));
   check('cannot cancel another player demand', [cancelByOther.status, cancelByOther.json.error], [403, 'FORBIDDEN']);

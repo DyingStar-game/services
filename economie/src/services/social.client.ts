@@ -66,15 +66,27 @@ export function isSocialConfigured(): boolean {
   return Boolean(env.social.apiUrl && (env.social.serviceClientSecret || env.social.internalApiKey));
 }
 
-/** GET helper against Social's internal API. */
-async function fetchProfiles(params: URLSearchParams): Promise<ProfileIdentity[]> {
+/** Page of profiles, as returned by Social's list endpoints. */
+export interface ProfilePage {
+  items: ProfileIdentity[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** GET helper against Social's internal API (returns a page envelope). */
+async function fetchProfilePage(params: URLSearchParams): Promise<ProfilePage> {
   if (!env.social.apiUrl) {
     throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
   }
   const res = await fetch(`${env.social.apiUrl}/api/internal/players?${params.toString()}`, {
     headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) },
   });
-  if (res.ok) return (await res.json()) as ProfileIdentity[];
+  if (res.ok) {
+    const json = (await res.json()) as ProfilePage;
+    const limit = json.limit ?? Number(params.get('limit') ?? 20);
+    return { items: json.items ?? [], total: json.total ?? 0, limit, offset: json.offset ?? 0 };
+  }
   const text = await res.text().catch(() => '');
   throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`, { status: res.status, body: text });
 }
@@ -82,11 +94,12 @@ async function fetchProfiles(params: URLSearchParams): Promise<ProfileIdentity[]
 /**
  * Searches profiles by display-name substring.
  * @param search - Substring to match.
- * @param limit - Max results.
- * @returns Matching profiles.
+ * @param limit - Max results in the page.
+ * @param offset - Results to skip.
+ * @returns Page of matching profiles.
  */
-export function searchProfiles(search: string, limit: number): Promise<ProfileIdentity[]> {
-  return fetchProfiles(new URLSearchParams({ search, limit: String(limit) }));
+export function searchProfiles(search: string, limit: number, offset: number): Promise<ProfilePage> {
+  return fetchProfilePage(new URLSearchParams({ search, limit: String(limit), offset: String(offset) }));
 }
 
 /**
@@ -94,9 +107,10 @@ export function searchProfiles(search: string, limit: number): Promise<ProfileId
  * @param playerIds - Player ids to resolve.
  * @returns Known profiles among the given ids.
  */
-export function resolveProfiles(playerIds: string[]): Promise<ProfileIdentity[]> {
-  if (playerIds.length === 0) return Promise.resolve([]);
-  return fetchProfiles(new URLSearchParams({ playerIds: playerIds.join(',') }));
+export async function resolveProfiles(playerIds: string[]): Promise<ProfileIdentity[]> {
+  if (playerIds.length === 0) return [];
+  const page = await fetchProfilePage(new URLSearchParams({ playerIds: playerIds.join(',') }));
+  return page.items;
 }
 
 // ── Central authorization (Social is the policy decision point) ─────────────

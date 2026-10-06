@@ -1,10 +1,11 @@
 /**
  * Corporation internal journal (`corporation_activity`).
  */
-import { desc, eq } from 'drizzle-orm';
+import { count, desc, eq } from 'drizzle-orm';
 
 import { db, type Db } from '../db/connection.js';
 import { corporationActivity, type CorporationActivityEntry } from '../db/schema/index.js';
+import { page, type Page } from '../lib/pagination.js';
 
 /** Transaction handle or the shared db. */
 type Executor = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -30,17 +31,25 @@ export async function recordCorporationActivity(
 /**
  * Most recent journal entries of a corporation.
  * @param corporationId - Corporation id.
- * @param limit - Max entries.
- * @returns Entries, newest first.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of entries, newest first.
  */
 export async function listCorporationActivity(
   corporationId: string,
   limit: number,
-): Promise<CorporationActivityEntry[]> {
-  return db
-    .select()
-    .from(corporationActivity)
-    .where(eq(corporationActivity.corporationId, corporationId))
-    .orderBy(desc(corporationActivity.createdAt), desc(corporationActivity.id))
-    .limit(limit);
+  offset: number,
+): Promise<Page<CorporationActivityEntry>> {
+  const condition = eq(corporationActivity.corporationId, corporationId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporationActivity).where(condition),
+    db
+      .select()
+      .from(corporationActivity)
+      .where(condition)
+      .orderBy(desc(corporationActivity.createdAt), desc(corporationActivity.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }

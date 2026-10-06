@@ -3,7 +3,7 @@
  * issuance of new currency. Political entities are owned by the Social service; `entityId`
  * is an opaque UUID. Tax debts are booked and settled by `taxation.service`.
  */
-import { and, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
@@ -20,6 +20,7 @@ import {
   type TaxDebtorType,
 } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { ensurePoliticalAccount } from './accounts.service.js';
 import { creditAccount, type MovementResult } from './transactions.service.js';
 
@@ -116,34 +117,56 @@ export async function removePoliticalMember(entityId: string, playerId: string):
     .where(and(eq(politicalMembers.entityId, entityId), eq(politicalMembers.playerId, playerId)));
 }
 
-/** All members of a political entity. */
-export function listPoliticalMembers(entityId: string): Promise<PoliticalMember[]> {
-  return db
-    .select()
-    .from(politicalMembers)
-    .where(eq(politicalMembers.entityId, entityId))
-    .orderBy(politicalMembers.role, politicalMembers.joinedAt);
+/**
+ * Members of a political entity, ordered by role then join date.
+ * @param entityId - Political entity id.
+ * @param limit - Max members in the page.
+ * @param offset - Members to skip.
+ * @returns Page of members.
+ */
+export async function listPoliticalMembers(entityId: string, limit: number, offset: number): Promise<Page<PoliticalMember>> {
+  const condition = eq(politicalMembers.entityId, entityId);
+  const [items, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(politicalMembers)
+      .where(condition)
+      .orderBy(politicalMembers.role, politicalMembers.joinedAt, politicalMembers.playerId)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(politicalMembers).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /**
  * Tax debts of a debtor, newest first.
  * @param debtorType - Debtor kind.
  * @param debtorId - Debtor id.
- * @param status - Optional status filter.
- * @returns Debts.
+ * @param opts - Optional status filter and page bounds.
+ * @returns Page of debts.
  */
-export function getTaxDebts(
+export async function getTaxDebts(
   debtorType: TaxDebtorType,
   debtorId: string,
-  status?: TaxDebtStatus,
-): Promise<PoliticalTaxDebt[]> {
+  opts?: { status?: TaxDebtStatus; limit?: number; offset?: number },
+): Promise<Page<PoliticalTaxDebt>> {
+  const limit = opts?.limit ?? 20;
+  const offset = opts?.offset ?? 0;
   const conditions = [eq(politicalTaxDebts.debtorType, debtorType), eq(politicalTaxDebts.debtorId, debtorId)];
-  if (status) conditions.push(eq(politicalTaxDebts.status, status));
-  return db
-    .select()
-    .from(politicalTaxDebts)
-    .where(and(...conditions))
-    .orderBy(desc(politicalTaxDebts.createdAt), desc(politicalTaxDebts.id));
+  if (opts?.status) conditions.push(eq(politicalTaxDebts.status, opts.status));
+  const condition = and(...conditions);
+  const [items, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(politicalTaxDebts)
+      .where(condition)
+      .orderBy(desc(politicalTaxDebts.createdAt), desc(politicalTaxDebts.id))
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(politicalTaxDebts).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /**

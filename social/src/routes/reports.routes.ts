@@ -21,11 +21,11 @@ reportsRoutes.post(
   }),
 );
 
-/** GET /?limit= — Reports I filed. */
+/** GET /?limit=&offset= — Reports I filed (paginated). */
 reportsRoutes.get(
   '/',
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listMyReports(requirePlayer(req).id, Number(req.query.limit)));
+    res.json(await listMyReports(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );

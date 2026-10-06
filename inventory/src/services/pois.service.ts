@@ -10,7 +10,7 @@
  *
  * `system` POIs are only manageable through the internal API (game server).
  */
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, exists, inArray, or } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -25,6 +25,7 @@ import {
 } from '../db/schema/index.js';
 import { t } from '../i18n/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { authorizeAction, isSocialConfigured } from './social.client.js';
 
 /** POI plus its shares (returned by detail endpoints). */
@@ -62,61 +63,77 @@ export interface PoiPatch {
   metadata?: Record<string, unknown> | null;
 }
 
-/** A POI of the player's own scope: owned, granted to them, or public. */
-export async function listPlayerPois(playerId: string): Promise<InventoryPoi[]> {
-  const [owned, granted, publicPois] = await Promise.all([
+/** Share granting `grantee` read access to a POI of the outer query. */
+function grantedTo(granteeType: PoiGranteeType, granteeId: string) {
+  return exists(
+    db
+      .select({ one: inventoryPoiShares.poiId })
+      .from(inventoryPoiShares)
+      .where(
+        and(
+          eq(inventoryPoiShares.poiId, inventoryPois.id),
+          eq(inventoryPoiShares.granteeType, granteeType),
+          eq(inventoryPoiShares.granteeId, granteeId),
+        ),
+      ),
+  );
+}
+
+/**
+ * A POI of the player's own scope: owned, granted to them, or public.
+ * @param playerId - Player id.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of POIs, newest first.
+ */
+export async function listPlayerPois(playerId: string, limit: number, offset: number): Promise<Page<InventoryPoi>> {
+  const condition = or(
+    and(eq(inventoryPois.ownerType, 'player'), eq(inventoryPois.ownerId, playerId)),
+    eq(inventoryPois.visibility, 'public'),
+    grantedTo('player', playerId),
+  );
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(inventoryPois).where(condition),
     db
       .select()
       .from(inventoryPois)
-      .where(and(eq(inventoryPois.ownerType, 'player'), eq(inventoryPois.ownerId, playerId))),
-    db
-      .select({ poi: inventoryPois })
-      .from(inventoryPois)
-      .innerJoin(inventoryPoiShares, eq(inventoryPoiShares.poiId, inventoryPois.id))
-      .where(
-        and(
-          eq(inventoryPoiShares.granteeType, 'player'),
-          eq(inventoryPoiShares.granteeId, playerId),
-        ),
-      ),
-    db.select().from(inventoryPois).where(eq(inventoryPois.visibility, 'public')),
+      .where(condition)
+      .orderBy(desc(inventoryPois.createdAt), desc(inventoryPois.id))
+      .limit(limit)
+      .offset(offset),
   ]);
-
-  const merged = new Map<string, InventoryPoi>();
-  for (const poi of owned) merged.set(poi.id, poi);
-  for (const row of granted) merged.set(row.poi.id, row.poi);
-  for (const poi of publicPois) merged.set(poi.id, poi);
-  return [...merged.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 /**
  * POIs owned by an organization, plus the ones granted to it (read-only).
  * @param ownerType - `corporation` or `political`.
  * @param ownerId - Organization id (opaque, owned by Social).
- * @returns POIs.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of POIs, newest first.
  */
 export async function listOrgPois(
   ownerType: Extract<PoiOwnerType, 'corporation' | 'political'>,
   ownerId: string,
-): Promise<InventoryPoi[]> {
-  const [owned, granted] = await Promise.all([
+  limit: number,
+  offset: number,
+): Promise<Page<InventoryPoi>> {
+  const condition = or(
+    and(eq(inventoryPois.ownerType, ownerType), eq(inventoryPois.ownerId, ownerId)),
+    grantedTo(ownerType, ownerId),
+  );
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(inventoryPois).where(condition),
     db
       .select()
       .from(inventoryPois)
-      .where(and(eq(inventoryPois.ownerType, ownerType), eq(inventoryPois.ownerId, ownerId))),
-    db
-      .select({ poi: inventoryPois })
-      .from(inventoryPois)
-      .innerJoin(inventoryPoiShares, eq(inventoryPoiShares.poiId, inventoryPois.id))
-      .where(
-        and(eq(inventoryPoiShares.granteeType, ownerType), eq(inventoryPoiShares.granteeId, ownerId)),
-      ),
+      .where(condition)
+      .orderBy(desc(inventoryPois.createdAt), desc(inventoryPois.id))
+      .limit(limit)
+      .offset(offset),
   ]);
-
-  const merged = new Map<string, InventoryPoi>();
-  for (const poi of owned) merged.set(poi.id, poi);
-  for (const row of granted) merged.set(row.poi.id, row.poi);
-  return [...merged.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 /** One POI by id, or null. */
@@ -148,16 +165,32 @@ export async function resolvePois(ids: string[]): Promise<InventoryPoi[]> {
   return db.select().from(inventoryPois).where(inArray(inventoryPois.id, ids));
 }
 
-/** POIs held by any holder (internal/game-server view). */
+/**
+ * POIs held by any holder (internal/game-server view).
+ * @param ownerType - Holder kind.
+ * @param ownerId - Holder id.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of POIs, newest first.
+ */
 export async function listHolderPois(
   ownerType: PoiOwnerType,
   ownerId: string,
-): Promise<InventoryPoi[]> {
-  return db
-    .select()
-    .from(inventoryPois)
-    .where(and(eq(inventoryPois.ownerType, ownerType), eq(inventoryPois.ownerId, ownerId)))
-    .orderBy(desc(inventoryPois.createdAt));
+  limit: number,
+  offset: number,
+): Promise<Page<InventoryPoi>> {
+  const condition = and(eq(inventoryPois.ownerType, ownerType), eq(inventoryPois.ownerId, ownerId));
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(inventoryPois).where(condition),
+    db
+      .select()
+      .from(inventoryPois)
+      .where(condition)
+      .orderBy(desc(inventoryPois.createdAt), desc(inventoryPois.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 /** Creates a POI for an owner. */

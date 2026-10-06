@@ -40,6 +40,7 @@ import {
   internalCompleteBody,
   internalProgressBody,
   missionIdParams,
+  limitQuery,
   missionListQuery,
   objectiveParams,
   playerIdParams,
@@ -65,13 +66,13 @@ internalRoutes.post(
   }),
 );
 
-/** GET /missions — Full mission catalogue with filters (any status). */
+/** GET /missions?limit=&offset= — Full mission catalogue with filters (any status). */
 internalRoutes.get(
   '/missions',
   requireServiceRole(SERVICE_ROLES.missionRead),
   validate(missionListQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const missions = await listMissions(
+    const found = await listMissions(
       {
         status: req.query.status as never,
         kind: req.query.kind as never,
@@ -84,8 +85,9 @@ internalRoutes.get(
         isEvent: req.query.isEvent as never,
       },
       Number(req.query.limit),
+      Number(req.query.offset),
     );
-    res.json({ missions });
+    res.json({ missions: found.items, total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
 
@@ -235,20 +237,26 @@ internalRoutes.post(
   }),
 );
 
-/** GET /players/:playerId/missions — All of a player's assignments (with their missions). */
+/** GET /players/:playerId/missions?limit=&offset= — A page of a player's assignments (with their missions). */
 internalRoutes.get(
   '/players/:playerId/missions',
   requireServiceRole(SERVICE_ROLES.missionRead),
   validate(playerIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const assignments = await listAssignmentsForPlayer(req.params.playerId);
-    const referenced = await listMissionsByIds(assignments.map((a) => a.missionId));
+    const limit = Number(req.query.limit);
+    const offset = Number(req.query.offset);
+    const found = await listAssignmentsForPlayer(req.params.playerId, limit, offset);
+    const referenced = await listMissionsByIds(found.items.map((a) => a.missionId));
     const byId = new Map(referenced.map((m) => [m.id, m]));
     res.json({
-      missions: assignments.map((assignment) => ({
+      missions: found.items.map((assignment) => ({
         assignment,
         mission: byId.get(assignment.missionId) ?? null,
       })),
+      total: found.total,
+      limit,
+      offset,
     });
   }),
 );

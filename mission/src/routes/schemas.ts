@@ -12,6 +12,7 @@ import {
   MISSION_STATUSES,
   MISSION_VISIBILITIES,
 } from '../db/schema/index.js';
+import { pageQuery } from '../lib/pagination.js';
 
 export const uuidSchema = z.string().uuid();
 
@@ -24,9 +25,11 @@ export const objectiveParams = z.object({
 
 export const playerIdParams = z.object({ playerId: uuidSchema });
 
-export const limitQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-});
+/**
+ * `?limit=&offset=` for list endpoints; responses keep their `missions` key and
+ * add `total`/`limit`/`offset` (see `lib/pagination.ts`).
+ */
+export const limitQuery = pageQuery;
 
 /** Boolean query filter (`?isEvent=true|false`). */
 const booleanQuery = z

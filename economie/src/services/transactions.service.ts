@@ -2,7 +2,7 @@
  * Money movements: atomic transfers with automatic taxes, internal credits/debits with
  * `externalId` idempotency, and ledger listings. Amounts are integer minor units.
  */
-import { and, desc, eq, gte, inArray, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
@@ -15,6 +15,7 @@ import {
   type TransactionType,
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import {
   getCorporationAccounts,
   getNpcAccounts,
@@ -314,44 +315,51 @@ export function debitAccount(
 /**
  * Ledger rows touching any of the given accounts, newest first.
  * @param accountIds - Account ids.
- * @param limit - Max rows.
- * @returns Transactions.
+ * @param limit - Max rows in the page.
+ * @param offset - Rows to skip.
+ * @returns Page of transactions.
  */
-export async function listTransactionsFor(accountIds: string[], limit: number): Promise<Transaction[]> {
-  if (accountIds.length === 0) return [];
-  return db
-    .select()
-    .from(transactions)
-    .where(or(inArray(transactions.fromAccountId, accountIds), inArray(transactions.toAccountId, accountIds)))
-    .orderBy(desc(transactions.createdAt), desc(transactions.id))
-    .limit(limit);
+export async function listTransactionsFor(accountIds: string[], limit: number, offset: number): Promise<Page<Transaction>> {
+  if (accountIds.length === 0) return page([], 0, limit, offset);
+  const condition = or(inArray(transactions.fromAccountId, accountIds), inArray(transactions.toAccountId, accountIds));
+  const [items, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(transactions)
+      .where(condition)
+      .orderBy(desc(transactions.createdAt), desc(transactions.id))
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(transactions).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /** Ledger of one account. */
-export function listAccountTransactions(accountId: string, limit: number): Promise<Transaction[]> {
-  return listTransactionsFor([accountId], limit);
+export function listAccountTransactions(accountId: string, limit: number, offset: number): Promise<Page<Transaction>> {
+  return listTransactionsFor([accountId], limit, offset);
 }
 
 /** Ledger of all of a player's accounts (one per currency). */
-export async function listPlayerTransactions(playerId: string, limit: number): Promise<Transaction[]> {
+export async function listPlayerTransactions(playerId: string, limit: number, offset: number): Promise<Page<Transaction>> {
   const playerAccounts = await getPlayerAccounts(playerId);
-  return listTransactionsFor(playerAccounts.map((a) => a.id), limit);
+  return listTransactionsFor(playerAccounts.map((a) => a.id), limit, offset);
 }
 
 /** Ledger of all of an NPC's accounts (one per currency). */
-export async function listNpcTransactions(npcId: string, limit: number): Promise<Transaction[]> {
+export async function listNpcTransactions(npcId: string, limit: number, offset: number): Promise<Page<Transaction>> {
   const npcAccounts = await getNpcAccounts(npcId);
-  return listTransactionsFor(npcAccounts.map((a) => a.id), limit);
+  return listTransactionsFor(npcAccounts.map((a) => a.id), limit, offset);
 }
 
 /** Ledger of all of a corporation's accounts. */
-export async function listCorporationTransactions(corporationId: string, limit: number): Promise<Transaction[]> {
+export async function listCorporationTransactions(corporationId: string, limit: number, offset: number): Promise<Page<Transaction>> {
   const corporationAccounts = await getCorporationAccounts(corporationId);
-  return listTransactionsFor(corporationAccounts.map((a) => a.id), limit);
+  return listTransactionsFor(corporationAccounts.map((a) => a.id), limit, offset);
 }
 
 /** Ledger of all of a political entity's accounts. */
-export async function listPoliticalTransactions(entityId: string, limit: number): Promise<Transaction[]> {
+export async function listPoliticalTransactions(entityId: string, limit: number, offset: number): Promise<Page<Transaction>> {
   const politicalAccounts = await getPoliticalAccounts(entityId);
-  return listTransactionsFor(politicalAccounts.map((a) => a.id), limit);
+  return listTransactionsFor(politicalAccounts.map((a) => a.id), limit, offset);
 }

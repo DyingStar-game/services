@@ -1,12 +1,13 @@
 /**
  * Player block list. Blocking drops any friendship/request between the two players.
  */
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, or } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { friendships, playerBlocks, playerProfiles, type PlayerProfile } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { env } from '../config/env.js';
 import { recordActivity } from './activity.service.js';
 import { requireProfile } from './profiles.service.js';
@@ -48,16 +49,28 @@ export async function blockedIdsFor(playerId: string): Promise<Set<string>> {
 /**
  * Lists profiles blocked by a player.
  * @param playerId - Blocker id.
- * @returns Blocked profiles with block date.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of blocked profiles with block date.
  */
-export async function listBlocks(playerId: string): Promise<Array<PlayerProfile & { blockedAt: Date }>> {
-  const rows = await db
-    .select({ profile: playerProfiles, blockedAt: playerBlocks.createdAt })
-    .from(playerBlocks)
-    .innerJoin(playerProfiles, eq(playerProfiles.playerId, playerBlocks.blockedId))
-    .where(eq(playerBlocks.blockerId, playerId))
-    .orderBy(playerBlocks.createdAt);
-  return rows.map((r) => ({ ...r.profile, blockedAt: r.blockedAt }));
+export async function listBlocks(
+  playerId: string,
+  limit: number,
+  offset: number,
+): Promise<Page<PlayerProfile & { blockedAt: Date }>> {
+  const condition = eq(playerBlocks.blockerId, playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(playerBlocks).where(condition),
+    db
+      .select({ profile: playerProfiles, blockedAt: playerBlocks.createdAt })
+      .from(playerBlocks)
+      .innerJoin(playerProfiles, eq(playerProfiles.playerId, playerBlocks.blockedId))
+      .where(condition)
+      .orderBy(desc(playerBlocks.createdAt), desc(playerBlocks.blockedId))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows.map((r) => ({ ...r.profile, blockedAt: r.blockedAt })), totalRow[0].total, limit, offset);
 }
 
 /**

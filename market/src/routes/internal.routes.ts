@@ -106,6 +106,7 @@ internalRoutes.get(
       holderType?: never;
       holderId?: string;
       limit: number;
+      offset: number;
     };
     res.json(
       await listOrders({
@@ -115,6 +116,7 @@ internalRoutes.get(
         holderType: q.holderType,
         holderId: q.holderId,
         limit: Number(q.limit),
+        offset: Number(q.offset),
       }),
     );
   }),
@@ -132,6 +134,7 @@ internalRoutes.get(
       holderType?: never;
       holderId?: string;
       limit: number;
+      offset: number;
     };
     res.json(
       await listDemands({
@@ -140,6 +143,7 @@ internalRoutes.get(
         holderType: q.holderType,
         holderId: q.holderId,
         limit: Number(q.limit),
+        offset: Number(q.offset),
       }),
     );
   }),
@@ -151,13 +155,14 @@ internalRoutes.get(
   requireServiceRole(SERVICE_ROLES.read),
   validate(internalTradesQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const q = req.query as unknown as { status?: never; holderType?: never; holderId?: string; limit: number };
+    const q = req.query as unknown as { status?: never; holderType?: never; holderId?: string; limit: number; offset: number };
     res.json(
       await listTrades({
         status: q.status,
         holderType: q.holderType,
         holderId: q.holderId,
         limit: Number(q.limit),
+        offset: Number(q.offset),
       }),
     );
   }),

@@ -12,7 +12,7 @@ import { validate } from '../middleware/validate.js';
 import { getHolderInventory, getStack } from '../services/inventory.service.js';
 import { getPoiView, listOrgPois, requireOrgRead, requirePoi } from '../services/pois.service.js';
 import { isSocialConfigured, isCorporationMember } from '../services/social.client.js';
-import { corporationParams, corporationPoiParams, corporationStackParams } from './schemas.js';
+import { corporationParams, corporationPoiParams, corporationStackParams, limitQuery } from './schemas.js';
 
 /** Router mounted at `/api/corporations`. */
 export const corporationsRoutes: IRouter = Router();
@@ -32,15 +32,22 @@ async function requireCorporationAccess(corporationId: string, playerId: string)
   if (!member) throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'You are not a member of this corporation');
 }
 
-/** GET /:corporationId/inventory — Corporation inventory (member only). */
+/** GET /:corporationId/inventory?limit=&offset= — Corporation inventory (member only). */
 corporationsRoutes.get(
   '/:corporationId/inventory',
   validate(corporationParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
     await requireCorporationAccess(corporationId, player.id);
-    res.json(await getHolderInventory({ holderType: 'corporation', holderId: corporationId }));
+    res.json(
+      await getHolderInventory(
+        { holderType: 'corporation', holderId: corporationId },
+        Number(req.query.limit),
+        Number(req.query.offset),
+      ),
+    );
   }),
 );
 
@@ -61,15 +68,16 @@ corporationsRoutes.get(
   }),
 );
 
-/** GET /:corporationId/pois — POIs owned by / granted to the corporation (member only). */
+/** GET /:corporationId/pois?limit=&offset= — POIs owned by / granted to the corporation (member only). */
 corporationsRoutes.get(
   '/:corporationId/pois',
   validate(corporationParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
     await requireCorporationAccess(corporationId, player.id);
-    res.json(await listOrgPois('corporation', corporationId));
+    res.json(await listOrgPois('corporation', corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

@@ -1,10 +1,11 @@
 /**
  * Political entity internal journal (`political_activity`).
  */
-import { desc, eq } from 'drizzle-orm';
+import { count, desc, eq } from 'drizzle-orm';
 
 import { db, type Db } from '../db/connection.js';
 import { politicalActivity, type PoliticalActivityEntry } from '../db/schema/index.js';
+import { page, type Page } from '../lib/pagination.js';
 
 /** Transaction handle or the shared db. */
 type Executor = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -30,14 +31,21 @@ export async function recordPoliticalActivity(
 /**
  * Most recent journal entries of a political entity.
  * @param entityId - Political entity id.
- * @param limit - Max entries.
- * @returns Entries, newest first.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of entries, newest first.
  */
-export async function listPoliticalActivity(entityId: string, limit: number): Promise<PoliticalActivityEntry[]> {
-  return db
-    .select()
-    .from(politicalActivity)
-    .where(eq(politicalActivity.entityId, entityId))
-    .orderBy(desc(politicalActivity.createdAt), desc(politicalActivity.id))
-    .limit(limit);
+export async function listPoliticalActivity(entityId: string, limit: number, offset: number): Promise<Page<PoliticalActivityEntry>> {
+  const condition = eq(politicalActivity.entityId, entityId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(politicalActivity).where(condition),
+    db
+      .select()
+      .from(politicalActivity)
+      .where(condition)
+      .orderBy(desc(politicalActivity.createdAt), desc(politicalActivity.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }

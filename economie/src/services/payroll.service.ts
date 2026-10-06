@@ -6,7 +6,7 @@
  * Amounts are integer minor units. Payouts are atomic: either every member is paid or
  * none is (treasury balance is checked under a row lock).
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, count, eq, sql } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
@@ -39,11 +39,15 @@ export interface EffectiveSalary {
   source: 'member' | 'role';
 }
 
-/** Salary configuration of a corporation. */
+/** Salary configuration of a corporation (role defaults + paged member overrides). */
 export interface CorporationSalaries {
   corporationId: string;
   roleDefaults: CorporationSalaryRole[];
+  /** Page of per-member overrides; `memberOverridesTotal` is the full count. */
   memberOverrides: CorporationMemberSalary[];
+  memberOverridesTotal: number;
+  limit: number;
+  offset: number;
 }
 
 /** Outcome of a payroll run. */
@@ -56,20 +60,26 @@ export interface PayrollResult {
 }
 
 /**
- * Salary configuration of a corporation (role defaults + member overrides).
+ * Salary configuration of a corporation (role defaults + a page of member overrides).
  * @param corporationId - Corporation id.
+ * @param limit - Max overrides in the page.
+ * @param offset - Overrides to skip.
  * @returns Configuration.
  */
-export async function getSalaries(corporationId: string): Promise<CorporationSalaries> {
-  const [roleDefaults, memberOverrides] = await Promise.all([
+export async function getSalaries(corporationId: string, limit: number, offset: number): Promise<CorporationSalaries> {
+  const condition = eq(corporationMemberSalaries.corporationId, corporationId);
+  const [roleDefaults, memberOverrides, totalRows] = await Promise.all([
     db.select().from(corporationSalaryRoles).where(eq(corporationSalaryRoles.corporationId, corporationId)).orderBy(corporationSalaryRoles.role),
     db
       .select()
       .from(corporationMemberSalaries)
-      .where(eq(corporationMemberSalaries.corporationId, corporationId))
-      .orderBy(corporationMemberSalaries.playerId),
+      .where(condition)
+      .orderBy(corporationMemberSalaries.playerId, corporationMemberSalaries.currency)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(corporationMemberSalaries).where(condition),
   ]);
-  return { corporationId, roleDefaults, memberOverrides };
+  return { corporationId, roleDefaults, memberOverrides, memberOverridesTotal: totalRows[0]?.total ?? 0, limit, offset };
 }
 
 /**

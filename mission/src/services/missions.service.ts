@@ -27,6 +27,7 @@ import {
 } from '../db/schema/index.js';
 import { getObjectiveKind } from '../kinds/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { creditHolder, debitHolder, type WalletHolderType } from './economy.client.js';
 import { createHold, releaseHold } from './inventory.client.js';
 import { settledTotal } from './rewards.service.js';
@@ -199,7 +200,7 @@ export async function requireObjective(missionId: string, objectiveId: string): 
  * @param limit - Max rows.
  * @returns Missions.
  */
-export async function listMissions(filters: MissionFilters, limit: number): Promise<Mission[]> {
+export async function listMissions(filters: MissionFilters, limit: number, offset: number): Promise<Page<Mission>> {
   const conditions = [];
   if (filters.status) conditions.push(eq(missions.status, filters.status));
   if (filters.statuses?.length) conditions.push(inArray(missions.status, filters.statuses));
@@ -226,12 +227,12 @@ export async function listMissions(filters: MissionFilters, limit: number): Prom
     conditions.push(zoneFilterSql(filters.viewerLocation, await resolveListingPoiGeometry()));
   }
 
-  return db
-    .select()
-    .from(missions)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(desc(missions.createdAt))
-    .limit(limit);
+  const condition = conditions.length > 0 ? and(...conditions) : undefined;
+  const [items, totalRows] = await Promise.all([
+    db.select().from(missions).where(condition).orderBy(desc(missions.createdAt), desc(missions.id)).limit(limit).offset(offset),
+    db.select({ total: count() }).from(missions).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /**

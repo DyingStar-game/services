@@ -1,9 +1,10 @@
 /**
  * Player activity history (persisted in `player_activity`).
  */
-import { desc, eq } from 'drizzle-orm';
+import { count, desc, eq } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
+import { page, type Page } from '../lib/pagination.js';
 import { playerActivity, type PlayerActivityEntry } from '../db/schema/index.js';
 
 /**
@@ -23,14 +24,21 @@ export async function recordActivity(
 /**
  * Returns the most recent activity entries for a player (newest first).
  * @param playerId - Player id.
- * @param limit - Max entries.
- * @returns Activity entries.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of activity entries.
  */
-export async function listActivity(playerId: string, limit: number): Promise<PlayerActivityEntry[]> {
-  return db
-    .select()
-    .from(playerActivity)
-    .where(eq(playerActivity.playerId, playerId))
-    .orderBy(desc(playerActivity.createdAt), desc(playerActivity.id))
-    .limit(limit);
+export async function listActivity(playerId: string, limit: number, offset: number): Promise<Page<PlayerActivityEntry>> {
+  const condition = eq(playerActivity.playerId, playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(playerActivity).where(condition),
+    db
+      .select()
+      .from(playerActivity)
+      .where(condition)
+      .orderBy(desc(playerActivity.createdAt), desc(playerActivity.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }

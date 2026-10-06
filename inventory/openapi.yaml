@@ -98,6 +98,9 @@ paths:
     get:
       tags: [me]
       summary: The caller's inventory (stacks with held/available, and owned instances)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Inventory of the caller
@@ -128,6 +131,8 @@ paths:
       summary: Corporation inventory (member only, membership checked in Social)
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Inventory of the corporation
@@ -164,14 +169,15 @@ paths:
       tags: [me]
       summary: POIs of the caller's scope (owned, granted, public)
       description: Owned POIs ∪ read-only grants held by the caller ∪ POIs published `public`.
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: POI list
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Poi' }
+              schema: {$ref: '#/components/schemas/PoiPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [me]
@@ -325,14 +331,14 @@ paths:
       summary: Corporation POIs (member only, membership checked in Social)
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: POIs owned by or granted to the corporation
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Poi' }
+              schema: {$ref: '#/components/schemas/PoiPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/SocialUnavailable' }
@@ -361,14 +367,14 @@ paths:
       summary: Political-entity POIs (member only, membership checked in Social)
       parameters:
         - $ref: '#/components/parameters/entityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: POIs owned by or granted to the entity
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Poi' }
+              schema: {$ref: '#/components/schemas/PoiPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/SocialUnavailable' }
@@ -400,6 +406,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/holderType'
         - $ref: '#/components/parameters/holderId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Stacks (with held/available) and instances
@@ -762,14 +770,14 @@ paths:
       parameters:
         - $ref: '#/components/parameters/poiHolderType'
         - $ref: '#/components/parameters/holderId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: POI list
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Poi' }
+              schema: {$ref: '#/components/schemas/PoiPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -851,6 +859,21 @@ components:
       required: true
       schema: { $ref: '#/components/schemas/PoiOwnerType' }
 
+    limit:
+      in: query
+      name: limit
+      schema:
+        default: 20
+        maximum: 100
+        minimum: 1
+        type: integer
+    offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
   responses:
     ValidationError:
       description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
@@ -995,19 +1018,6 @@ components:
         metadata: { type: [object, 'null'], additionalProperties: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
-
-    HolderInventory:
-      type: object
-      required: [holderType, holderId, stacks, instances]
-      properties:
-        holderType: { $ref: '#/components/schemas/HolderType' }
-        holderId: { type: string, format: uuid }
-        stacks:
-          type: array
-          items: { $ref: '#/components/schemas/StackView' }
-        instances:
-          type: array
-          items: { $ref: '#/components/schemas/Instance' }
 
     Hold:
       type: object
@@ -1182,3 +1192,68 @@ components:
         radiusM: { type: [number, 'null'], minimum: 0, maximum: 1000000 }
         visibility: { $ref: '#/components/schemas/PoiVisibility' }
         metadata: { type: [object, 'null'], additionalProperties: true }
+
+    HolderInventory:
+      properties:
+        holderId:
+          format: uuid
+          type: string
+        holderType:
+          $ref: '#/components/schemas/HolderType'
+        instances:
+          items:
+            $ref: '#/components/schemas/Instance'
+          type: array
+        instancesTotal:
+          minimum: 0
+          type: integer
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        stacks:
+          items:
+            $ref: '#/components/schemas/StackView'
+          type: array
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - holderType
+      - holderId
+      - stacks
+      - instances
+      - instancesTotal
+      - total
+      - limit
+      - offset
+      type: object
+    PoiPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Poi'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

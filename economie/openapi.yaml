@@ -117,14 +117,13 @@ paths:
       summary: Ledger of the caller across all currencies
       parameters:
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Transactions, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Transaction' }
+              schema: {$ref: '#/components/schemas/TransactionPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
@@ -189,14 +188,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Corporation ledger across currencies
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Transaction' }
+              schema: {$ref: '#/components/schemas/TransactionPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -207,14 +205,14 @@ paths:
       summary: Treasury staff and roles (member only)
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Corporation treasury members
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/CorporationMember' }
+              schema: {$ref: '#/components/schemas/CorporationMemberPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -269,6 +267,8 @@ paths:
       summary: Role defaults and per-member salary overrides (economie:treasury:manage)
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Salary configuration
@@ -422,14 +422,13 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 64 }
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Matching players with their wallet accounts
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/AdminPlayer' }
+              schema: {$ref: '#/components/schemas/AdminPlayerPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403':
@@ -487,14 +486,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/playerId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Transactions, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Transaction' }
+              schema: {$ref: '#/components/schemas/TransactionPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -588,14 +586,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/npcId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Transactions, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Transaction' }
+              schema: {$ref: '#/components/schemas/TransactionPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -689,14 +686,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Corporation ledger across currencies
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Transaction' }
+              schema: {$ref: '#/components/schemas/TransactionPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -788,14 +784,14 @@ paths:
       security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Corporation treasury members
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/CorporationMember' }
+              schema: {$ref: '#/components/schemas/CorporationMemberPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
@@ -840,14 +836,15 @@ paths:
     get:
       tags: [me]
       summary: My tax debts (due and settled)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Tax debts, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalTaxDebt' }
+              schema: {$ref: '#/components/schemas/PoliticalTaxDebtPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/me/taxes/pay:
@@ -878,14 +875,14 @@ paths:
       summary: Tax debts of the corporation (member only)
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Tax debts
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalTaxDebt' }
+              schema: {$ref: '#/components/schemas/PoliticalTaxDebtPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -986,14 +983,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/politicalEntityId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Ledger rows, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Transaction' }
+              schema: {$ref: '#/components/schemas/TransactionPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
@@ -1184,14 +1180,14 @@ paths:
       security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Members
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalMember' }
+              schema: {$ref: '#/components/schemas/PoliticalMemberPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
@@ -1202,14 +1198,14 @@ paths:
       security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/npcId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Tax debts
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalTaxDebt' }
+              schema: {$ref: '#/components/schemas/PoliticalTaxDebtPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
@@ -1317,6 +1313,13 @@ components:
       description: End of the report period (ISO date/time, inclusive)
       schema: { type: string, format: date-time }
 
+    offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
   responses:
     ValidationError:
       description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
@@ -1563,18 +1566,6 @@ components:
         enabled: { type: boolean }
         updatedAt: { type: string, format: date-time }
 
-    CorporationSalaries:
-      type: object
-      required: [corporationId, roleDefaults, memberOverrides]
-      properties:
-        corporationId: { type: string, format: uuid }
-        roleDefaults:
-          type: array
-          items: { $ref: '#/components/schemas/CorporationSalaryRole' }
-        memberOverrides:
-          type: array
-          items: { $ref: '#/components/schemas/CorporationMemberSalary' }
-
     SalaryBody:
       type: object
       required: [amount]
@@ -1764,3 +1755,160 @@ components:
               amount: { type: integer }
         paidTotal: { type: integer }
         remaining: { type: integer, description: Debts still due after this payment }
+    CorporationSalaries:
+      properties:
+        corporationId:
+          format: uuid
+          type: string
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        memberOverrides:
+          items:
+            $ref: '#/components/schemas/CorporationMemberSalary'
+          type: array
+        memberOverridesTotal:
+          minimum: 0
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        roleDefaults:
+          items:
+            $ref: '#/components/schemas/CorporationSalaryRole'
+          type: array
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - corporationId
+      - roleDefaults
+      - memberOverrides
+      - memberOverridesTotal
+      - total
+      - limit
+      - offset
+      type: object
+    TransactionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Transaction'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalTaxDebtPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalTaxDebt'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    AdminPlayerPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AdminPlayer'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

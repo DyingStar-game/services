@@ -351,8 +351,11 @@ internalRoutes.get(
       res.json(membership ? { ...membership.entity, office: membership.office } : null);
       return;
     }
-    const memberships = await listPoliticalMemberships(req.params.playerId);
-    res.json(memberships.map((m) => ({ ...m.entity, office: m.office })));
+    const memberships = await listPoliticalMemberships(req.params.playerId, Number(req.query.limit), Number(req.query.offset));
+    res.json({
+      ...memberships,
+      items: memberships.items.map((m) => ({ ...m.entity, office: m.office })),
+    });
   }),
 );
 
@@ -402,8 +405,15 @@ internalRoutes.get(
       res.json(membership ? { ...membership.corporation, rank: membership.rank } : null);
       return;
     }
-    const memberships = await listCorporationMemberships(req.params.playerId);
-    res.json(memberships.map((m) => ({ ...m.corporation, rank: m.rank })));
+    const memberships = await listCorporationMemberships(
+      req.params.playerId,
+      Number(req.query.limit),
+      Number(req.query.offset),
+    );
+    res.json({
+      ...memberships,
+      items: memberships.items.map((m) => ({ ...m.corporation, rank: m.rank })),
+    });
   }),
 );
 
@@ -451,12 +461,17 @@ internalRoutes.get(
   asyncHandler(async (req, res) => {
     const search = String(req.query.search ?? '');
     const playerIds = req.query.playerIds as string[];
+    const limit = Number(req.query.limit);
+    const offset = Number(req.query.offset);
     if (!search) {
-      res.json(await getProfilesByIds(playerIds));
+      res.json(await getProfilesByIds(playerIds, limit, offset));
       return;
     }
-    const results = await searchProfiles(search, Number(req.query.limit));
-    res.json(results.map((p) => ({ playerId: p.playerId, displayName: p.displayName, entityType: p.entityType })));
+    const results = await searchProfiles(search, limit, offset);
+    res.json({
+      ...results,
+      items: results.items.map((p) => ({ playerId: p.playerId, displayName: p.displayName, entityType: p.entityType })),
+    });
   }),
 );
 

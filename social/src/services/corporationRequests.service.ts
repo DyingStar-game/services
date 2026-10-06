@@ -1,7 +1,7 @@
 /**
  * Joining a corporation: direct join, applications (player → corporation) and invitations (corporation → player).
  */
-import { and, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
@@ -14,6 +14,7 @@ import {
   type PlayerProfile,
 } from '../db/schema/index.js';
 import { conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { isBlockedEitherWay } from './blocks.service.js';
 import { recordCorporationActivity } from './corporationActivity.service.js';
@@ -135,20 +136,33 @@ export async function inviteCorporationPlayer(
  * Pending applications and invitations of a corporation (requires `recruit` or `invite`).
  * @param corporationId - Corporation id.
  * @param actorId - Acting member.
- * @returns Requests with player profiles.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of requests with player profiles.
  */
-export async function listCorporationRequests(corporationId: string, actorId: string): Promise<CorporationRequestView[]> {
+export async function listCorporationRequests(
+  corporationId: string,
+  actorId: string,
+  limit: number,
+  offset: number,
+): Promise<Page<CorporationRequestView>> {
   const { rank } = await requireCorporationMember(corporationId, actorId);
   if (!hasCorporationPermission(rank, 'recruit') && !hasCorporationPermission(rank, 'invite')) {
     throw forbidden(t('forbidden.corp_permission'));
   }
-  const rows = await db
-    .select({ request: corporationJoinRequests, player: playerProfiles })
-    .from(corporationJoinRequests)
-    .innerJoin(playerProfiles, eq(playerProfiles.playerId, corporationJoinRequests.playerId))
-    .where(eq(corporationJoinRequests.corporationId, corporationId))
-    .orderBy(desc(corporationJoinRequests.createdAt));
-  return rows.map((r) => ({ ...r.request, player: r.player }));
+  const condition = eq(corporationJoinRequests.corporationId, corporationId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporationJoinRequests).where(condition),
+    db
+      .select({ request: corporationJoinRequests, player: playerProfiles })
+      .from(corporationJoinRequests)
+      .innerJoin(playerProfiles, eq(playerProfiles.playerId, corporationJoinRequests.playerId))
+      .where(condition)
+      .orderBy(desc(corporationJoinRequests.createdAt), desc(corporationJoinRequests.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows.map((r) => ({ ...r.request, player: r.player })), totalRow[0].total, limit, offset);
 }
 
 /**
@@ -186,19 +200,27 @@ export async function resolveCorporationRequest(
 /**
  * Pending invitations and applications of a player.
  * @param playerId - Player id.
- * @returns Requests with corporation refs.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of requests with corporation refs.
  */
-export async function listPlayerRequests(playerId: string): Promise<PlayerCorporationRequestView[]> {
-  const rows = await db
-    .select({
-      request: corporationJoinRequests,
-      corporation: { id: corporations.id, name: corporations.name, ticker: corporations.ticker, logoUrl: corporations.logoUrl },
-    })
-    .from(corporationJoinRequests)
-    .innerJoin(corporations, eq(corporations.id, corporationJoinRequests.corporationId))
-    .where(eq(corporationJoinRequests.playerId, playerId))
-    .orderBy(desc(corporationJoinRequests.createdAt));
-  return rows.map((r) => ({ ...r.request, corporation: r.corporation }));
+export async function listPlayerRequests(playerId: string, limit: number, offset: number): Promise<Page<PlayerCorporationRequestView>> {
+  const condition = eq(corporationJoinRequests.playerId, playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporationJoinRequests).where(condition),
+    db
+      .select({
+        request: corporationJoinRequests,
+        corporation: { id: corporations.id, name: corporations.name, ticker: corporations.ticker, logoUrl: corporations.logoUrl },
+      })
+      .from(corporationJoinRequests)
+      .innerJoin(corporations, eq(corporations.id, corporationJoinRequests.corporationId))
+      .where(condition)
+      .orderBy(desc(corporationJoinRequests.createdAt), desc(corporationJoinRequests.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows.map((r) => ({ ...r.request, corporation: r.corporation })), totalRow[0].total, limit, offset);
 }
 
 /**

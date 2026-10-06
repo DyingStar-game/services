@@ -29,7 +29,7 @@ import {
 /** Router for political entities, their members and offices. */
 export const politicsRoutes: IRouter = Router();
 
-/** GET /?search=&type=&limit= — Public political directory. */
+/** GET /?search=&type=&limit=&offset= — Public directory (`{ items, total, limit, offset }`). */
 politicsRoutes.get(
   '/',
   validate(politicsListQuery, 'query'),
@@ -39,6 +39,7 @@ politicsRoutes.get(
         String(req.query.search ?? ''),
         req.query.type as PoliticalEntityType | undefined,
         Number(req.query.limit),
+        Number(req.query.offset),
       ),
     );
   }),
@@ -82,13 +83,14 @@ politicsRoutes.delete(
   }),
 );
 
-/** GET /:entityId/children — Direct lower-level entities (public). */
+/** GET /:entityId/children — Direct lower-level entities (public, paginated). */
 politicsRoutes.get(
   '/:entityId/children',
   validate(politicalEntityIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     await politics.requirePoliticalEntity(req.params.entityId);
-    res.json(await politics.listPoliticalChildren(req.params.entityId));
+    res.json(await politics.listPoliticalChildren(req.params.entityId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -121,19 +123,20 @@ politicsRoutes.get(
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     await politics.requirePoliticalMember(req.params.entityId, requirePlayer(req).id);
-    res.json(await listPoliticalActivity(req.params.entityId, Number(req.query.limit)));
+    res.json(await listPoliticalActivity(req.params.entityId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
 // ── Members ─────────────────────────────────────────────────────────────────
 
-/** GET /:entityId/members — Members with office and presence. */
+/** GET /:entityId/members — Members with office and presence (paginated). */
 politicsRoutes.get(
   '/:entityId/members',
   validate(politicalEntityIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     await politics.requirePoliticalEntity(req.params.entityId);
-    res.json(await politics.listPoliticalMembers(req.params.entityId));
+    res.json(await politics.listPoliticalMembers(req.params.entityId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

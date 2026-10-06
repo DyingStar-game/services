@@ -17,7 +17,7 @@ pnpm install
 pnpm dev                      # tsx watch ; les migrations de ./drizzle sont appliquées au démarrage
 ```
 
-Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`. Smoke test ACL : `node scripts/smoke.mjs`.
+Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`, `pnpm db:reset -- --yes` (vide le schéma pour repartir de zéro : la migration unique `0000_init` est rejouée au prochain démarrage). Smoke test ACL : `node scripts/smoke.mjs`.
 
 Sans Keycloak, mettre `AUTH_DEV_BYPASS=true` (ignoré en production) et passer `X-Player-Id: <uuid>` (+ `X-Player-Name`) à la place du bearer :
 
@@ -41,6 +41,31 @@ Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en 
 | `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` (+ `X-Player-Name`, `X-Player-Roles`) sans JWT (dev uniquement) |
 | `REPUTATION_*` | Pénalités (blocage, signalement, signalement confirmé), seuils de sanctions automatiques (`WARN_AT`, `MUTE_AT`, `SUSPEND_AT`, `ESCALATE_AT`), durées, réhabilitation (`REHAB_AFTER_DAYS`, `REHAB_STEP`, `REHAB_INTERVAL_MINUTES`) — voir `.env.example` |
 
+## Pagination (rupture de contrat)
+
+Toutes les listes acceptent désormais `?limit=&offset=` et répondent par l'enveloppe
+`{ items, total, limit, offset }` au lieu d'un tableau brut :
+
+- `limit` : entier **1..100**, défaut `20`
+- `offset` : entier **≥ 0**, défaut `0` (décalage en lignes, pas en pages)
+- `items` : la page courante ; `total` : nombre total d'éléments correspondants,
+  calculé par une requête `count()` distincte (donc juste même sur une page vide)
+- l'ordre est déterministe (tri + `id` en critère d'arbitrage) : une page suivante
+  ne saute ni ne répète d'élément
+
+Exceptions & particularités :
+
+- `GET /api/me/reputation` : `{ reputation, events, eventsTotal, limit, offset, activeSanctions }`
+- `GET /api/friends/requests` : `{ incoming, outgoing, incomingTotal, outgoingTotal, limit, offset }`
+- `GET /api/corporations/:id` et `GET /api/politics/:id` : `members` / `subsidiaries` /
+  `children` sont tronqués à 50 / 20 lignes, avec les compteurs `memberCount`,
+  `subsidiaryCount` et `childCount` ; les listes complètes sont sur les sous-routes paginées
+- `GET /api/admin/players/:id` : aperçus (`reputationEvents`, `reports`, `activity`)
+  bornés à 50 lignes
+- exemptes (jeu d'actions et listes fermées) : `/api/me/permissions/catalog`,
+  `/api/internal/permissions/catalog`, rangs et offices, sanctions actives,
+  `/api/admin/stats`
+
 ## Endpoints
 
 Spécification complète (schémas, codes d'erreur) : [`openapi.yaml`](openapi.yaml) — importable dans Bruno, Postman, Swagger UI, etc.
@@ -52,7 +77,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 ### Public
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/health` | Liveness |
+| GET | `/api/health` | Liveness (`?deep=1` vérifie aussi le schéma en base → `503` si absent) |
 | GET | `/openapi.yaml` | Document OpenAPI du service (aussi exposé sur `/api/openapi.yaml`) |
 
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
@@ -60,12 +85,13 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 |---|---|---|
 | GET | `/api/me` | Mon profil + présence (créé au premier appel) + mon groupe (`group`, `null` si aucun) |
 | PATCH | `/api/me` | `displayName, avatarUrl, faction, biography, rpSheet{characterName,story,alignment}` |
-| GET | `/api/me/activity?limit=` | Mon historique d'activité |
+| GET | `/api/me/activity?limit=&offset=` | Mon historique d'activité |
+| GET | `/api/me/permissions/catalog` | Catalogue des actions ACL : `holder`, `legacy`, `satisfiedBy`, `defaultMember` + description localisée (`Accept-Language`) |
 | GET | `/api/profiles?search=&limit=&entityType=` | Recherche par nom d'affichage (`entityType` ∈ `player\|npc`, défaut : les deux) |
 | GET | `/api/profiles/:playerId` | Profil public + statut en ligne |
 | GET | `/api/friends` | Amis + présence (statut, localisation) |
 | GET | `/api/friends/online` | Amis connectés / en mission |
-| GET | `/api/friends/suggestions?limit=` | Joueurs rencontrés récemment, pas encore amis |
+| GET | `/api/friends/suggestions?limit=&offset=` | Joueurs rencontrés récemment, pas encore amis |
 | GET | `/api/friends/requests` | `{ incoming, outgoing }` |
 | POST | `/api/friends/requests` `{playerId}` | Envoyer une demande (accepte automatiquement une demande inverse en attente) |
 | POST | `/api/friends/requests/:id/accept` | Accepter (destinataire) |
@@ -82,17 +108,17 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/me/group/invitations` | Mes invitations de groupe en attente |
 | POST | `/api/me/group/invitations/:id/accept` | Accepter une invitation de groupe |
 | POST | `/api/me/group/invitations/:id/decline` | Refuser une invitation de groupe |
-| GET | `/api/me/reputation?limit=` | Mon score, l'historique des variations et mes sanctions actives (accessible même suspendu) |
+| GET | `/api/me/reputation?limit=&offset=` | Mon score, l'historique des variations et mes sanctions actives (accessible même suspendu) |
 | GET | `/api/me/sanctions` | Mes sanctions actives (accessible même suspendu) |
 | POST | `/api/reports` `{targetType: player\|corporation, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
-| GET | `/api/reports?limit=` | Mes signalements |
+| GET | `/api/reports?limit=&offset=` | Mes signalements |
 
 Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 
 ### Corporations (`Authorization: Bearer <JWT Keycloak>`) — un joueur peut appartenir à plusieurs corporations ; une corporation peut être la filiale d'une autre (maison mère)
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/corporations?search=&limit=` | Annuaire (nom/ticker, nombre de membres) |
+| GET | `/api/corporations?search=&limit=&offset=` | Annuaire (nom/ticker, nombre de membres) |
 | POST | `/api/corporations` `{name, ticker, description?, logoUrl?, recruitment?}` | Créer ; le créateur devient le CEO avec le grade CEO (un joueur peut créer/posséder plusieurs corporations) |
 | GET | `/api/corporations/:corporationId` | Page publique : corporation, grades, membres + présence, maison mère (`parent`) et filiales (`subsidiaries`) |
 | PATCH | `/api/corporations/:corporationId` | `manage_corporation` — nom, ticker, logo, description, `recruitment` ∈ `open\|apply\|closed` |
@@ -101,7 +127,7 @@ Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur tout
 | PUT | `/api/corporations/:corporationId/parent` `{parentId: uuid\|null}` | Rattacher à une maison mère ou détacher (`manage_corporation`, refus des cycles : `409 CORPORATION_CYCLE`) |
 | PUT | `/api/corporations/:corporationId/politics` `{politicalEntityId: uuid\|null}` | Rattacher la corporation à une entité politique (**siège fiscal**) ou détacher (`manage_corporation`) |
 | POST | `/api/corporations/:corporationId/transfer` `{playerId}` | Transférer le rôle de CEO (CEO) |
-| GET | `/api/corporations/:corporationId/activity?limit=` | Journal interne (membres) |
+| GET | `/api/corporations/:corporationId/activity?limit=&offset=` | Journal interne (membres) |
 | GET | `/api/corporations/:corporationId/members` | Membres avec grade et présence |
 | PATCH | `/api/corporations/:corporationId/members/:playerId` `{rankId}` | Changer le grade (`manage_members`, grades strictement inférieurs au sien) |
 | DELETE | `/api/corporations/:corporationId/members/:playerId` | Quitter (soi-même) ou exclure (`manage_members`) |
@@ -138,7 +164,7 @@ Catégorie sociale hiérarchique : **commune** (villages/villes, avec maire et c
 
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/politics?search=&type=&limit=` | Annuaire (nom, nombre de membres, filtre de niveau `type`) |
+| GET | `/api/politics?search=&type=&limit=&offset=` | Annuaire (nom, nombre de membres, filtre de niveau `type`) |
 | POST | `/api/politics` `{type, name, description?, bannerUrl?}` | Créer ; le créateur devient la tête (offices par défaut semés selon le niveau) |
 | GET | `/api/politics/:entityId` | Page publique : offices, membres + présence, entité parente et enfants |
 | PATCH | `/api/politics/:entityId` | `manage_entity` — nom, description, bannière |
@@ -146,7 +172,7 @@ Catégorie sociale hiérarchique : **commune** (villages/villes, avec maire et c
 | GET | `/api/politics/:entityId/children` | Entités de niveau inférieur directement rattachées |
 | PUT | `/api/politics/:entityId/parent` `{parentId: uuid\|null}` | Rattacher à une entité de **niveau strictement supérieur** ou détacher (`manage_hierarchy`, refus des cycles `409 POLITICAL_CYCLE`, niveau invalide `400 INVALID_PARENT_LEVEL`) |
 | POST | `/api/politics/:entityId/transfer` `{playerId}` | Transférer la tête (tête) |
-| GET | `/api/politics/:entityId/activity?limit=` | Journal interne (membres) |
+| GET | `/api/politics/:entityId/activity?limit=&offset=` | Journal interne (membres) |
 | GET | `/api/politics/:entityId/members` | Membres avec office et présence |
 | POST | `/api/politics/:entityId/members` `{playerId, officeId?}` | Nommer un membre (`manage_members`) |
 | PATCH | `/api/politics/:entityId/members/:playerId` `{officeId}` | Changer d'office (`manage_members`, offices strictement inférieurs au sien) |
@@ -166,15 +192,15 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/admin/stats` | Analyse communautaire : joueurs/en ligne, corporations (top 5), signalements par statut, sanctions actives, activité 24h, plus signalés, réputations les plus basses |
-| GET | `/api/admin/log?limit=` | Journal d'audit des actions de modération |
-| GET | `/api/admin/reports?status=&escalation=&targetPlayerId=&limit=` | File des signalements |
+| GET | `/api/admin/log?limit=&offset=` | Journal d'audit des actions de modération |
+| GET | `/api/admin/reports?status=&escalation=&targetPlayerId=&limit=&offset=` | File des signalements |
 | GET | `/api/admin/reports/:id` | Détail |
 | PATCH | `/api/admin/reports/:id` `{status: reviewing\|resolved\|dismissed, note?}` | `resolved` = signalement confirmé (pénalité `UPHELD_REPORT_PENALTY`), `dismissed` rembourse la pénalité initiale |
 | POST | `/api/admin/reports/:id/escalate` | Escalade d'un niveau (moderator → admin → supervisor) |
 | GET | `/api/admin/players/:playerId` | Fiche : profil, historique de réputation, sanctions, signalements reçus, activité |
 | POST | `/api/admin/players/:playerId/reputation` `{delta, reason}` | Ajustement manuel (**admin**) |
 | POST | `/api/admin/players/:playerId/sanctions` `{type, reason, durationHours?}` | `warning`/`mute` : moderator ; `suspension`/`ban` : **admin** |
-| GET | `/api/admin/sanctions?playerId=&active=&limit=` | Liste des sanctions |
+| GET | `/api/admin/sanctions?playerId=&active=&limit=&offset=` | Liste des sanctions |
 | DELETE | `/api/admin/sanctions/:id` | Révoquer |
 
 **Réputation** : chaque variation est un événement (`source` ∈ `game, block, report, sanction, moderation, rehabilitation`). Blocage = −`BLOCK_PENALTY` (rendu au déblocage), signalement = −`REPORT_PENALTY`, signalement confirmé = −`UPHELD_REPORT_PENALTY`. Sous les seuils, sanction automatique si aucune du même type n'est active : avertissement (`WARN_AT`), mute `MUTE_HOURS` (`MUTE_AT`), suspension `SUSPEND_HOURS` (`SUSPEND_AT`) ; sous `ESCALATE_AT` un signalement système est ouvert au niveau `admin`. **Réhabilitation** : les joueurs sous 0 sans événement depuis `REHAB_AFTER_DAYS` jours regagnent `REHAB_STEP` point(s) à chaque passe (planifiée en process toutes les `REHAB_INTERVAL_MINUTES` minutes, ou déclenchée via l'API interne).
@@ -194,7 +220,7 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | GET | `/api/internal/players/:playerId/corporation?corporationId=` | `social:corporation:read` | Avec `corporationId` : cette adhésion ou `null` ; sans : la liste des adhésions d'un joueur |
 | GET | `/api/internal/players/:playerId/group?groupId=` | `social:group:read` | Avec `groupId` : cette adhésion ou `null` ; sans : le groupe unique du joueur ou `null` — `{group, member}` |
 | GET | `/api/internal/groups/:groupId` | `social:group:read` | Résumé du groupe (`memberCount`) ou `null` si inexistant — utilisé par Mission pour valider un partage |
-| GET | `/api/internal/players?search=&playerIds=&limit=` | `social:profile:read` | Résoudre des profils par pseudo (sous-chaîne) et/ou ids explicites — `{playerId, displayName, entityType}` (pour les services qui ne stockent que des UUID) |
+| GET | `/api/internal/players?search=&playerIds=&limit=&offset=` | `social:profile:read` | Résoudre des profils par pseudo (sous-chaîne) et/ou ids explicites — `{playerId, displayName, entityType}` (pour les services qui ne stockent que des UUID) |
 | PUT | `/api/internal/players/:playerId/corporation` `{corporationId, rankId?}` | `social:corporation:write` | Ajouter un **PNJ** à une corporation (grade par défaut si omis) |
 | DELETE | `/api/internal/players/:playerId/corporation?corporationId=` | `social:corporation:write` | Retirer un **PNJ** d'une corporation précise |
 | POST | `/api/internal/corporations` `{ceoId, name, ticker, description?, logoUrl?, recruitment?}` | `social:corporation:write` | Créer une corporation avec un CEO explicite (joueur ou **PNJ**) |
@@ -252,7 +278,9 @@ cas** — un refus est un résultat, jamais une erreur :
 5. `defaultMember` → accordé à tout membre ;
 6. sinon → `missing_permission`.
 
-**Catalogue** (`GET /api/internal/permissions/catalog`, source de vérité : `src/services/permissionCatalog.ts`) :
+**Catalogue** (source de vérité : `src/services/permissionCatalog.ts`) — deux lectures du
+même contenu : `GET /api/internal/permissions/catalog` pour les services (rôle
+`social:authorize`) et `GET /api/me/permissions/catalog` pour un joueur authentifié (UI) :
 
 | Action | Orga | Règle | Appelé par |
 |---|---|---|---|
@@ -279,7 +307,7 @@ src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
   db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, groups, politics, moderation)
-  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
+  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle (migration unique `0000_init`) et refuse de démarrer si le schéma manque
   middleware/       auth (JWT joueur / service-account + rôles de capacité), sanctions, validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
   services/         logique métier (une fonction exportée par cas d'usage)

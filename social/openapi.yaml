@@ -175,14 +175,13 @@ paths:
       summary: Own activity history (newest first)
       parameters:
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Activity entries
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/ActivityEntry' }
+              schema: {$ref: '#/components/schemas/ActivityPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -192,21 +191,15 @@ paths:
       tags: [me]
       operationId: getMyCorporations
       summary: Every corporation the caller belongs to, with rank
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Corporation memberships (empty when the player belongs to none)
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  allOf:
-                    - $ref: '#/components/schemas/Corporation'
-                    - type: object
-                      required: [joinedAt, rank]
-                      properties:
-                        joinedAt: { type: string, format: date-time }
-                        rank: { $ref: '#/components/schemas/CorporationRank' }
+              schema: {$ref: '#/components/schemas/CorporationMembershipPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
@@ -215,14 +208,15 @@ paths:
       tags: [me]
       operationId: getMyCorporationRequests
       summary: My pending corporation invitations and applications
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Pending requests with the corporation reference
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PlayerCorporationRequest' }
+              schema: {$ref: '#/components/schemas/PlayerCorporationRequestPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
@@ -281,14 +275,15 @@ paths:
       tags: [me]
       operationId: getMyGroupInvitations
       summary: My pending group invitations
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Pending invitations with the group reference
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PlayerGroupInvitation' }
+              schema: {$ref: '#/components/schemas/PlayerGroupInvitationPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
@@ -331,22 +326,44 @@ paths:
       description: Reachable while suspended or banned.
       parameters:
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Reputation summary
           content:
             application/json:
               schema:
-                type: object
-                required: [reputation, events, activeSanctions]
                 properties:
-                  reputation: { type: integer }
-                  events:
-                    type: array
-                    items: { $ref: '#/components/schemas/ReputationEvent' }
                   activeSanctions:
+                    items:
+                      $ref: '#/components/schemas/Sanction'
                     type: array
-                    items: { $ref: '#/components/schemas/Sanction' }
+                  events:
+                    items:
+                      $ref: '#/components/schemas/ReputationEvent'
+                    type: array
+                  eventsTotal:
+                    minimum: 0
+                    type: integer
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  reputation:
+                    type: integer
+                required:
+                - reputation
+                - events
+                - activeSanctions
+                - eventsTotal
+                - limit
+                - offset
+                type: object
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/me/sanctions:
@@ -382,14 +399,13 @@ paths:
               - $ref: '#/components/schemas/ProfileKind'
               - type: 'null'
           description: "Restrict to players or NPCs (default: both)."
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Matching profiles, sorted by display name
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PlayerProfile' }
+              schema: {$ref: '#/components/schemas/PlayerProfilePage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -430,14 +446,15 @@ paths:
       tags: [friends]
       operationId: listFriends
       summary: Friends with presence
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Accepted friends with status and location
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Friend' }
+              schema: {$ref: '#/components/schemas/FriendPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
@@ -446,14 +463,15 @@ paths:
       tags: [friends]
       operationId: listOnlineFriends
       summary: Friends currently online or in mission
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Friends whose status is not `offline`
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Friend' }
+              schema: {$ref: '#/components/schemas/FriendPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
@@ -464,14 +482,13 @@ paths:
       summary: Recently met players who are not friends yet
       parameters:
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Suggested players
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/FriendSuggestion' }
+              schema: {$ref: '#/components/schemas/FriendSuggestionPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -481,21 +498,47 @@ paths:
       tags: [friends]
       operationId: listFriendRequests
       summary: Pending friend requests
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Incoming and outgoing requests
           content:
             application/json:
               schema:
-                type: object
-                required: [incoming, outgoing]
                 properties:
                   incoming:
+                    items:
+                      $ref: '#/components/schemas/FriendRequest'
                     type: array
-                    items: { $ref: '#/components/schemas/FriendRequest' }
+                  incomingTotal:
+                    minimum: 0
+                    type: integer
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
                   outgoing:
+                    items:
+                      $ref: '#/components/schemas/FriendRequest'
                     type: array
-                    items: { $ref: '#/components/schemas/FriendRequest' }
+                  outgoingTotal:
+                    minimum: 0
+                    type: integer
+                required:
+                - incoming
+                - outgoing
+                - incomingTotal
+                - outgoingTotal
+                - limit
+                - offset
+                type: object
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
     post:
@@ -578,20 +621,15 @@ paths:
       tags: [blocks]
       operationId: listBlocks
       summary: Blocked players
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Blocked profiles with block date
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  allOf:
-                    - $ref: '#/components/schemas/PlayerProfile'
-                    - type: object
-                      required: [blockedAt]
-                      properties:
-                        blockedAt: { type: string, format: date-time }
+              schema: {$ref: '#/components/schemas/BlockedProfilePage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
     post:
@@ -636,14 +674,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/search'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Corporations matching name or ticker, with member counts
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/CorporationSummary' }
+              schema: {$ref: '#/components/schemas/CorporationSummaryPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -689,23 +726,38 @@ paths:
             application/json:
               schema:
                 allOf:
-                  - $ref: '#/components/schemas/CorporationSummary'
-                  - type: object
-                    required: [ranks, members, parent, subsidiaries]
-                    properties:
-                      ranks:
-                        type: array
-                        items: { $ref: '#/components/schemas/CorporationRank' }
-                      members:
-                        type: array
-                        items: { $ref: '#/components/schemas/CorporationMember' }
-                      parent:
-                        oneOf:
-                          - $ref: '#/components/schemas/CorporationRef'
-                          - type: 'null'
-                      subsidiaries:
-                        type: array
-                        items: { $ref: '#/components/schemas/CorporationSummary' }
+                - $ref: '#/components/schemas/CorporationSummary'
+                - properties:
+                    memberCount:
+                      minimum: 0
+                      type: integer
+                    members:
+                      items:
+                        $ref: '#/components/schemas/CorporationMember'
+                      type: array
+                    parent:
+                      oneOf:
+                      - $ref: '#/components/schemas/CorporationRef'
+                      - type: 'null'
+                    ranks:
+                      items:
+                        $ref: '#/components/schemas/CorporationRank'
+                      type: array
+                    subsidiaries:
+                      items:
+                        $ref: '#/components/schemas/CorporationSummary'
+                      type: array
+                    subsidiaryCount:
+                      minimum: 0
+                      type: integer
+                  required:
+                  - ranks
+                  - members
+                  - parent
+                  - subsidiaries
+                  - memberCount
+                  - subsidiaryCount
+                  type: object
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -747,14 +799,14 @@ paths:
       summary: Direct subsidiaries of a corporation
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Subsidiary summaries
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/CorporationSummary' }
+              schema: {$ref: '#/components/schemas/CorporationSummaryPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -857,14 +909,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/corporationId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Journal entries, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/CorporationActivityEntry' }
+              schema: {$ref: '#/components/schemas/CorporationActivityPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -877,14 +928,14 @@ paths:
       summary: Members with rank and presence
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Members
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/CorporationMember' }
+              schema: {$ref: '#/components/schemas/CorporationMemberPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1089,14 +1140,14 @@ paths:
       summary: Pending applications and invitations (`recruit` or `invite`)
       parameters:
         - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Requests with the player's profile
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/CorporationRequest' }
+              schema: {$ref: '#/components/schemas/CorporationRequestPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1214,14 +1265,15 @@ paths:
       tags: [groups]
       operationId: listGroupMembers
       summary: Members with profile and presence (owner first, then oldest join)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Members
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/GroupMember' }
+              schema: {$ref: '#/components/schemas/GroupMemberPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1315,14 +1367,13 @@ paths:
       summary: Reports I filed
       parameters:
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Reports, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Report' }
+              schema: {$ref: '#/components/schemas/ReportPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -1349,14 +1400,13 @@ paths:
       summary: Moderation audit log
       parameters:
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Log entries, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/ModerationLogEntry' }
+              schema: {$ref: '#/components/schemas/ModerationLogEntryPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1377,14 +1427,13 @@ paths:
           in: query
           schema: { type: string, format: uuid }
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Reports, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/ReportView' }
+              schema: {$ref: '#/components/schemas/ReportViewPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1581,14 +1630,13 @@ paths:
             enum: ['true', 'false']
             default: 'true'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Sanctions, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Sanction' }
+              schema: {$ref: '#/components/schemas/SanctionPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1845,14 +1893,13 @@ paths:
           description: Comma-separated player ids (used when `search` is empty)
           schema: { type: string }
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Matching profiles
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/ProfileIdentity' }
+              schema: {$ref: '#/components/schemas/ProfileIdentityPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -1872,6 +1919,8 @@ paths:
           in: query
           required: false
           schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: A membership, `null`, or the list of memberships
@@ -1879,21 +1928,16 @@ paths:
             application/json:
               schema:
                 oneOf:
-                  - allOf:
-                      - $ref: '#/components/schemas/Corporation'
-                      - type: object
-                        required: [rank]
-                        properties:
-                          rank: { $ref: '#/components/schemas/CorporationRank' }
-                  - type: 'null'
-                  - type: array
-                    items:
-                      allOf:
-                        - $ref: '#/components/schemas/Corporation'
-                        - type: object
-                          required: [rank]
-                          properties:
-                            rank: { $ref: '#/components/schemas/CorporationRank' }
+                - allOf:
+                  - $ref: '#/components/schemas/Corporation'
+                  - properties:
+                      rank:
+                        $ref: '#/components/schemas/CorporationRank'
+                    required:
+                    - rank
+                    type: object
+                - type: 'null'
+                - $ref: '#/components/schemas/CorporationMembershipPage'
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -2134,6 +2178,30 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
+  /api/me/permissions/catalog:
+    get:
+      tags: [me]
+      operationId: myPermissionCatalog
+      summary: Catalog of organisation actions and their evaluation rules
+      description: >
+        Same static catalog as `GET /api/internal/permissions/catalog`, readable by any
+        authenticated player. Localized through `Accept-Language`. Use it to render what a
+        rank or office permission means (legacy, `satisfiedBy`, `defaultMember`).
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actions]
+                properties:
+                  actions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PermissionCatalogRow' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
 
   # ── Politics ────────────────────────────────────────────────────────────────
   /api/me/politics:
@@ -2141,21 +2209,15 @@ paths:
       tags: [me]
       operationId: getMyPolitics
       summary: Every political entity the player belongs to, with office
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Memberships with office
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  allOf:
-                    - $ref: '#/components/schemas/PoliticalEntity'
-                    - type: object
-                      required: [joinedAt, office]
-                      properties:
-                        joinedAt: { type: string, format: date-time }
-                        office: { $ref: '#/components/schemas/PoliticalOffice' }
+              schema: {$ref: '#/components/schemas/PoliticalMembershipPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
@@ -2170,14 +2232,13 @@ paths:
           in: query
           schema: { $ref: '#/components/schemas/PoliticalEntityType' }
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Entities with member counts
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalEntitySummary' }
+              schema: {$ref: '#/components/schemas/PoliticalEntitySummaryPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
@@ -2258,14 +2319,14 @@ paths:
       summary: Direct lower-level entities
       parameters:
         - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Child summaries
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalEntitySummary' }
+              schema: {$ref: '#/components/schemas/PoliticalEntitySummaryPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2340,14 +2401,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/politicalEntityId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Journal entries, newest first
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalActivityEntry' }
+              schema: {$ref: '#/components/schemas/PoliticalActivityPage'}
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -2359,14 +2419,15 @@ paths:
       tags: [politics]
       operationId: listPoliticalMembers
       summary: Members with office and presence
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Members
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/PoliticalMember' }
+              schema: {$ref: '#/components/schemas/PoliticalMemberPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2781,6 +2842,8 @@ paths:
           in: query
           required: false
           schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: A membership, `null`, or the list of memberships
@@ -2788,21 +2851,16 @@ paths:
             application/json:
               schema:
                 oneOf:
-                  - allOf:
-                      - $ref: '#/components/schemas/PoliticalEntity'
-                      - type: object
-                        required: [office]
-                        properties:
-                          office: { $ref: '#/components/schemas/PoliticalOffice' }
-                  - type: 'null'
-                  - type: array
-                    items:
-                      allOf:
-                        - $ref: '#/components/schemas/PoliticalEntity'
-                        - type: object
-                          required: [office]
-                          properties:
-                            office: { $ref: '#/components/schemas/PoliticalOffice' }
+                - allOf:
+                  - $ref: '#/components/schemas/PoliticalEntity'
+                  - properties:
+                      office:
+                        $ref: '#/components/schemas/PoliticalOffice'
+                    required:
+                    - office
+                    type: object
+                - type: 'null'
+                - $ref: '#/components/schemas/PoliticalMembershipPage'
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
@@ -2875,6 +2933,13 @@ components:
       description: Case-insensitive substring; empty lists everything
       schema: { type: string, maxLength: 64, default: '' }
 
+    offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
   responses:
     ValidationError:
       description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
@@ -3471,26 +3536,6 @@ components:
         description: { type: [string, 'null'], maxLength: 2000 }
         bannerUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
 
-    PoliticalEntityPage:
-      allOf:
-        - $ref: '#/components/schemas/PoliticalEntitySummary'
-        - type: object
-          required: [offices, members, parent, children]
-          properties:
-            offices:
-              type: array
-              items: { $ref: '#/components/schemas/PoliticalOffice' }
-            members:
-              type: array
-              items: { $ref: '#/components/schemas/PoliticalMember' }
-            parent:
-              oneOf:
-                - $ref: '#/components/schemas/PoliticalEntityRef'
-                - type: 'null'
-            children:
-              type: array
-              items: { $ref: '#/components/schemas/PoliticalEntitySummary' }
-
     PoliticalOffice:
       type: object
       required: [id, entityId, name, priority, permissions, isHead, isDefault]
@@ -3736,3 +3781,596 @@ components:
               playerId: { type: string, format: uuid }
               displayName: { type: string }
               reputation: { type: integer }
+
+    PoliticalEntityPage:
+      allOf:
+      - $ref: '#/components/schemas/PoliticalEntitySummary'
+      - properties:
+          childCount:
+            minimum: 0
+            type: integer
+          children:
+            items:
+              $ref: '#/components/schemas/PoliticalEntitySummary'
+            type: array
+          memberCount:
+            minimum: 0
+            type: integer
+          members:
+            items:
+              $ref: '#/components/schemas/PoliticalMember'
+            type: array
+          offices:
+            items:
+              $ref: '#/components/schemas/PoliticalOffice'
+            type: array
+          parent:
+            oneOf:
+            - $ref: '#/components/schemas/PoliticalEntityRef'
+            - type: 'null'
+        required:
+        - offices
+        - members
+        - parent
+        - children
+        - memberCount
+        - childCount
+        type: object
+    ActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationMembershipPage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/Corporation'
+            - properties:
+                joinedAt:
+                  format: date-time
+                  type: string
+                rank:
+                  $ref: '#/components/schemas/CorporationRank'
+              required:
+              - joinedAt
+              - rank
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalMembershipPage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/PoliticalEntity'
+            - properties:
+                joinedAt:
+                  format: date-time
+                  type: string
+                office:
+                  $ref: '#/components/schemas/PoliticalOffice'
+              required:
+              - joinedAt
+              - office
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PlayerCorporationRequestPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PlayerCorporationRequest'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PlayerGroupInvitationPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PlayerGroupInvitation'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PlayerProfilePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PlayerProfile'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    FriendPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Friend'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    FriendSuggestionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/FriendSuggestion'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    BlockedProfilePage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/PlayerProfile'
+            - properties:
+                blockedAt:
+                  format: date-time
+                  type: string
+              required:
+              - blockedAt
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationSummaryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationSummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationRequestPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationRequest'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    GroupMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/GroupMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ReportPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Report'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ModerationLogEntryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ModerationLogEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ReportViewPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ReportView'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    SanctionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Sanction'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalEntitySummaryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalEntitySummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ProfileIdentityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ProfileIdentity'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

@@ -25,22 +25,23 @@ meRoutes.get(
   }),
 );
 
-/** GET /wallet/transactions?limit= — Ledger of the player (all currencies, newest first). */
+/** GET /wallet/transactions?limit=&offset= — Ledger of the player (all currencies, newest first). */
 meRoutes.get(
   '/wallet/transactions',
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await listPlayerTransactions(player.id, Number(req.query.limit)));
+    res.json(await listPlayerTransactions(player.id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
-/** GET /taxes — My tax debts (due and settled), newest first. */
+/** GET /taxes?limit=&offset= — My tax debts (due and settled), newest first. */
 meRoutes.get(
   '/taxes',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await getTaxDebts('player', player.id));
+    res.json(await getTaxDebts('player', player.id, { limit: Number(req.query.limit), offset: Number(req.query.offset) }));
   }),
 );
 

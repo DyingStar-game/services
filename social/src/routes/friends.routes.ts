@@ -12,19 +12,21 @@ import { limitQuery, playerIdParams, requestIdParams, targetPlayerBody } from '.
 /** Router for friendships. */
 export const friendsRoutes: IRouter = Router();
 
-/** GET / — Accepted friends with presence. */
+/** GET / — Accepted friends with presence (paginated). */
 friendsRoutes.get(
   '/',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await friends.listFriends(requirePlayer(req).id));
+    res.json(await friends.listFriends(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
-/** GET /online — Friends currently online or in mission, with location. */
+/** GET /online — Friends currently online or in mission, with location (paginated). */
 friendsRoutes.get(
   '/online',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await friends.listOnlineFriends(requirePlayer(req).id));
+    res.json(await friends.listOnlineFriends(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -33,15 +35,16 @@ friendsRoutes.get(
   '/suggestions',
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await friends.listSuggestions(requirePlayer(req).id, Number(req.query.limit)));
+    res.json(await friends.listSuggestions(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
-/** GET /requests — Pending requests, incoming and outgoing. */
+/** GET /requests — Pending requests, incoming and outgoing (paginated per direction). */
 friendsRoutes.get(
   '/requests',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await friends.listRequests(requirePlayer(req).id));
+    res.json(await friends.listRequests(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

@@ -17,9 +17,10 @@ cp .env.example .env          # ajuster DATABASE_URL, OIDC_ISSUER, INVENTORY/ECO
 docker compose -f docker/docker-compose.yml --env-file .env up   # API (watch) + postgres
 ```
 
-Ou avec un Postgres déjà disponible : `pnpm install && pnpm dev` (migrations appliquées au
-démarrage). Autres scripts : `pnpm build` / `pnpm start`, `pnpm type-check`, `pnpm db:generate`.
-Smoke test : `node scripts/smoke.mjs`.
+Ou avec un Postgres déjà disponible : `pnpm install && pnpm dev` (la migration unique
+`0000_init` est appliquée au démarrage). Autres scripts : `pnpm build` / `pnpm start`,
+`pnpm type-check`, `pnpm db:generate`, `pnpm db:reset -- --yes` (vide le schéma pour repartir de
+zéro). Smoke test : `node scripts/smoke.mjs`.
 
 Pour l'API interne sans Keycloak : `INTERNAL_DEV_BYPASS=true` + `X-Internal-Key`. Pour les
 routes joueur sans Keycloak : `AUTH_DEV_BYPASS=true` + `X-Player-Id` / `X-Player-Name`.
@@ -61,6 +62,26 @@ routes joueur sans Keycloak : `AUTH_DEV_BYPASS=true` + `X-Player-Id` / `X-Player
 propriété ; il s'appuie sur `inventory` (propriété) et `economie` (crédits). La confirmation
 physique d'une livraison reste du ressort du serveur de jeu.
 
+## Pagination (rupture de contrat)
+
+Toutes les listes acceptent désormais `?limit=&offset=` et répondent par l'enveloppe
+`{ items, total, limit, offset }` au lieu d'un tableau brut :
+
+- `limit` : entier **1..100**, défaut `20`
+- `offset` : entier **≥ 0**, défaut `0` (décalage en lignes, pas en pages)
+- `items` : la page courante ; `total` : nombre total d'éléments correspondants,
+  calculé par une requête `count()` distincte (donc juste même sur une page vide)
+- l'ordre est déterministe (tri + `id` en critère d'arbitrage) : une page suivante
+  ne saute ni ne répète d'élément
+
+Exceptions & particularités :
+
+- `GET /api/market/book` répond `{ goodType, bids, asks, bidTotal, askTotal, limit, offset }`
+  (`bids`/`asks` : ordres ouverts best-price-first) — `limit` **1..500**, défaut `100`
+  (profondeur de carnet, contrat plus large que les listes standards)
+- `GET /api/market/orders`, `/demands`, `/trades` et leurs équivalents internes → enveloppe
+- `GET /api/market/catalog` reste un tableau : le catalogue est fermé et court
+
 ## Endpoints
 
 Spécification complète : [`openapi.yaml`](openapi.yaml). Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
@@ -72,15 +93,15 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 |---|---|---|
 | GET | `/api/market/catalog` | Types de biens échangeables |
 | GET | `/api/market/book?goodType=` | Profondeur du carnet (nb d'achats/ventes ouverts) |
-| GET | `/api/market/orders?goodType=&side=&status=&limit=` | Carnet d'ordres |
+| GET | `/api/market/orders?goodType=&side=&status=&limit=&offset=` | Carnet d'ordres |
 | POST | `/api/market/orders` `{side, goodType, kind, quantity, price, instanceId?, corporationId?}` | Passer un ordre (matching immédiat) |
 | GET | `/api/market/orders/:id` | Un ordre |
 | POST | `/api/market/orders/:id/cancel` | Annuler un de ses ordres |
-| GET | `/api/market/demands?goodType=&status=&limit=` | Demandes/contrats |
+| GET | `/api/market/demands?goodType=&status=&limit=&offset=` | Demandes/contrats |
 | POST | `/api/market/demands` `{goodType, kind, quantity, maxPrice, instanceId?, message?, corporationId?}` | Créer une demande |
 | POST | `/api/market/demands/:id/fulfill` `{unitPrice, corporationId?}` | Satisfaire une demande (règle le trade) |
 | POST | `/api/market/demands/:id/cancel` | Annuler une de ses demandes |
-| GET | `/api/market/trades?status=&limit=` | Mes trades (acheteur ou vendeur) |
+| GET | `/api/market/trades?status=&limit=&offset=` | Mes trades (acheteur ou vendeur) |
 
 `corporationId` (optionnel) fait trader depuis la trésorerie d'une corporation dont
 l'appelant détient l'action **`market:trade`** — accordée à tout membre (`defaultMember`),
@@ -113,7 +134,7 @@ src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
   db/schema/        tables drizzle (catalog, orders, demands, trades)
-  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
+  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle (migration unique `0000_init`) et refuse de démarrer si le schéma manque
   middleware/       auth (JWT joueur / service-account + rôles), validate (zod), errorHandler
   routes/           market.routes.ts (joueur), internal.routes.ts (serveur de jeu), schemas zod
   services/         market.service.ts, catalog.service.ts, clients inventory/economy/social

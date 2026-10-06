@@ -95,18 +95,36 @@ paths:
       parameters:
         - $ref: '#/components/parameters/AssignmentStatus'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Player missions
           content:
             application/json:
               schema:
-                type: object
-                required: [missions]
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
+                    items:
+                      $ref: '#/components/schemas/PlayerMission'
                     type: array
-                    items: { $ref: '#/components/schemas/PlayerMission' }
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - missions
+                - total
+                - limit
+                - offset
+                type: object
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/me/missions-created:
@@ -119,18 +137,36 @@ paths:
       parameters:
         - $ref: '#/components/parameters/MissionStatus'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Missions created by the caller
           content:
             application/json:
               schema:
-                type: object
-                required: [missions]
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
+                    items:
+                      $ref: '#/components/schemas/Mission'
                     type: array
-                    items: { $ref: '#/components/schemas/Mission' }
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - missions
+                - total
+                - limit
+                - offset
+                type: object
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   # ── Missions ───────────────────────────────────────────────────────────────
@@ -154,18 +190,36 @@ paths:
         - $ref: '#/components/parameters/GroupClaimable'
         - $ref: '#/components/parameters/IsEvent'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Missions
           content:
             application/json:
               schema:
-                type: object
-                required: [missions]
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
+                    items:
+                      $ref: '#/components/schemas/Mission'
                     type: array
-                    items: { $ref: '#/components/schemas/Mission' }
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - missions
+                - total
+                - limit
+                - offset
+                type: object
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
@@ -648,17 +702,35 @@ paths:
         - $ref: '#/components/parameters/IssuerId'
         - $ref: '#/components/parameters/Visibility'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Missions
           content:
             application/json:
               schema:
-                type: object
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
+                    items:
+                      $ref: '#/components/schemas/Mission'
                     type: array
-                    items: { $ref: '#/components/schemas/Mission' }
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - total
+                - limit
+                - offset
+                type: object
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -1016,17 +1088,36 @@ paths:
       description: Requires the `mission:read` service role.
       parameters:
         - $ref: '#/components/parameters/PlayerId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
           description: Assignments and their missions
           content:
             application/json:
               schema:
-                type: object
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
+                    items:
+                      $ref: '#/components/schemas/PlayerMission'
                     type: array
-                    items: { $ref: '#/components/schemas/PlayerMission' }
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - total
+                - limit
+                - offset
+                type: object
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -1098,6 +1189,13 @@ components:
       in: query
       schema: { $ref: '#/components/schemas/AssignmentStatus' }
 
+    Offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
   responses:
     Unauthorized:
       description: Missing or invalid credentials

@@ -186,7 +186,7 @@ console.log('\n# access rules and validation');
 {
   const me = await req('GET', '/api/me/inventory', undefined, asPlayer(A));
   check('player reads own inventory', me.status, 200);
-  check('own instances are listed', me.json.instances.length, 0);
+  check('own instances are listed', [me.json.instances.length, typeof me.json.instancesTotal, typeof me.json.limit, typeof me.json.offset], [0, 'number', 'number', 'number']);
 
   const meB = await req('GET', '/api/me/inventory', undefined, asPlayer(B));
   check('recipient now owns the instance', meB.json.instances[0]?.id, INSTANCE);
@@ -215,9 +215,10 @@ const SYSTEM = '00000000-0000-4000-8000-000000000001';
   const poiId = created.json.id;
 
   const listA = await req('GET', '/api/me/pois', undefined, asPlayer(A));
-  check('owner lists the POI', listA.json.some((p) => p.id === poiId), true);
+  check('owner lists the POI', listA.json.items.some((p) => p.id === poiId), true);
+  check('POI list is a page', [listA.json.total >= 1, typeof listA.json.limit, typeof listA.json.offset], [true, 'number', 'number']);
   const listB0 = await req('GET', '/api/me/pois', undefined, asPlayer(B));
-  check('private POI hidden from others', listB0.json.some((p) => p.id === poiId), false);
+  check('private POI hidden from others', listB0.json.items.some((p) => p.id === poiId), false);
 
   const share = await req('POST', `/api/me/pois/${poiId}/shares`, { granteeType: 'player', granteeId: B }, asPlayer(A));
   check('share with a player', share.status, 201);
@@ -225,7 +226,7 @@ const SYSTEM = '00000000-0000-4000-8000-000000000001';
   check('duplicate share rejected', [dup.status, dup.json.error], [409, 'POI_ALREADY_SHARED']);
 
   const listB = await req('GET', '/api/me/pois', undefined, asPlayer(B));
-  check('grantee lists the shared POI', listB.json.some((p) => p.id === poiId), true);
+  check('grantee lists the shared POI', listB.json.items.some((p) => p.id === poiId), true);
   const detailB = await req('GET', `/api/me/pois/${poiId}`, undefined, asPlayer(B));
   check('grantee reads detail with its grants', [detailB.status, detailB.json.shares?.length], [200, 1]);
   const editB = await req('PATCH', `/api/me/pois/${poiId}`, { name: 'pirate' }, asPlayer(B));
@@ -236,7 +237,7 @@ const SYSTEM = '00000000-0000-4000-8000-000000000001';
   const revokeAgain = await req('DELETE', `/api/me/pois/${poiId}/shares/player/${B}`, undefined, asPlayer(A));
   check('revoke twice rejected', [revokeAgain.status, revokeAgain.json.error], [404, 'POI_NOT_SHARED']);
   const listB2 = await req('GET', '/api/me/pois', undefined, asPlayer(B));
-  check('revoked grantee no longer sees it', listB2.json.some((p) => p.id === poiId), false);
+  check('revoked grantee no longer sees it', listB2.json.items.some((p) => p.id === poiId), false);
 
   const pub = await req(
     'POST',
@@ -246,7 +247,7 @@ const SYSTEM = '00000000-0000-4000-8000-000000000001';
   );
   check('public POI created', [pub.status, pub.json.visibility], [201, 'public']);
   const listB3 = await req('GET', '/api/me/pois', undefined, asPlayer(B));
-  check('public POI readable by anyone', listB3.json.some((p) => p.id === pub.json.id), true);
+  check('public POI readable by anyone', listB3.json.items.some((p) => p.id === pub.json.id), true);
 
   const transferred = await req('POST', `/api/me/pois/${poiId}/transfer`, { toType: 'player', toId: B }, asPlayer(A));
   check('transfer ownership', [transferred.status, transferred.json.ownerType, transferred.json.ownerId], [200, 'player', B]);
@@ -279,7 +280,7 @@ const SYSTEM = '00000000-0000-4000-8000-000000000001';
   check('resolved geometry', [resolved.json.pois[0].x, resolved.json.pois[0].radiusM], [1, 500]);
 
   const holderPois = await req('GET', `/api/internal/holders/system/${SYSTEM}/pois`, undefined, internal);
-  check('POIs of a holder', holderPois.json.some((p) => p.id === sys.json.id), true);
+  check('POIs of a holder', holderPois.json.items.some((p) => p.id === sys.json.id), true);
 
   const missing = await req('GET', `/api/internal/pois/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`, undefined, internal);
   check('unknown POI is 404', [missing.status, missing.json.error], [404, 'NOT_FOUND']);

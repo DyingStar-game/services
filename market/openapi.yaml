@@ -103,17 +103,60 @@ paths:
       summary: Order book depth (open buy/sell counts) for a good type
       parameters:
         - $ref: '#/components/parameters/goodType'
+        - in: query
+          name: limit
+          schema:
+            default: 100
+            maximum: 500
+            minimum: 1
+            type: integer
+        - in: query
+          name: offset
+          schema:
+            default: 0
+            minimum: 0
+            type: integer
       responses:
         '200':
           description: Open order counts per side
           content:
             application/json:
               schema:
-                type: object
-                required: [buy, sell]
                 properties:
-                  buy: { type: integer }
-                  sell: { type: integer }
+                  askTotal:
+                    minimum: 0
+                    type: integer
+                  asks:
+                    items:
+                      $ref: '#/components/schemas/Order'
+                    type: array
+                  bidTotal:
+                    minimum: 0
+                    type: integer
+                  bids:
+                    items:
+                      $ref: '#/components/schemas/Order'
+                    type: array
+                  goodType:
+                    type: string
+                  limit:
+                    default: 100
+                    maximum: 500
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                required:
+                - goodType
+                - bids
+                - asks
+                - bidTotal
+                - askTotal
+                - limit
+                - offset
+                type: object
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/market/orders:
@@ -125,14 +168,13 @@ paths:
         - $ref: '#/components/parameters/orderSide'
         - $ref: '#/components/parameters/orderStatus'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Orders
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Order' }
+              schema: {$ref: '#/components/schemas/OrderPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [market]
@@ -199,14 +241,13 @@ paths:
         - $ref: '#/components/parameters/goodTypeOptional'
         - $ref: '#/components/parameters/demandStatus'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Demands
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Demand' }
+              schema: {$ref: '#/components/schemas/DemandPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [market]
@@ -288,14 +329,13 @@ paths:
       parameters:
         - $ref: '#/components/parameters/tradeStatus'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Trades
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Trade' }
+              schema: {$ref: '#/components/schemas/TradePage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   # ── Internal (game server) ─────────────────────────────────────────────────
@@ -371,14 +411,13 @@ paths:
         - $ref: '#/components/parameters/holderType'
         - $ref: '#/components/parameters/holderId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Orders
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Order' }
+              schema: {$ref: '#/components/schemas/OrderPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
@@ -392,14 +431,13 @@ paths:
         - $ref: '#/components/parameters/holderType'
         - $ref: '#/components/parameters/holderId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Demands
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Demand' }
+              schema: {$ref: '#/components/schemas/DemandPage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
@@ -413,14 +451,13 @@ paths:
         - $ref: '#/components/parameters/holderType'
         - $ref: '#/components/parameters/holderId'
         - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
         '200':
           description: Trades
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/Trade' }
+              schema: {$ref: '#/components/schemas/TradePage'}
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
@@ -527,6 +564,13 @@ components:
       in: query
       schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
 
+    offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
   responses:
     ValidationError:
       description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
@@ -718,3 +762,76 @@ components:
         unit: { type: [string, 'null'], maxLength: 32 }
         displayName: { type: [string, 'null'], maxLength: 128 }
         enabled: { type: boolean, default: true }
+
+    OrderPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Order'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    DemandPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Demand'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    TradePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Trade'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

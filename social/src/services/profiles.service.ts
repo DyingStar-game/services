@@ -1,12 +1,13 @@
 /**
  * Player profiles: creation on first contact, updates, search and game-server stats.
  */
-import { and, eq, ilike, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { playerProfiles, type EntityType, type PlayerProfile, type RpSheet } from '../db/schema/index.js';
 import { HttpError, conflict, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 
 /** Fields a player may edit on their own profile. */
@@ -178,17 +179,32 @@ export async function updateProfile(playerId: string, patch: ProfilePatch): Prom
 /**
  * Searches profiles by display name (case-insensitive substring).
  * @param search - Substring to match; empty lists the most recent profiles.
- * @param limit - Max results.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
  * @param entityType - Optional profile-kind filter (default: all).
- * @returns Matching profiles.
+ * @returns Page of matching profiles.
  */
-export async function searchProfiles(search: string, limit: number, entityType?: EntityType): Promise<PlayerProfile[]> {
+export async function searchProfiles(
+  search: string,
+  limit: number,
+  offset: number,
+  entityType?: EntityType,
+): Promise<Page<PlayerProfile>> {
   const conditions = [];
   if (search) conditions.push(ilike(playerProfiles.displayName, `%${search}%`));
   if (entityType) conditions.push(eq(playerProfiles.entityType, entityType));
-  const query = db.select().from(playerProfiles);
-  const filtered = conditions.length ? query.where(and(...conditions)) : query;
-  return filtered.orderBy(playerProfiles.displayName).limit(limit);
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(playerProfiles).where(condition),
+    db
+      .select()
+      .from(playerProfiles)
+      .where(condition)
+      .orderBy(playerProfiles.displayName, playerProfiles.playerId)
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 /** Minimal profile identity returned to trusted services (name resolution). */
@@ -202,19 +218,31 @@ export interface ProfileIdentity {
  * Resolves several profiles at once (id → display name), for trusted services that only
  * store opaque player ids (e.g. the Economy admin dashboard).
  * @param playerIds - Player ids to resolve.
- * @returns Known profiles among the given ids.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of the known profiles among the given ids.
  */
-export async function getProfilesByIds(playerIds: string[]): Promise<ProfileIdentity[]> {
-  if (playerIds.length === 0) return [];
-  const rows = await db
-    .select({
-      playerId: playerProfiles.playerId,
-      displayName: playerProfiles.displayName,
-      entityType: playerProfiles.entityType,
-    })
-    .from(playerProfiles)
-    .where(inArray(playerProfiles.playerId, playerIds));
-  return rows;
+export async function getProfilesByIds(playerIds: string[], limit: number, offset: number): Promise<Page<ProfileIdentity>> {
+  if (playerIds.length === 0) return page([], 0, limit, offset);
+  const condition = inArray(playerProfiles.playerId, playerIds);
+  const [totalRow, rows] = await Promise.all([
+    db
+      .select({ total: count() })
+      .from(playerProfiles)
+      .where(condition),
+    db
+      .select({
+        playerId: playerProfiles.playerId,
+        displayName: playerProfiles.displayName,
+        entityType: playerProfiles.entityType,
+      })
+      .from(playerProfiles)
+      .where(condition)
+      .orderBy(playerProfiles.displayName, playerProfiles.playerId)
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 /**

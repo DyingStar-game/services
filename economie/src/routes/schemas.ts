@@ -10,6 +10,7 @@ import {
   POLITICAL_MEMBER_ROLES,
   TRANSACTION_TYPES,
 } from '../db/schema/index.js';
+import { pageQuery } from '../lib/pagination.js';
 
 export const uuidSchema = z.string().uuid();
 
@@ -21,9 +22,11 @@ export const corporationIdParams = z.object({ corporationId: uuidSchema });
 
 export const corporationMemberParams = corporationIdParams.extend({ playerId: uuidSchema });
 
-export const limitQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-});
+/**
+ * `?limit=&offset=` for list endpoints; the response is the envelope
+ * `{ items, total, limit, offset }` (see `lib/pagination.ts`).
+ */
+export const limitQuery = pageQuery;
 
 /** Amounts are integer minor units. */
 const amount = z.number().int().min(1).max(10_000_000_000_000);
@@ -104,9 +107,8 @@ export const statsQuery = z.object({
 });
 
 /** Admin player search by pseudonym. */
-export const playerSearchQuery = z.object({
+export const playerSearchQuery = limitQuery.extend({
   search: z.string().trim().min(1).max(64),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 // ── Politics, taxes & minting ───────────────────────────────────────────────

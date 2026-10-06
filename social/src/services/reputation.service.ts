@@ -2,10 +2,11 @@
  * Player reputation: every change is an event, and negative thresholds trigger automatic sanctions
  * and escalation. Idle players slowly regain reputation (rehabilitation).
  */
-import { and, desc, eq, lt, notExists, sql } from 'drizzle-orm';
+import { and, count, desc, eq, lt, notExists, sql } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
+import { page, type Page } from '../lib/pagination.js';
 import {
   playerProfiles,
   reports,
@@ -123,16 +124,23 @@ async function adjustNoEval(playerId: string, source: ReputationSource, reason: 
 /**
  * Reputation history of a player.
  * @param playerId - Player id.
- * @param limit - Max events.
- * @returns Events, newest first.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of events, newest first.
  */
-export async function listReputationEvents(playerId: string, limit: number): Promise<ReputationEvent[]> {
-  return db
-    .select()
-    .from(reputationEvents)
-    .where(eq(reputationEvents.playerId, playerId))
-    .orderBy(desc(reputationEvents.createdAt), desc(reputationEvents.id))
-    .limit(limit);
+export async function listReputationEvents(playerId: string, limit: number, offset: number): Promise<Page<ReputationEvent>> {
+  const condition = eq(reputationEvents.playerId, playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(reputationEvents).where(condition),
+    db
+      .select()
+      .from(reputationEvents)
+      .where(condition)
+      .orderBy(desc(reputationEvents.createdAt), desc(reputationEvents.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 /**

@@ -49,15 +49,14 @@ paths:
       summary: Moderation audit log
       parameters:
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Log entries, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_ModerationLogEntry'
+                $ref: '#/components/schemas/social_ModerationLogEntryPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -85,15 +84,14 @@ paths:
           minLength: 1
           maxLength: 64
       - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Matching players with their wallet accounts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_AdminPlayer'
+                $ref: '#/components/schemas/economie_AdminPlayerPage'
         '400':
           $ref: '#/components/responses/economie_ValidationError'
         '401':
@@ -287,15 +285,14 @@ paths:
           type: string
           format: uuid
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Reports, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_ReportView'
+                $ref: '#/components/schemas/social_ReportViewPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -425,15 +422,14 @@ paths:
           - 'false'
           default: 'true'
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Sanctions, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_Sanction'
+                $ref: '#/components/schemas/social_SanctionPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -508,23 +504,16 @@ paths:
       - social
       operationId: listBlocks
       summary: Blocked players
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Blocked profiles with block date
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  allOf:
-                  - $ref: '#/components/schemas/social_PlayerProfile'
-                  - type: object
-                    required:
-                    - blockedAt
-                    properties:
-                      blockedAt:
-                        type: string
-                        format: date-time
+                $ref: '#/components/schemas/social_BlockedProfilePage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -587,15 +576,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/social_search'
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Corporations matching name or ticker, with member counts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_CorporationSummary'
+                $ref: '#/components/schemas/social_CorporationSummaryPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -653,29 +641,37 @@ paths:
               schema:
                 allOf:
                 - $ref: '#/components/schemas/social_CorporationSummary'
-                - type: object
+                - properties:
+                    memberCount:
+                      minimum: 0
+                      type: integer
+                    members:
+                      items:
+                        $ref: '#/components/schemas/social_CorporationMember'
+                      type: array
+                    parent:
+                      oneOf:
+                      - $ref: '#/components/schemas/social_CorporationRef'
+                      - type: 'null'
+                    ranks:
+                      items:
+                        $ref: '#/components/schemas/social_CorporationRank'
+                      type: array
+                    subsidiaries:
+                      items:
+                        $ref: '#/components/schemas/social_CorporationSummary'
+                      type: array
+                    subsidiaryCount:
+                      minimum: 0
+                      type: integer
                   required:
                   - ranks
                   - members
                   - parent
                   - subsidiaries
-                  properties:
-                    ranks:
-                      type: array
-                      items:
-                        $ref: '#/components/schemas/social_CorporationRank'
-                    members:
-                      type: array
-                      items:
-                        $ref: '#/components/schemas/social_CorporationMember'
-                    parent:
-                      oneOf:
-                      - $ref: '#/components/schemas/social_CorporationRef'
-                      - type: 'null'
-                    subsidiaries:
-                      type: array
-                      items:
-                        $ref: '#/components/schemas/social_CorporationSummary'
+                  - memberCount
+                  - subsidiaryCount
+                  type: object
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -739,15 +735,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/social_corporationId'
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Journal entries, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_CorporationActivityEntry'
+                $ref: '#/components/schemas/social_CorporationActivityPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -801,6 +796,8 @@ paths:
       summary: Corporation inventory (member only, membership checked in Social)
       parameters:
       - $ref: '#/components/parameters/inventory_corporationId'
+      - $ref: '#/components/parameters/inventory_limit'
+      - $ref: '#/components/parameters/inventory_offset'
       responses:
         '200':
           description: Inventory of the corporation
@@ -950,6 +947,8 @@ paths:
       summary: Members with rank and presence
       parameters:
       - $ref: '#/components/parameters/social_corporationId'
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Members
@@ -957,12 +956,8 @@ paths:
             application/json:
               schema:
                 oneOf:
-                - type: array
-                  items:
-                    $ref: '#/components/schemas/social_CorporationMember'
-                - type: array
-                  items:
-                    $ref: '#/components/schemas/economie_CorporationMember'
+                - $ref: '#/components/schemas/social_CorporationMemberPage'
+                - $ref: '#/components/schemas/economie_CorporationMemberPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -1148,15 +1143,15 @@ paths:
       summary: Corporation POIs (member only, membership checked in Social)
       parameters:
       - $ref: '#/components/parameters/inventory_corporationId'
+      - $ref: '#/components/parameters/inventory_limit'
+      - $ref: '#/components/parameters/inventory_offset'
       responses:
         '200':
           description: POIs owned by or granted to the corporation
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/inventory_Poi'
+                $ref: '#/components/schemas/inventory_PoiPage'
         '401':
           $ref: '#/components/responses/inventory_Unauthorized'
         '403':
@@ -1380,15 +1375,15 @@ paths:
       summary: Pending applications and invitations (`recruit` or `invite`)
       parameters:
       - $ref: '#/components/parameters/social_corporationId'
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Requests with the player's profile
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_CorporationRequest'
+                $ref: '#/components/schemas/social_CorporationRequestPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -1449,6 +1444,8 @@ paths:
       summary: Role defaults and per-member salary overrides (economie:treasury:manage)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Salary configuration
@@ -1551,15 +1548,15 @@ paths:
       summary: Direct subsidiaries of a corporation
       parameters:
       - $ref: '#/components/parameters/social_corporationId'
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Subsidiary summaries
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_CorporationSummary'
+                $ref: '#/components/schemas/social_CorporationSummaryPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -1576,15 +1573,15 @@ paths:
       summary: Tax debts of the corporation (member only)
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Tax debts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_PoliticalTaxDebt'
+                $ref: '#/components/schemas/economie_PoliticalTaxDebtPage'
         '401':
           $ref: '#/components/responses/economie_Unauthorized'
         '403':
@@ -1706,15 +1703,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Corporation ledger across currencies
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_Transaction'
+                $ref: '#/components/schemas/economie_TransactionPage'
         '400':
           $ref: '#/components/responses/economie_ValidationError'
         '401':
@@ -1730,15 +1726,16 @@ paths:
       - social
       operationId: listFriends
       summary: Friends with presence
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Accepted friends with status and location
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_Friend'
+                $ref: '#/components/schemas/social_FriendPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -1752,15 +1749,16 @@ paths:
       - social
       operationId: listOnlineFriends
       summary: Friends currently online or in mission
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Friends whose status is not `offline`
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_Friend'
+                $ref: '#/components/schemas/social_FriendPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -1774,25 +1772,47 @@ paths:
       - social
       operationId: listFriendRequests
       summary: Pending friend requests
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Incoming and outgoing requests
           content:
             application/json:
               schema:
-                type: object
+                properties:
+                  incoming:
+                    items:
+                      $ref: '#/components/schemas/social_FriendRequest'
+                    type: array
+                  incomingTotal:
+                    minimum: 0
+                    type: integer
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  outgoing:
+                    items:
+                      $ref: '#/components/schemas/social_FriendRequest'
+                    type: array
+                  outgoingTotal:
+                    minimum: 0
+                    type: integer
                 required:
                 - incoming
                 - outgoing
-                properties:
-                  incoming:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/social_FriendRequest'
-                  outgoing:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/social_FriendRequest'
+                - incomingTotal
+                - outgoingTotal
+                - limit
+                - offset
+                type: object
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -1891,15 +1911,14 @@ paths:
       summary: Recently met players who are not friends yet
       parameters:
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Suggested players
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_FriendSuggestion'
+                $ref: '#/components/schemas/social_FriendSuggestionPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -2106,15 +2125,16 @@ paths:
       - social
       operationId: listGroupMembers
       summary: Members with profile and presence (owner first, then oldest join)
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Members
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_GroupMember'
+                $ref: '#/components/schemas/social_GroupMemberPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -2444,15 +2464,15 @@ paths:
       - serviceAuth: []
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
+      - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Corporation treasury members
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_CorporationMember'
+                $ref: '#/components/schemas/economie_CorporationMemberPage'
         '401':
           $ref: '#/components/responses/economie_Unauthorized'
         '403':
@@ -2800,15 +2820,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/economie_corporationId'
       - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Corporation ledger across currencies
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_Transaction'
+                $ref: '#/components/schemas/economie_TransactionPage'
         '400':
           $ref: '#/components/responses/economie_ValidationError'
         '401':
@@ -2830,15 +2849,14 @@ paths:
       - $ref: '#/components/parameters/market_holderType'
       - $ref: '#/components/parameters/market_holderId'
       - $ref: '#/components/parameters/market_limit'
+      - $ref: '#/components/parameters/market_offset'
       responses:
         '200':
           description: Demands
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/market_Demand'
+                $ref: '#/components/schemas/market_DemandPage'
         '401':
           $ref: '#/components/responses/market_Unauthorized'
         '403':
@@ -2922,6 +2940,8 @@ paths:
       parameters:
       - $ref: '#/components/parameters/inventory_holderType'
       - $ref: '#/components/parameters/inventory_holderId'
+      - $ref: '#/components/parameters/inventory_limit'
+      - $ref: '#/components/parameters/inventory_offset'
       responses:
         '200':
           description: Stacks (with held/available) and instances
@@ -3126,15 +3146,15 @@ paths:
       parameters:
       - $ref: '#/components/parameters/inventory_poiHolderType'
       - $ref: '#/components/parameters/inventory_holderId'
+      - $ref: '#/components/parameters/inventory_limit'
+      - $ref: '#/components/parameters/inventory_offset'
       responses:
         '200':
           description: POI list
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/inventory_Poi'
+                $ref: '#/components/schemas/inventory_PoiPage'
         '400':
           $ref: '#/components/responses/inventory_ValidationError'
         '401':
@@ -3302,18 +3322,35 @@ paths:
       - $ref: '#/components/parameters/mission_IssuerId'
       - $ref: '#/components/parameters/mission_Visibility'
       - $ref: '#/components/parameters/mission_Limit'
+      - $ref: '#/components/parameters/mission_Offset'
       responses:
         '200':
           description: Missions
           content:
             application/json:
               schema:
-                type: object
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
-                    type: array
                     items:
                       $ref: '#/components/schemas/mission_Mission'
+                    type: array
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - total
+                - limit
+                - offset
+                type: object
         '401':
           $ref: '#/components/responses/mission_Unauthorized'
         '403':
@@ -3802,15 +3839,15 @@ paths:
       - serviceAuth: []
       parameters:
       - $ref: '#/components/parameters/economie_npcId'
+      - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Tax debts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_PoliticalTaxDebt'
+                $ref: '#/components/schemas/economie_PoliticalTaxDebtPage'
         '401':
           $ref: '#/components/responses/economie_Unauthorized'
         '403':
@@ -3979,15 +4016,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/economie_npcId'
       - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Transactions, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_Transaction'
+                $ref: '#/components/schemas/economie_TransactionPage'
         '400':
           $ref: '#/components/responses/economie_ValidationError'
         '401':
@@ -4009,15 +4045,14 @@ paths:
       - $ref: '#/components/parameters/market_holderType'
       - $ref: '#/components/parameters/market_holderId'
       - $ref: '#/components/parameters/market_limit'
+      - $ref: '#/components/parameters/market_offset'
       responses:
         '200':
           description: Orders
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/market_Order'
+                $ref: '#/components/schemas/market_OrderPage'
         '401':
           $ref: '#/components/responses/market_Unauthorized'
         '403':
@@ -4083,15 +4118,14 @@ paths:
         schema:
           type: string
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Matching profiles
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_ProfileIdentity'
+                $ref: '#/components/schemas/social_ProfileIdentityPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -4224,6 +4258,8 @@ paths:
         schema:
           type: string
           format: uuid
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: A membership, `null`, or the list of memberships
@@ -4233,23 +4269,14 @@ paths:
                 oneOf:
                 - allOf:
                   - $ref: '#/components/schemas/social_Corporation'
-                  - type: object
-                    required:
-                    - rank
-                    properties:
+                  - properties:
                       rank:
                         $ref: '#/components/schemas/social_CorporationRank'
+                    required:
+                    - rank
+                    type: object
                 - type: 'null'
-                - type: array
-                  items:
-                    allOf:
-                    - $ref: '#/components/schemas/social_Corporation'
-                    - type: object
-                      required:
-                      - rank
-                      properties:
-                        rank:
-                          $ref: '#/components/schemas/social_CorporationRank'
+                - $ref: '#/components/schemas/social_CorporationMembershipPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -4393,18 +4420,36 @@ paths:
       description: Requires the `mission:read` service role.
       parameters:
       - $ref: '#/components/parameters/mission_PlayerId'
+      - $ref: '#/components/parameters/mission_Limit'
+      - $ref: '#/components/parameters/mission_Offset'
       responses:
         '200':
           description: Assignments and their missions
           content:
             application/json:
               schema:
-                type: object
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
-                    type: array
                     items:
                       $ref: '#/components/schemas/mission_PlayerMission'
+                    type: array
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - total
+                - limit
+                - offset
+                type: object
         '400':
           $ref: '#/components/responses/mission_ValidationError'
         '403':
@@ -4549,6 +4594,8 @@ paths:
         schema:
           type: string
           format: uuid
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: A membership, `null`, or the list of memberships
@@ -4558,23 +4605,14 @@ paths:
                 oneOf:
                 - allOf:
                   - $ref: '#/components/schemas/social_PoliticalEntity'
-                  - type: object
-                    required:
-                    - office
-                    properties:
+                  - properties:
                       office:
                         $ref: '#/components/schemas/social_PoliticalOffice'
+                    required:
+                    - office
+                    type: object
                 - type: 'null'
-                - type: array
-                  items:
-                    allOf:
-                    - $ref: '#/components/schemas/social_PoliticalEntity'
-                    - type: object
-                      required:
-                      - office
-                      properties:
-                        office:
-                          $ref: '#/components/schemas/social_PoliticalOffice'
+                - $ref: '#/components/schemas/social_PoliticalMembershipPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -4880,15 +4918,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/economie_playerId'
       - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Transactions, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_Transaction'
+                $ref: '#/components/schemas/economie_TransactionPage'
         '400':
           $ref: '#/components/responses/economie_ValidationError'
         '401':
@@ -5139,15 +5176,15 @@ paths:
       - serviceAuth: []
       parameters:
       - $ref: '#/components/parameters/economie_politicalEntityId'
+      - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Members
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_PoliticalMember'
+                $ref: '#/components/schemas/economie_PoliticalMemberPage'
         '401':
           $ref: '#/components/responses/economie_Unauthorized'
         '403':
@@ -5516,15 +5553,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/economie_politicalEntityId'
       - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Ledger rows, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_Transaction'
+                $ref: '#/components/schemas/economie_TransactionPage'
         '401':
           $ref: '#/components/responses/economie_Unauthorized'
         '403':
@@ -5575,15 +5611,14 @@ paths:
       - $ref: '#/components/parameters/market_holderType'
       - $ref: '#/components/parameters/market_holderId'
       - $ref: '#/components/parameters/market_limit'
+      - $ref: '#/components/parameters/market_offset'
       responses:
         '200':
           description: Trades
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/market_Trade'
+                $ref: '#/components/schemas/market_TradePage'
         '401':
           $ref: '#/components/responses/market_Unauthorized'
         '403':
@@ -5714,21 +5749,60 @@ paths:
       summary: Order book depth (open buy/sell counts) for a good type
       parameters:
       - $ref: '#/components/parameters/market_goodType'
+      - in: query
+        name: limit
+        schema:
+          default: 100
+          maximum: 500
+          minimum: 1
+          type: integer
+      - in: query
+        name: offset
+        schema:
+          default: 0
+          minimum: 0
+          type: integer
       responses:
         '200':
           description: Open order counts per side
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - buy
-                - sell
                 properties:
-                  buy:
+                  askTotal:
+                    minimum: 0
                     type: integer
-                  sell:
+                  asks:
+                    items:
+                      $ref: '#/components/schemas/market_Order'
+                    type: array
+                  bidTotal:
+                    minimum: 0
                     type: integer
+                  bids:
+                    items:
+                      $ref: '#/components/schemas/market_Order'
+                    type: array
+                  goodType:
+                    type: string
+                  limit:
+                    default: 100
+                    maximum: 500
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                required:
+                - goodType
+                - bids
+                - asks
+                - bidTotal
+                - askTotal
+                - limit
+                - offset
+                type: object
         '401':
           $ref: '#/components/responses/market_Unauthorized'
     servers:
@@ -5762,15 +5836,14 @@ paths:
       - $ref: '#/components/parameters/market_goodTypeOptional'
       - $ref: '#/components/parameters/market_demandStatus'
       - $ref: '#/components/parameters/market_limit'
+      - $ref: '#/components/parameters/market_offset'
       responses:
         '200':
           description: Demands
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/market_Demand'
+                $ref: '#/components/schemas/market_DemandPage'
         '401':
           $ref: '#/components/responses/market_Unauthorized'
     post:
@@ -5888,15 +5961,14 @@ paths:
       - $ref: '#/components/parameters/market_orderSide'
       - $ref: '#/components/parameters/market_orderStatus'
       - $ref: '#/components/parameters/market_limit'
+      - $ref: '#/components/parameters/market_offset'
       responses:
         '200':
           description: Orders
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/market_Order'
+                $ref: '#/components/schemas/market_OrderPage'
         '401':
           $ref: '#/components/responses/market_Unauthorized'
     post:
@@ -5989,15 +6061,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/market_tradeStatus'
       - $ref: '#/components/parameters/market_limit'
+      - $ref: '#/components/parameters/market_offset'
       responses:
         '200':
           description: Trades
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/market_Trade'
+                $ref: '#/components/schemas/market_TradePage'
         '401':
           $ref: '#/components/responses/market_Unauthorized'
     servers:
@@ -6094,15 +6165,14 @@ paths:
       summary: Own activity history (newest first)
       parameters:
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Activity entries
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_ActivityEntry'
+                $ref: '#/components/schemas/social_ActivityPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -6118,15 +6188,16 @@ paths:
       - social
       operationId: getMyCorporationRequests
       summary: My pending corporation invitations and applications
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Pending requests with the corporation reference
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_PlayerCorporationRequest'
+                $ref: '#/components/schemas/social_PlayerCorporationRequestPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -6182,26 +6253,16 @@ paths:
       - social
       operationId: getMyCorporations
       summary: Every corporation the caller belongs to, with rank
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Corporation memberships (empty when the player belongs to none)
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  allOf:
-                  - $ref: '#/components/schemas/social_Corporation'
-                  - type: object
-                    required:
-                    - joinedAt
-                    - rank
-                    properties:
-                      joinedAt:
-                        type: string
-                        format: date-time
-                      rank:
-                        $ref: '#/components/schemas/social_CorporationRank'
+                $ref: '#/components/schemas/social_CorporationMembershipPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -6215,15 +6276,16 @@ paths:
       - social
       operationId: getMyGroupInvitations
       summary: My pending group invitations
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Pending invitations with the group reference
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_PlayerGroupInvitation'
+                $ref: '#/components/schemas/social_PlayerGroupInvitationPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -6312,6 +6374,9 @@ paths:
       tags:
       - inventory
       summary: The caller's inventory (stacks with held/available, and owned instances)
+      parameters:
+      - $ref: '#/components/parameters/inventory_limit'
+      - $ref: '#/components/parameters/inventory_offset'
       responses:
         '200':
           description: Inventory of the caller
@@ -6353,20 +6418,36 @@ paths:
       parameters:
       - $ref: '#/components/parameters/mission_AssignmentStatus'
       - $ref: '#/components/parameters/mission_Limit'
+      - $ref: '#/components/parameters/mission_Offset'
       responses:
         '200':
           description: Player missions
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - missions
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
-                    type: array
                     items:
                       $ref: '#/components/schemas/mission_PlayerMission'
+                    type: array
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - missions
+                - total
+                - limit
+                - offset
+                type: object
         '401':
           $ref: '#/components/responses/mission_Unauthorized'
     servers:
@@ -6384,40 +6465,89 @@ paths:
       parameters:
       - $ref: '#/components/parameters/mission_MissionStatus'
       - $ref: '#/components/parameters/mission_Limit'
+      - $ref: '#/components/parameters/mission_Offset'
       responses:
         '200':
           description: Missions created by the caller
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - missions
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
-                    type: array
                     items:
                       $ref: '#/components/schemas/mission_Mission'
+                    type: array
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - missions
+                - total
+                - limit
+                - offset
+                type: object
         '401':
           $ref: '#/components/responses/mission_Unauthorized'
     servers:
     - url: http://mission:3000
       description: mission
+  /api/me/permissions/catalog:
+    get:
+      tags:
+      - social
+      operationId: myPermissionCatalog
+      summary: Catalog of organisation actions and their evaluation rules
+      description: 'Same static catalog as `GET /api/internal/permissions/catalog`, readable by any authenticated player.
+        Localized through `Accept-Language`. Use it to render what a rank or office permission means (legacy, `satisfiedBy`,
+        `defaultMember`).
+
+        '
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - actions
+                properties:
+                  actions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/social_PermissionCatalogRow'
+        '401':
+          $ref: '#/components/responses/social_Unauthorized'
+        '403':
+          $ref: '#/components/responses/social_Sanctioned'
+    servers:
+    - url: http://social:3000
+      description: social
   /api/me/pois:
     get:
       tags:
       - inventory
       summary: POIs of the caller's scope (owned, granted, public)
       description: Owned POIs ∪ read-only grants held by the caller ∪ POIs published `public`.
+      parameters:
+      - $ref: '#/components/parameters/inventory_limit'
+      - $ref: '#/components/parameters/inventory_offset'
       responses:
         '200':
           description: POI list
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/inventory_Poi'
+                $ref: '#/components/schemas/inventory_PoiPage'
         '401':
           $ref: '#/components/responses/inventory_Unauthorized'
     post:
@@ -6639,26 +6769,16 @@ paths:
       - social
       operationId: getMyPolitics
       summary: Every political entity the player belongs to, with office
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Memberships with office
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  allOf:
-                  - $ref: '#/components/schemas/social_PoliticalEntity'
-                  - type: object
-                    required:
-                    - joinedAt
-                    - office
-                    properties:
-                      joinedAt:
-                        type: string
-                        format: date-time
-                      office:
-                        $ref: '#/components/schemas/social_PoliticalOffice'
+                $ref: '#/components/schemas/social_PoliticalMembershipPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -6675,28 +6795,44 @@ paths:
       description: Reachable while suspended or banned.
       parameters:
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Reputation summary
           content:
             application/json:
               schema:
-                type: object
+                properties:
+                  activeSanctions:
+                    items:
+                      $ref: '#/components/schemas/social_Sanction'
+                    type: array
+                  events:
+                    items:
+                      $ref: '#/components/schemas/social_ReputationEvent'
+                    type: array
+                  eventsTotal:
+                    minimum: 0
+                    type: integer
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  reputation:
+                    type: integer
                 required:
                 - reputation
                 - events
                 - activeSanctions
-                properties:
-                  reputation:
-                    type: integer
-                  events:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/social_ReputationEvent'
-                  activeSanctions:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/social_Sanction'
+                - eventsTotal
+                - limit
+                - offset
+                type: object
         '401':
           $ref: '#/components/responses/social_Unauthorized'
     servers:
@@ -6728,15 +6864,16 @@ paths:
       tags:
       - economie
       summary: My tax debts (due and settled)
+      parameters:
+      - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Tax debts, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_PoliticalTaxDebt'
+                $ref: '#/components/schemas/economie_PoliticalTaxDebtPage'
         '401':
           $ref: '#/components/responses/economie_Unauthorized'
     servers:
@@ -6805,15 +6942,14 @@ paths:
       summary: Ledger of the caller across all currencies
       parameters:
       - $ref: '#/components/parameters/economie_limit'
+      - $ref: '#/components/parameters/economie_offset'
       responses:
         '200':
           description: Transactions, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/economie_Transaction'
+                $ref: '#/components/schemas/economie_TransactionPage'
         '400':
           $ref: '#/components/responses/economie_ValidationError'
         '401':
@@ -6842,20 +6978,36 @@ paths:
       - $ref: '#/components/parameters/mission_GroupClaimable'
       - $ref: '#/components/parameters/mission_IsEvent'
       - $ref: '#/components/parameters/mission_Limit'
+      - $ref: '#/components/parameters/mission_Offset'
       responses:
         '200':
           description: Missions
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - missions
                 properties:
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
                   missions:
-                    type: array
                     items:
                       $ref: '#/components/schemas/mission_Mission'
+                    type: array
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  total:
+                    minimum: 0
+                    type: integer
+                required:
+                - missions
+                - total
+                - limit
+                - offset
+                type: object
         '400':
           $ref: '#/components/responses/mission_ValidationError'
         '401':
@@ -7477,15 +7629,14 @@ paths:
         schema:
           $ref: '#/components/schemas/social_PoliticalEntityType'
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Entities with member counts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_PoliticalEntitySummary'
+                $ref: '#/components/schemas/social_PoliticalEntitySummaryPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -7601,15 +7752,14 @@ paths:
       parameters:
       - $ref: '#/components/parameters/social_politicalEntityId'
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Journal entries, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_PoliticalActivityEntry'
+                $ref: '#/components/schemas/social_PoliticalActivityPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -7627,15 +7777,15 @@ paths:
       summary: Direct lower-level entities
       parameters:
       - $ref: '#/components/parameters/social_politicalEntityId'
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Child summaries
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_PoliticalEntitySummary'
+                $ref: '#/components/schemas/social_PoliticalEntitySummaryPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -7651,15 +7801,16 @@ paths:
       - social
       operationId: listPoliticalMembers
       summary: Members with office and presence
+      parameters:
+      - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Members
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_PoliticalMember'
+                $ref: '#/components/schemas/social_PoliticalMemberPage'
         '401':
           $ref: '#/components/responses/social_Unauthorized'
         '403':
@@ -7899,15 +8050,15 @@ paths:
       summary: Political-entity POIs (member only, membership checked in Social)
       parameters:
       - $ref: '#/components/parameters/inventory_entityId'
+      - $ref: '#/components/parameters/inventory_limit'
+      - $ref: '#/components/parameters/inventory_offset'
       responses:
         '200':
           description: POIs owned by or granted to the entity
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/inventory_Poi'
+                $ref: '#/components/schemas/inventory_PoiPage'
         '401':
           $ref: '#/components/responses/inventory_Unauthorized'
         '403':
@@ -7998,15 +8149,14 @@ paths:
           - $ref: '#/components/schemas/social_ProfileKind'
           - type: 'null'
         description: 'Restrict to players or NPCs (default: both).'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Matching profiles, sorted by display name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_PlayerProfile'
+                $ref: '#/components/schemas/social_PlayerProfilePage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -8095,15 +8245,14 @@ paths:
       summary: Reports I filed
       parameters:
       - $ref: '#/components/parameters/social_limit'
+      - $ref: '#/components/parameters/social_offset'
       responses:
         '200':
           description: Reports, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/social_Report'
+                $ref: '#/components/schemas/social_ReportPage'
         '400':
           $ref: '#/components/responses/social_ValidationError'
         '401':
@@ -8258,6 +8407,13 @@ components:
       in: query
       schema:
         $ref: '#/components/schemas/mission_AssignmentStatus'
+    mission_Offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
     social_playerId:
       name: playerId
       in: path
@@ -8323,6 +8479,13 @@ components:
         type: string
         maxLength: 64
         default: ''
+    social_offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
     economie_playerId:
       name: playerId
       in: path
@@ -8406,6 +8569,13 @@ components:
       schema:
         type: string
         format: date-time
+    economie_offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
     inventory_holderType:
       name: holderType
       in: path
@@ -8480,6 +8650,21 @@ components:
       required: true
       schema:
         $ref: '#/components/schemas/inventory_PoiOwnerType'
+    inventory_limit:
+      in: query
+      name: limit
+      schema:
+        default: 20
+        maximum: 100
+        minimum: 1
+        type: integer
+    inventory_offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
     market_id:
       name: id
       in: path
@@ -8546,6 +8731,13 @@ components:
         minimum: 1
         maximum: 100
         default: 20
+    market_offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
   responses:
     mission_Unauthorized:
       description: Missing or invalid credentials
@@ -10699,32 +10891,6 @@ components:
           - 'null'
           format: uri
           maxLength: 512
-    social_PoliticalEntityPage:
-      allOf:
-      - $ref: '#/components/schemas/social_PoliticalEntitySummary'
-      - type: object
-        required:
-        - offices
-        - members
-        - parent
-        - children
-        properties:
-          offices:
-            type: array
-            items:
-              $ref: '#/components/schemas/social_PoliticalOffice'
-          members:
-            type: array
-            items:
-              $ref: '#/components/schemas/social_PoliticalMember'
-          parent:
-            oneOf:
-            - $ref: '#/components/schemas/social_PoliticalEntityRef'
-            - type: 'null'
-          children:
-            type: array
-            items:
-              $ref: '#/components/schemas/social_PoliticalEntitySummary'
     social_PoliticalOffice:
       type: object
       required:
@@ -11249,6 +11415,598 @@ components:
                 type: string
               reputation:
                 type: integer
+    social_PoliticalEntityPage:
+      allOf:
+      - $ref: '#/components/schemas/social_PoliticalEntitySummary'
+      - properties:
+          childCount:
+            minimum: 0
+            type: integer
+          children:
+            items:
+              $ref: '#/components/schemas/social_PoliticalEntitySummary'
+            type: array
+          memberCount:
+            minimum: 0
+            type: integer
+          members:
+            items:
+              $ref: '#/components/schemas/social_PoliticalMember'
+            type: array
+          offices:
+            items:
+              $ref: '#/components/schemas/social_PoliticalOffice'
+            type: array
+          parent:
+            oneOf:
+            - $ref: '#/components/schemas/social_PoliticalEntityRef'
+            - type: 'null'
+        required:
+        - offices
+        - members
+        - parent
+        - children
+        - memberCount
+        - childCount
+        type: object
+    social_ActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_ActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_CorporationMembershipPage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/social_Corporation'
+            - properties:
+                joinedAt:
+                  format: date-time
+                  type: string
+                rank:
+                  $ref: '#/components/schemas/social_CorporationRank'
+              required:
+              - joinedAt
+              - rank
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_PoliticalMembershipPage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/social_PoliticalEntity'
+            - properties:
+                joinedAt:
+                  format: date-time
+                  type: string
+                office:
+                  $ref: '#/components/schemas/social_PoliticalOffice'
+              required:
+              - joinedAt
+              - office
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_PlayerCorporationRequestPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_PlayerCorporationRequest'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_PlayerGroupInvitationPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_PlayerGroupInvitation'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_PlayerProfilePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_PlayerProfile'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_FriendPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_Friend'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_FriendSuggestionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_FriendSuggestion'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_BlockedProfilePage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/social_PlayerProfile'
+            - properties:
+                blockedAt:
+                  format: date-time
+                  type: string
+              required:
+              - blockedAt
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_CorporationSummaryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_CorporationSummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_CorporationMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_CorporationMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_CorporationRequestPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_CorporationRequest'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_CorporationActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_CorporationActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_GroupMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_GroupMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_ReportPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_Report'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_ModerationLogEntryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_ModerationLogEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_ReportViewPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_ReportView'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_SanctionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_Sanction'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_PoliticalEntitySummaryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_PoliticalEntitySummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_PoliticalMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_PoliticalMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_PoliticalActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_PoliticalActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    social_ProfileIdentityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/social_ProfileIdentity'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
     economie_Error:
       type: object
       required:
@@ -11690,24 +12448,6 @@ components:
         updatedAt:
           type: string
           format: date-time
-    economie_CorporationSalaries:
-      type: object
-      required:
-      - corporationId
-      - roleDefaults
-      - memberOverrides
-      properties:
-        corporationId:
-          type: string
-          format: uuid
-        roleDefaults:
-          type: array
-          items:
-            $ref: '#/components/schemas/economie_CorporationSalaryRole'
-        memberOverrides:
-          type: array
-          items:
-            $ref: '#/components/schemas/economie_CorporationMemberSalary'
     economie_SalaryBody:
       type: object
       required:
@@ -12102,6 +12842,163 @@ components:
         remaining:
           type: integer
           description: Debts still due after this payment
+    economie_CorporationSalaries:
+      properties:
+        corporationId:
+          format: uuid
+          type: string
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        memberOverrides:
+          items:
+            $ref: '#/components/schemas/economie_CorporationMemberSalary'
+          type: array
+        memberOverridesTotal:
+          minimum: 0
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        roleDefaults:
+          items:
+            $ref: '#/components/schemas/economie_CorporationSalaryRole'
+          type: array
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - corporationId
+      - roleDefaults
+      - memberOverrides
+      - memberOverridesTotal
+      - total
+      - limit
+      - offset
+      type: object
+    economie_TransactionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/economie_Transaction'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    economie_PoliticalTaxDebtPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/economie_PoliticalTaxDebt'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    economie_CorporationMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/economie_CorporationMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    economie_AdminPlayerPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/economie_AdminPlayer'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    economie_PoliticalMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/economie_PoliticalMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
     inventory_Error:
       type: object
       required:
@@ -12270,27 +13167,6 @@ components:
         updatedAt:
           type: string
           format: date-time
-    inventory_HolderInventory:
-      type: object
-      required:
-      - holderType
-      - holderId
-      - stacks
-      - instances
-      properties:
-        holderType:
-          $ref: '#/components/schemas/inventory_HolderType'
-        holderId:
-          type: string
-          format: uuid
-        stacks:
-          type: array
-          items:
-            $ref: '#/components/schemas/inventory_StackView'
-        instances:
-          type: array
-          items:
-            $ref: '#/components/schemas/inventory_Instance'
     inventory_Hold:
       type: object
       required:
@@ -12680,6 +13556,70 @@ components:
           - object
           - 'null'
           additionalProperties: true
+    inventory_HolderInventory:
+      properties:
+        holderId:
+          format: uuid
+          type: string
+        holderType:
+          $ref: '#/components/schemas/inventory_HolderType'
+        instances:
+          items:
+            $ref: '#/components/schemas/inventory_Instance'
+          type: array
+        instancesTotal:
+          minimum: 0
+          type: integer
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        stacks:
+          items:
+            $ref: '#/components/schemas/inventory_StackView'
+          type: array
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - holderType
+      - holderId
+      - stacks
+      - instances
+      - instancesTotal
+      - total
+      - limit
+      - offset
+      type: object
+    inventory_PoiPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/inventory_Poi'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
     market_Error:
       type: object
       required:
@@ -13088,3 +14028,75 @@ components:
         enabled:
           type: boolean
           default: true
+    market_OrderPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/market_Order'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    market_DemandPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/market_Demand'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    market_TradePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/market_Trade'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

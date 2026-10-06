@@ -34,26 +34,27 @@ adminRoutes.get(
   }),
 );
 
-/** GET /players?search=&limit= — Search players by pseudonym, with their wallet balances. */
+/** GET /players?search=&limit=&offset= — Search players by pseudonym, with their wallet balances. */
 adminRoutes.get(
   '/players',
   validate(playerSearchQuery, 'query'),
   asyncHandler(async (req, res) => {
     const search = String(req.query.search ?? '');
     const limit = Number(req.query.limit);
+    const offset = Number(req.query.offset);
     if (!isSocialConfigured()) {
-      res.json([]);
+      res.json({ items: [], total: 0, limit, offset });
       return;
     }
-    const profiles = await searchProfiles(search, limit);
+    const found = await searchProfiles(search, limit, offset);
     const players = await Promise.all(
-      profiles.map(async (profile) => ({
+      found.items.map(async (profile) => ({
         playerId: profile.playerId,
         displayName: profile.displayName,
         entityType: profile.entityType,
         accounts: await getPlayerAccounts(profile.playerId),
       })),
     );
-    res.json(players);
+    res.json({ ...found, items: players });
   }),
 );

@@ -41,6 +41,7 @@ import {
   instanceParams,
   instanceStatusBody,
   internalCreatePoiBody,
+  limitQuery,
   poiHolderParams,
   poiParams,
   registerInstanceBody,
@@ -60,13 +61,14 @@ function holderFrom(req: { params: Record<string, string> }): Holder {
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
 
-/** GET /holders/:holderType/:holderId — Full inventory (stacks with available, instances). */
+/** GET /holders/:holderType/:holderId?limit=&offset= — Inventory (stacks complete, instances paged). */
 internalRoutes.get(
   '/holders/:holderType/:holderId',
   requireServiceRole(SERVICE_ROLES.read),
   validate(holderParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await getHolderInventory(holderFrom(req)));
+    res.json(await getHolderInventory(holderFrom(req), Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -221,13 +223,21 @@ internalRoutes.get(
   }),
 );
 
-/** GET /holders/:holderType/:holderId/pois — POIs owned by a holder (incl. `political`). */
+/** GET /holders/:holderType/:holderId/pois?limit=&offset= — POIs owned by a holder (incl. `political`). */
 internalRoutes.get(
   '/holders/:holderType/:holderId/pois',
   requireServiceRole(SERVICE_ROLES.read),
   validate(poiHolderParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listHolderPois(req.params.holderType as PoiOwnerType, req.params.holderId));
+    res.json(
+      await listHolderPois(
+        req.params.holderType as PoiOwnerType,
+        req.params.holderId,
+        Number(req.query.limit),
+        Number(req.query.offset),
+      ),
+    );
   }),
 );
 

@@ -3,7 +3,7 @@
  * configurable internal tax and donations from members. Membership is keyed on the
  * opaque `corporationId` shared with the Social service.
  */
-import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, lte, or } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
@@ -19,6 +19,7 @@ import {
   type Transaction,
 } from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import {
   ensureAccount,
   ensureCorporationAccount,
@@ -159,13 +160,26 @@ export async function removeCorporationMember(corporationId: string, playerId: s
     .where(and(eq(corporationMembers.corporationId, corporationId), eq(corporationMembers.playerId, playerId)));
 }
 
-/** All members of a corporation. */
-export function listCorporationMembers(corporationId: string): Promise<CorporationMember[]> {
-  return db
-    .select()
-    .from(corporationMembers)
-    .where(eq(corporationMembers.corporationId, corporationId))
-    .orderBy(corporationMembers.role, corporationMembers.joinedAt);
+/**
+ * Members of a corporation, ordered by role then join date.
+ * @param corporationId - Corporation id.
+ * @param limit - Max members in the page.
+ * @param offset - Members to skip.
+ * @returns Page of members.
+ */
+export async function listCorporationMembers(corporationId: string, limit: number, offset: number): Promise<Page<CorporationMember>> {
+  const condition = eq(corporationMembers.corporationId, corporationId);
+  const [items, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(corporationMembers)
+      .where(condition)
+      .orderBy(corporationMembers.role, corporationMembers.joinedAt, corporationMembers.playerId)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(corporationMembers).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /**

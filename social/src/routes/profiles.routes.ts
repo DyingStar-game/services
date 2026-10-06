@@ -23,6 +23,7 @@ profilesRoutes.get(
       await searchProfiles(
         String(req.query.search ?? ''),
         Number(req.query.limit),
+        Number(req.query.offset),
         req.query.entityType as 'player' | 'npc' | undefined,
       ),
     );

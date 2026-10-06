@@ -1,7 +1,7 @@
 /**
  * Friend requests, friendships, online friends and suggestions.
  */
-import { and, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, or } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
@@ -14,6 +14,7 @@ import {
   type PresenceStatus,
 } from '../db/schema/index.js';
 import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { blockedIdsFor, isBlockedEitherWay } from './blocks.service.js';
 import { listRecentEncounters } from './encounters.service.js';
@@ -64,22 +65,15 @@ async function profilesById(ids: string[]): Promise<Map<string, PlayerProfile>> 
   return new Map(rows.map((p) => [p.playerId, p]));
 }
 
-/**
- * Lists accepted friends of a player with their presence.
- * @param playerId - Player id.
- * @returns Friends.
- */
-export async function listFriends(playerId: string): Promise<FriendView[]> {
-  const rows = await db
-    .select()
-    .from(friendships)
-    .where(
-      and(
-        eq(friendships.status, 'accepted'),
-        or(eq(friendships.requesterId, playerId), eq(friendships.addresseeId, playerId)),
-      ),
-    )
-    .orderBy(desc(friendships.updatedAt));
+/** Accepted-friendship condition of a player. */
+function acceptedFriendship(playerId: string) {
+  return and(
+    eq(friendships.status, 'accepted'),
+    or(eq(friendships.requesterId, playerId), eq(friendships.addresseeId, playerId)),
+  );
+}
+
+async function toFriendViews(rows: Friendship[], playerId: string): Promise<FriendView[]> {
   const otherIds = rows.map((r) => (r.requesterId === playerId ? r.addresseeId : r.requesterId));
   const [profiles, presence] = await Promise.all([profilesById(otherIds), getPresenceMap(otherIds)]);
   return rows.flatMap((r) => {
@@ -92,43 +86,114 @@ export async function listFriends(playerId: string): Promise<FriendView[]> {
 }
 
 /**
- * Friends currently not offline.
+ * Lists accepted friends of a player with their presence.
  * @param playerId - Player id.
- * @returns Online / in-mission friends.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of friends.
  */
-export async function listOnlineFriends(playerId: string): Promise<FriendView[]> {
-  const friends = await listFriends(playerId);
-  return friends.filter((f) => f.status !== 'offline');
+export async function listFriends(playerId: string, limit: number, offset: number): Promise<Page<FriendView>> {
+  const condition = acceptedFriendship(playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(friendships).where(condition),
+    db
+      .select()
+      .from(friendships)
+      .where(condition)
+      .orderBy(desc(friendships.updatedAt), desc(friendships.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(await toFriendViews(rows, playerId), totalRow[0].total, limit, offset);
 }
 
 /**
- * Pending requests received and sent by a player.
+ * Friends currently not offline. Presence is checked for the whole friend list, so the
+ * page is cut from the online subset.
  * @param playerId - Player id.
- * @returns Incoming and outgoing requests.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of online / in-mission friends.
  */
-export async function listRequests(
-  playerId: string,
-): Promise<{ incoming: FriendRequestView[]; outgoing: FriendRequestView[] }> {
+export async function listOnlineFriends(playerId: string, limit: number, offset: number): Promise<Page<FriendView>> {
   const rows = await db
     .select()
     .from(friendships)
-    .where(
-      and(
-        eq(friendships.status, 'pending'),
-        or(eq(friendships.requesterId, playerId), eq(friendships.addresseeId, playerId)),
-      ),
-    )
-    .orderBy(desc(friendships.createdAt));
-  const profiles = await profilesById(
-    rows.map((r) => (r.requesterId === playerId ? r.addresseeId : r.requesterId)),
+    .where(acceptedFriendship(playerId))
+    .orderBy(desc(friendships.updatedAt), desc(friendships.id));
+  const otherIds = rows.map((r) => (r.requesterId === playerId ? r.addresseeId : r.requesterId));
+  const presence = await getPresenceMap(otherIds);
+  const online = rows.filter((r) => {
+    const otherId = r.requesterId === playerId ? r.addresseeId : r.requesterId;
+    return (presence.get(otherId)?.status ?? 'offline') !== 'offline';
+  });
+  const slice = online.slice(offset, offset + limit);
+  const views = await toFriendViews(slice, playerId);
+  return page(
+    views.map((v) => ({ ...v, status: presence.get(v.playerId)?.status ?? v.status })),
+    online.length,
+    limit,
+    offset,
   );
+}
+
+/** Pending requests received and sent by a player, paginated per direction. */
+export interface FriendRequestsPage {
+  incoming: FriendRequestView[];
+  outgoing: FriendRequestView[];
+  incomingTotal: number;
+  outgoingTotal: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Pending requests received and sent by a player. Both directions share the same
+ * `limit`/`offset` and carry their own total.
+ * @param playerId - Player id.
+ * @param limit - Page size applied to each direction.
+ * @param offset - Rows to skip in each direction.
+ * @returns Incoming and outgoing requests.
+ */
+export async function listRequests(playerId: string, limit: number, offset: number): Promise<FriendRequestsPage> {
+  const pending = (direction: 'incoming' | 'outgoing') =>
+    and(
+      eq(friendships.status, 'pending'),
+      direction === 'incoming' ? eq(friendships.addresseeId, playerId) : eq(friendships.requesterId, playerId),
+    );
+  const [incomingTotal, outgoingTotal, incomingRows, outgoingRows] = await Promise.all([
+    db.select({ total: count() }).from(friendships).where(pending('incoming')),
+    db.select({ total: count() }).from(friendships).where(pending('outgoing')),
+    db
+      .select()
+      .from(friendships)
+      .where(pending('incoming'))
+      .orderBy(desc(friendships.createdAt), desc(friendships.id))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select()
+      .from(friendships)
+      .where(pending('outgoing'))
+      .orderBy(desc(friendships.createdAt), desc(friendships.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  const profiles = await profilesById([
+    ...incomingRows.map((r) => r.requesterId),
+    ...outgoingRows.map((r) => r.addresseeId),
+  ]);
   const toView = (r: Friendship, otherId: string): FriendRequestView[] => {
     const player = profiles.get(otherId);
     return player ? [{ id: r.id, createdAt: r.createdAt, player }] : [];
   };
   return {
-    incoming: rows.filter((r) => r.addresseeId === playerId).flatMap((r) => toView(r, r.requesterId)),
-    outgoing: rows.filter((r) => r.requesterId === playerId).flatMap((r) => toView(r, r.addresseeId)),
+    incoming: incomingRows.flatMap((r) => toView(r, r.requesterId)),
+    outgoing: outgoingRows.flatMap((r) => toView(r, r.addresseeId)),
+    incomingTotal: incomingTotal[0].total,
+    outgoingTotal: outgoingTotal[0].total,
+    limit,
+    offset,
   };
 }
 
@@ -218,14 +283,17 @@ export async function removeFriend(playerId: string, otherId: string): Promise<b
 }
 
 /**
- * Recently met players that are neither friends, pending, nor blocked.
+ * Recently met players that are neither friends, pending, nor blocked. The candidate pool
+ * is scanned over `(offset + limit) * 3` recent encounters, so `total` counts the
+ * suggestions found in that window (encounters are bounded by design, not by the page).
  * @param playerId - Player id.
- * @param limit - Max suggestions.
- * @returns Suggested profiles.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of suggested profiles.
  */
-export async function listSuggestions(playerId: string, limit: number): Promise<SuggestionView[]> {
+export async function listSuggestions(playerId: string, limit: number, offset: number): Promise<Page<SuggestionView>> {
   const [encounters, relations, blocked] = await Promise.all([
-    listRecentEncounters(playerId, limit * 3),
+    listRecentEncounters(playerId, (offset + limit) * 3),
     db
       .select({ requesterId: friendships.requesterId, addresseeId: friendships.addresseeId })
       .from(friendships)
@@ -233,10 +301,12 @@ export async function listSuggestions(playerId: string, limit: number): Promise<
     blockedIdsFor(playerId),
   ]);
   const related = new Set(relations.map((r) => (r.requesterId === playerId ? r.addresseeId : r.requesterId)));
-  const candidates = encounters.filter((e) => !related.has(e.otherId) && !blocked.has(e.otherId)).slice(0, limit);
-  const profiles = await profilesById(candidates.map((e) => e.otherId));
-  return candidates.flatMap((e) => {
+  const candidates = encounters.filter((e) => !related.has(e.otherId) && !blocked.has(e.otherId));
+  const slice = candidates.slice(offset, offset + limit);
+  const profiles = await profilesById(slice.map((e) => e.otherId));
+  const items = slice.flatMap((e) => {
     const profile = profiles.get(e.otherId);
     return profile ? [{ ...profile, lastMetAt: e.lastMetAt, encounters: e.count }] : [];
   });
+  return page(items, candidates.length, limit, offset);
 }

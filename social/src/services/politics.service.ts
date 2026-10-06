@@ -24,6 +24,7 @@ import {
   type PresenceStatus,
 } from '../db/schema/index.js';
 import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { recordPoliticalActivity } from './politicalActivity.service.js';
 import { getPresenceMap } from './presence.service.js';
@@ -189,16 +190,25 @@ export async function getPoliticalMembership(
 /**
  * Every political membership of a profile.
  * @param playerId - Profile id.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
  * @returns Memberships, ordered by entity name.
  */
-export async function listPoliticalMemberships(playerId: string): Promise<PoliticalMembership[]> {
-  return db
-    .select({ entity: politicalEntities, member: politicalMembers, office: politicalOffices })
-    .from(politicalMembers)
-    .innerJoin(politicalEntities, eq(politicalEntities.id, politicalMembers.entityId))
-    .innerJoin(politicalOffices, eq(politicalOffices.id, politicalMembers.officeId))
-    .where(eq(politicalMembers.playerId, playerId))
-    .orderBy(asc(politicalEntities.name));
+export async function listPoliticalMemberships(playerId: string, limit: number, offset: number): Promise<Page<PoliticalMembership>> {
+  const condition = eq(politicalMembers.playerId, playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(politicalMembers).where(condition),
+    db
+      .select({ entity: politicalEntities, member: politicalMembers, office: politicalOffices })
+      .from(politicalMembers)
+      .innerJoin(politicalEntities, eq(politicalEntities.id, politicalMembers.entityId))
+      .innerJoin(politicalOffices, eq(politicalOffices.id, politicalMembers.officeId))
+      .where(condition)
+      .orderBy(asc(politicalEntities.name), asc(politicalEntities.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 /**
@@ -264,25 +274,37 @@ export async function getPoliticalRefMap(playerIds: string[]): Promise<Map<strin
  * Lists political entities by name substring with member counts, optionally filtered by level.
  * @param search - Substring (empty = all).
  * @param type - Optional level filter.
- * @param limit - Max results.
- * @returns Entity summaries.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of entity summaries.
  */
 export async function listPoliticalEntities(
   search: string,
   type: PoliticalEntityType | undefined,
   limit: number,
-): Promise<PoliticalEntitySummary[]> {
+  offset: number,
+): Promise<Page<PoliticalEntitySummary>> {
   const memberCount = count(politicalMembers.playerId);
   const conditions = [];
   if (search) conditions.push(ilike(politicalEntities.name, `%${search}%`));
   if (type) conditions.push(eq(politicalEntities.type, type));
+  const condition = conditions.length ? and(...conditions) : undefined;
   const base = db
     .select({ entity: politicalEntities, memberCount })
     .from(politicalEntities)
-    .leftJoin(politicalMembers, eq(politicalMembers.entityId, politicalEntities.id));
-  const filtered = conditions.length ? base.where(and(...conditions)) : base;
-  const rows = await filtered.groupBy(politicalEntities.id).orderBy(desc(memberCount), asc(politicalEntities.name)).limit(limit);
-  return rows.map((r) => ({ ...r.entity, memberCount: r.memberCount }));
+    .leftJoin(politicalMembers, eq(politicalMembers.entityId, politicalEntities.id))
+    .where(condition)
+    .groupBy(politicalEntities.id);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(politicalEntities).where(condition),
+    base.orderBy(desc(memberCount), asc(politicalEntities.name), asc(politicalEntities.id)).limit(limit).offset(offset),
+  ]);
+  return page(
+    rows.map((r) => ({ ...r.entity, memberCount: r.memberCount })),
+    totalRow[0].total,
+    limit,
+    offset,
+  );
 }
 
 /**
@@ -336,15 +358,25 @@ export async function getPoliticalEntityRef(entityId: string | null): Promise<Po
 /** Public political entity page: entity, offices, members and its place in the hierarchy. */
 export interface PoliticalEntityPage extends PoliticalEntitySummary {
   offices: PoliticalOffice[];
+  /** First {@link PAGE_MEMBERS} members; `memberCount` is the full count. */
   members: PoliticalMemberView[];
   /** Higher-level entity, or null when independent. */
   parent: PoliticalEntityRef | null;
-  /** Direct lower-level entities. */
+  /** First {@link PAGE_CHILDREN} direct lower-level entities. */
   children: PoliticalEntitySummary[];
+  /** Total number of direct lower-level entities. */
+  childCount: number;
 }
+
+/** Members embedded in the public political page. */
+export const PAGE_MEMBERS = 50;
+/** Children embedded in the public political page. */
+export const PAGE_CHILDREN = 20;
 
 /**
  * Public political entity page: entity, member count, offices, members, parent and children.
+ * Members and children are truncated to {@link PAGE_MEMBERS} / {@link PAGE_CHILDREN} rows;
+ * the full lists live on the paginated sub-routes.
  * @param entityId - Entity id.
  * @returns Entity page payload.
  */
@@ -352,28 +384,49 @@ export async function getPoliticalEntityPage(entityId: string): Promise<Politica
   const entity = await requirePoliticalEntity(entityId);
   const [offices, members, parent, children] = await Promise.all([
     listPoliticalOffices(entityId),
-    listPoliticalMembers(entityId),
+    listPoliticalMembers(entityId, PAGE_MEMBERS, 0),
     getPoliticalEntityRef(entity.parentId),
-    listPoliticalChildren(entityId),
+    listPoliticalChildren(entityId, PAGE_CHILDREN, 0),
   ]);
-  return { ...entity, memberCount: members.length, offices, members, parent, children };
+  return {
+    ...entity,
+    memberCount: members.total,
+    offices,
+    members: members.items,
+    parent,
+    children: children.items,
+    childCount: children.total,
+  };
 }
 
 /**
  * Direct lower-level entities (entities whose `parentId` is this id).
  * @param entityId - Parent entity id.
- * @returns Child summaries with member counts.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of child summaries with member counts.
  */
-export async function listPoliticalChildren(entityId: string): Promise<PoliticalEntitySummary[]> {
+export async function listPoliticalChildren(entityId: string, limit: number, offset: number): Promise<Page<PoliticalEntitySummary>> {
   const memberCount = count(politicalMembers.playerId);
-  const rows = await db
-    .select({ entity: politicalEntities, memberCount })
-    .from(politicalEntities)
-    .leftJoin(politicalMembers, eq(politicalMembers.entityId, politicalEntities.id))
-    .where(eq(politicalEntities.parentId, entityId))
-    .groupBy(politicalEntities.id)
-    .orderBy(asc(politicalEntities.name));
-  return rows.map((r) => ({ ...r.entity, memberCount: r.memberCount }));
+  const condition = eq(politicalEntities.parentId, entityId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(politicalEntities).where(condition),
+    db
+      .select({ entity: politicalEntities, memberCount })
+      .from(politicalEntities)
+      .leftJoin(politicalMembers, eq(politicalMembers.entityId, politicalEntities.id))
+      .where(condition)
+      .groupBy(politicalEntities.id)
+      .orderBy(asc(politicalEntities.name), asc(politicalEntities.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(
+    rows.map((r) => ({ ...r.entity, memberCount: r.memberCount })),
+    totalRow[0].total,
+    limit,
+    offset,
+  );
 }
 
 /**
@@ -525,21 +578,34 @@ export async function getDefaultPoliticalOffice(entityId: string): Promise<Polit
 /**
  * Members of a political entity with profile, office and presence (highest office first).
  * @param entityId - Entity id.
- * @returns Members.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of members.
  */
-export async function listPoliticalMembers(entityId: string): Promise<PoliticalMemberView[]> {
-  const rows = await db
-    .select({ profile: playerProfiles, member: politicalMembers, office: politicalOffices })
-    .from(politicalMembers)
-    .innerJoin(playerProfiles, eq(playerProfiles.playerId, politicalMembers.playerId))
-    .innerJoin(politicalOffices, eq(politicalOffices.id, politicalMembers.officeId))
-    .where(eq(politicalMembers.entityId, entityId))
-    .orderBy(desc(politicalOffices.priority), politicalMembers.joinedAt);
+export async function listPoliticalMembers(entityId: string, limit: number, offset: number): Promise<Page<PoliticalMemberView>> {
+  const condition = eq(politicalMembers.entityId, entityId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(politicalMembers).where(condition),
+    db
+      .select({ profile: playerProfiles, member: politicalMembers, office: politicalOffices })
+      .from(politicalMembers)
+      .innerJoin(playerProfiles, eq(playerProfiles.playerId, politicalMembers.playerId))
+      .innerJoin(politicalOffices, eq(politicalOffices.id, politicalMembers.officeId))
+      .where(condition)
+      .orderBy(desc(politicalOffices.priority), politicalMembers.joinedAt, asc(politicalMembers.playerId))
+      .limit(limit)
+      .offset(offset),
+  ]);
   const presence = await getPresenceMap(rows.map((r) => r.profile.playerId));
-  return rows.map((r) => {
-    const p = presence.get(r.profile.playerId);
-    return { ...r.profile, joinedAt: r.member.joinedAt, office: r.office, status: p?.status ?? 'offline', location: p?.location ?? null };
-  });
+  return page(
+    rows.map((r) => {
+      const p = presence.get(r.profile.playerId);
+      return { ...r.profile, joinedAt: r.member.joinedAt, office: r.office, status: p?.status ?? 'offline', location: p?.location ?? null };
+    }),
+    totalRow[0].total,
+    limit,
+    offset,
+  );
 }
 
 async function requireMemberRow(

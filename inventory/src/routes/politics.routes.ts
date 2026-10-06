@@ -11,7 +11,7 @@ import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { getPoiView, listOrgPois, requireOrgRead, requirePoi } from '../services/pois.service.js';
 import { getPoliticalMembership, isSocialConfigured } from '../services/social.client.js';
-import { politicalEntityParams, politicalPoiParams } from './schemas.js';
+import { limitQuery, politicalEntityParams, politicalPoiParams } from './schemas.js';
 
 /** Router mounted at `/api/politics`. */
 export const politicsRoutes: IRouter = Router();
@@ -33,15 +33,16 @@ async function requirePoliticalAccess(entityId: string, playerId: string): Promi
   }
 }
 
-/** GET /:entityId/pois — POIs owned by / granted to the entity (member only). */
+/** GET /:entityId/pois?limit=&offset= — POIs owned by / granted to the entity (member only). */
 politicsRoutes.get(
   '/:entityId/pois',
   validate(politicalEntityParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { entityId } = req.params;
     await requirePoliticalAccess(entityId, player.id);
-    res.json(await listOrgPois('political', entityId));
+    res.json(await listOrgPois('political', entityId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

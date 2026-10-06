@@ -7,6 +7,7 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listActivity } from '../services/activity.service.js';
+import { permissionCatalog } from '../services/authorize.service.js';
 import { listPlayerRequests, resolvePlayerRequest } from '../services/corporationRequests.service.js';
 import { getCorporationRefMap, listCorporationMemberships } from '../services/corporations.service.js';
 import { getPlayerGroup, listPlayerGroupInvitations, resolveGroupInvitation } from '../services/groups.service.js';
@@ -53,47 +54,60 @@ meRoutes.patch(
   }),
 );
 
-/** GET /activity — Own activity history (newest first). */
+/** GET /activity — Own activity history (newest first, paginated). */
 meRoutes.get(
   '/activity',
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await listActivity(player.id, Number(req.query.limit)));
+    res.json(await listActivity(player.id, Number(req.query.limit), Number(req.query.offset)));
+  }),
+);
+
+/** GET /permissions/catalog — Catalog of organisation actions (localized, static). */
+meRoutes.get(
+  '/permissions/catalog',
+  asyncHandler(async (_req, res) => {
+    res.json({ actions: permissionCatalog() });
   }),
 );
 
 // ── Corporation ─────────────────────────────────────────────────────────────
 
-/** GET /corporations — Every corporation the player belongs to, with rank. */
+/** GET /corporations — Corporations the player belongs to, with rank (paginated). */
 meRoutes.get(
   '/corporations',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const memberships = await listCorporationMemberships(requirePlayer(req).id);
-    res.json(
-      memberships.map((m) => ({ ...m.corporation, joinedAt: m.member.joinedAt, rank: m.rank })),
-    );
+    const memberships = await listCorporationMemberships(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset));
+    res.json({
+      ...memberships,
+      items: memberships.items.map((m) => ({ ...m.corporation, joinedAt: m.member.joinedAt, rank: m.rank })),
+    });
   }),
 );
 
 // ── Politics ────────────────────────────────────────────────────────────────
 
-/** GET /politics — Every political entity (commune, country, federation, …) the player belongs to, with office. */
+/** GET /politics — Political entities the player belongs to, with office (paginated). */
 meRoutes.get(
   '/politics',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const memberships = await listPoliticalMemberships(requirePlayer(req).id);
-    res.json(
-      memberships.map((m) => ({ ...m.entity, joinedAt: m.member.joinedAt, office: m.office })),
-    );
+    const memberships = await listPoliticalMemberships(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset));
+    res.json({
+      ...memberships,
+      items: memberships.items.map((m) => ({ ...m.entity, joinedAt: m.member.joinedAt, office: m.office })),
+    });
   }),
 );
 
-/** GET /corporation/requests — My pending invitations and applications. */
+/** GET /corporation/requests — My pending invitations and applications (paginated). */
 meRoutes.get(
   '/corporation/requests',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listPlayerRequests(requirePlayer(req).id));
+    res.json(await listPlayerRequests(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -128,11 +142,12 @@ meRoutes.get(
   }),
 );
 
-/** GET /group/invitations — My pending group invitations. */
+/** GET /group/invitations — My pending group invitations (paginated). */
 meRoutes.get(
   '/group/invitations',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listPlayerGroupInvitations(requirePlayer(req).id));
+    res.json(await listPlayerGroupInvitations(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -158,7 +173,7 @@ meRoutes.post(
 
 // ── Reputation ──────────────────────────────────────────────────────────────
 
-/** GET /reputation?limit= — Score, history and active sanctions (reachable while sanctioned). */
+/** GET /reputation?limit=&offset= — Score, paginated history and active sanctions (reachable while sanctioned). */
 meRoutes.get(
   '/reputation',
   validate(limitQuery, 'query'),
@@ -166,10 +181,17 @@ meRoutes.get(
     const player = requirePlayer(req);
     const profile = await ensureProfile(player.id, player.username);
     const [events, activeSanctions] = await Promise.all([
-      listReputationEvents(player.id, Number(req.query.limit)),
+      listReputationEvents(player.id, Number(req.query.limit), Number(req.query.offset)),
       listActiveSanctions(player.id),
     ]);
-    res.json({ reputation: profile.reputation, events, activeSanctions });
+    res.json({
+      reputation: profile.reputation,
+      events: events.items,
+      eventsTotal: events.total,
+      limit: events.limit,
+      offset: events.offset,
+      activeSanctions,
+    });
   }),
 );
 

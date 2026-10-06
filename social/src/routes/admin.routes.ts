@@ -41,27 +41,28 @@ adminRoutes.get(
   }),
 );
 
-/** GET /log?limit= — Moderation audit log. */
+/** GET /log?limit=&offset= — Moderation audit log (paginated). */
 adminRoutes.get(
   '/log',
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listModerationLog(Number(req.query.limit)));
+    res.json(await listModerationLog(Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
 // ── Reports ─────────────────────────────────────────────────────────────────
 
-/** GET /reports?status=&escalation=&targetPlayerId=&limit= — Report queue. */
+/** GET /reports?status=&escalation=&targetPlayerId=&limit=&offset= — Report queue (paginated). */
 adminRoutes.get(
   '/reports',
   validate(reportsQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const { status, escalation, targetPlayerId, limit } = req.query as Record<string, string | undefined>;
+    const { status, escalation, targetPlayerId, limit, offset } = req.query as Record<string, string | undefined>;
     res.json(
       await reports.listReports(
         { status: status as never, escalation: escalation as never, targetPlayerId },
         Number(limit),
+        Number(offset),
       ),
     );
   }),
@@ -105,12 +106,18 @@ adminRoutes.get(
     const id = req.params.playerId;
     const [profile, reputationEvents, sanctionHistory, reportsAgainst, activity] = await Promise.all([
       requireProfile(id),
-      listReputationEvents(id, 50),
+      listReputationEvents(id, 50, 0),
       sanctions.listSanctionHistory(id, 50),
-      reports.listReports({ targetPlayerId: id }, 50),
-      listActivity(id, 50),
+      reports.listReports({ targetPlayerId: id }, 50, 0),
+      listActivity(id, 50, 0),
     ]);
-    res.json({ ...profile, reputationEvents, sanctions: sanctionHistory, reports: reportsAgainst, activity });
+    res.json({
+      ...profile,
+      reputationEvents: reputationEvents.items,
+      sanctions: sanctionHistory,
+      reports: reportsAgainst.items,
+      activity: activity.items,
+    });
   }),
 );
 
@@ -143,13 +150,13 @@ adminRoutes.post(
 
 // ── Sanctions ───────────────────────────────────────────────────────────────
 
-/** GET /sanctions?playerId=&active=&limit= — Sanctions listing. */
+/** GET /sanctions?playerId=&active=&limit=&offset= — Sanctions listing (paginated). */
 adminRoutes.get(
   '/sanctions',
   validate(sanctionsQuery, 'query'),
   asyncHandler(async (req, res) => {
-    const q = req.query as unknown as { playerId?: string; active: boolean; limit: number };
-    res.json(await sanctions.listSanctions({ playerId: q.playerId, activeOnly: q.active }, Number(q.limit)));
+    const q = req.query as unknown as { playerId?: string; active: boolean; limit: number; offset: number };
+    res.json(await sanctions.listSanctions({ playerId: q.playerId, activeOnly: q.active }, Number(q.limit), Number(q.offset)));
   }),
 );
 

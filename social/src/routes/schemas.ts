@@ -16,6 +16,7 @@ import {
   REPORT_TARGET_TYPES,
   SANCTION_TYPES,
 } from '../db/schema/index.js';
+import { pageQuery } from '../lib/pagination.js';
 import { ACTION_MAX_LENGTH, ACTION_RE } from '../services/permissionCatalog.js';
 
 export const uuidSchema = z.string().uuid();
@@ -52,9 +53,11 @@ export const requestIdParams = z.object({ id: z.coerce.number().int().positive()
 
 export const targetPlayerBody = z.object({ playerId: uuidSchema });
 
-export const limitQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-});
+/**
+ * `?limit=&offset=` for list endpoints; the response is the envelope
+ * `{ items, total, limit, offset }` (see `lib/pagination.ts`).
+ */
+export const limitQuery = pageQuery;
 
 export const searchQuery = limitQuery.extend({
   search: z.string().trim().max(64).default(''),
@@ -151,7 +154,8 @@ export const npcCorporationBody = z.object({
 
 /** Internal: target a specific corporation (a player may belong to several). */
 export const corporationQueryRequired = z.object({ corporationId: uuidSchema });
-export const corporationQueryOptional = z.object({ corporationId: uuidSchema.optional() });
+/** With `corporationId`: one membership; without: a page of them (`limit`/`offset`). */
+export const corporationQueryOptional = limitQuery.extend({ corporationId: uuidSchema.optional() });
 
 // ── Corporations ────────────────────────────────────────────────────────────
 
@@ -312,7 +316,8 @@ export const npcPoliticalBody = z.object({
 });
 
 export const politicalQueryRequired = z.object({ entityId: uuidSchema });
-export const politicalQueryOptional = z.object({ entityId: uuidSchema.optional() });
+/** With `entityId`: one membership; without: a page of them (`limit`/`offset`). */
+export const politicalQueryOptional = limitQuery.extend({ entityId: uuidSchema.optional() });
 
 // ── Reputation & moderation ─────────────────────────────────────────────────
 

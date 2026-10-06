@@ -18,7 +18,7 @@ pnpm install
 pnpm dev                      # tsx watch ; les migrations de ./drizzle sont appliquées au démarrage
 ```
 
-Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`.
+Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`, `pnpm db:reset -- --yes` (vide le schéma pour repartir de zéro : la migration unique `0000_init` est rejouée au prochain démarrage).
 
 Sans Keycloak, mettre `AUTH_DEV_BYPASS=true` (ignoré en production) et passer `X-Player-Id: <uuid>` (+ `X-Player-Name`) à la place du bearer :
 
@@ -148,6 +148,26 @@ Erreurs typées : `403 NOT_CORPORATION_MEMBER` (visibilité corporation hors cor
 
 **Règlement** : à la complétion, **revérification** des objectifs `service` (sauf `force`) puis paiement composant par composant : crédits idempotents via `externalId = mission:<missionId>:<playerId>` ; items = **claim atomique** dans `settledComponents` (`item:<itemId>`) *avant* le transfert (hold séquestré consommé, sinon faucet `system`) — un échec partiel se rejoue sans jamais double-payer. Rejouer via `POST /api/internal/missions/:missionId/settle`.
 
+## Pagination (rupture de contrat)
+
+Toutes les listes acceptent désormais `?limit=&offset=` et répondent par l'enveloppe
+`{ items, total, limit, offset }` au lieu d'un tableau brut :
+
+- `limit` : entier **1..100**, défaut `20`
+- `offset` : entier **≥ 0**, défaut `0` (décalage en lignes, pas en pages)
+- `items` : la page courante ; `total` : nombre total d'éléments correspondants,
+  calculé par une requête `count()` distincte (donc juste même sur une page vide)
+- l'ordre est déterministe (tri + `id` en critère d'arbitrage) : une page suivante
+  ne saute ni ne répète d'élément
+
+Exception particulière : la clé `missions` est conservée, les compteurs sont ajoutés
+à côté :
+
+- `GET /api/missions`, `GET /api/me/missions`, `GET /api/me/missions-created`,
+  `GET /api/internal/missions` et `GET /api/internal/players/:id/missions` →
+  `{ missions, total, limit, offset }`
+- exemptes : le catalogue de kinds (`/api/missions/kinds`) et les détails de mission
+
 ## Endpoints
 
 Spécification complète (schémas, codes d'erreur) : [`openapi.yaml`](openapi.yaml).
@@ -159,7 +179,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 ### Public
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/health` | Liveness |
+| GET | `/api/health` | Liveness (`?deep=1` vérifie aussi le schéma en base → `503` si absent) |
 | GET | `/openapi.yaml` | Document OpenAPI du service (aussi exposé sur `/api/openapi.yaml`) |
 
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
@@ -167,7 +187,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 |---|---|---|
 | GET | `/api/missions/kinds` | Catalogue des kinds (catégories, objectifs, prérequis, `name` localisé, forme des récompenses) pour les builders |
 | POST | `/api/missions/validate` `{mode?, mission}` | Dry-run d'une spec (aucune persistance, aucun séquestre) |
-| GET | `/api/missions?status=&kind=&category=&issuerType=&issuerId=&visibility=&groupClaimable=&isEvent=&limit=` | Missions **avec une place libre** (statuts `available` + `active` par défaut ; groupes partagés visibles membres uniquement ; **zones** : sans position connue, seules les missions globales sont listées) |
+| GET | `/api/missions?status=&kind=&category=&issuerType=&issuerId=&visibility=&groupClaimable=&isEvent=&limit=&offset=` | Missions **avec une place libre** (statuts `available` + `active` par défaut ; groupes partagés visibles membres uniquement ; **zones** : sans position connue, seules les missions globales sont listées) |
 | POST | `/api/missions` `{title, rewards[], prerequisites?, zones?, visibility?, corporationId?, politicalEntityId?, escrowSource?, maxAssignees?, groupClaimable?, objectives[{type(kind), params?…}]}` | Créer une mission (récompenses séquestrées ; `escrowSource: 'issuer'` = prélevé sur le **trésor corpo/politique**) |
 | GET | `/api/missions/:missionId` | Détail + objectifs + mon assignation (404 si partagée à un groupe dont je ne suis pas membre) |
 | POST | `/api/missions/:missionId/accept` | Accepter : corp + **zone** (`403 OUT_OF_ZONE`) + **prérequis** (`403 PREREQ_FAILED`) + groupe (`NOT_GROUP_MEMBER`, `NO_GROUP`, `GROUP_ALREADY_CLAIMED`) |
@@ -179,14 +199,14 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/missions/:missionId/abandon` | Abandonner l'assignation |
 | POST | `/api/missions/:missionId/objectives/:objectiveId/progress` `{quantity}` | Reporter la progression d'un objectif **`game`** uniquement (`409 OBJECTIVE_NOT_PUSHABLE` sinon) |
 | POST | `/api/missions/:missionId/complete` | Compléter : **revérifie** les objectifs `service`, puis répartit chaque composant de récompense |
-| GET | `/api/me/missions?status=&limit=` | Mes missions (assignations + mission) |
-| GET | `/api/me/missions-created?status=&limit=` | **Mes missions créées** (`createdBy` = moi), tous statuts, **sans filtre zone/groupe/place libre** — vue de gestion du créateur (le browse `/api/missions` reste filtré par zone) |
+| GET | `/api/me/missions?status=&limit=&offset=` | Mes missions (assignations + mission) |
+| GET | `/api/me/missions-created?status=&limit=&offset=` | **Mes missions créées** (`createdBy` = moi), tous statuts, **sans filtre zone/groupe/place libre** — vue de gestion du créateur (le browse `/api/missions` reste filtré par zone) |
 
 ### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
 | Méthode | Route | Rôle requis | Description |
 |---|---|---|---|
 | POST | `/api/internal/missions` | `mission:write` | Créer une mission (`rewards[]`, `prerequisites[]`, `zones[]`, kinds, `groupClaimable`, `isEvent`) |
-| GET | `/api/internal/missions?status=&kind=&category=&issuerType=&issuerId=&groupClaimable=&isEvent=&limit=` | `mission:read` | Catalogue complet (tous statuts, sans filtre zone) |
+| GET | `/api/internal/missions?status=&kind=&category=&issuerType=&issuerId=&groupClaimable=&isEvent=&limit=&offset=` | `mission:read` | Catalogue complet (tous statuts, sans filtre zone) |
 | PATCH | `/api/internal/missions/:missionId` | `mission:write` | Modifier **titre, description, expiration, `isEvent`, `zones`** seulement (spec immuable ; zones sans impact séquestre) |
 | POST | `/api/internal/missions/:missionId/share` `{groupId}` | `mission:write` | Partager la mission à un groupe (canal de confiance) |
 | DELETE | `/api/internal/missions/:missionId/share` | `mission:write` | Retirer le partage |
@@ -219,7 +239,7 @@ src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
   db/schema/        tables drizzle (missions, mission_objectives, mission_assignments)
-  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
+  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle (migration unique `0000_init`) et refuse de démarrer si le schéma manque
   kinds/            REGISTRE de kinds — objectives/ et prerequisites/ (1 fichier par kind) + catalogue
   middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts

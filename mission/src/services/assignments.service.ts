@@ -2,7 +2,7 @@
  * Player assignments: accepting a mission, reporting objective progress, completing
  * (which settles the reward) and abandoning.
  */
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
@@ -17,6 +17,7 @@ import {
   type MissionObjective,
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { getObjectiveKind } from '../kinds/index.js';
 import {
   allObjectivesCompleted,
@@ -91,18 +92,24 @@ export async function listPlayerMissions(
   playerId: string,
   status: AssignmentStatus | undefined,
   limit: number,
-): Promise<PlayerMission[]> {
+  offset: number,
+): Promise<Page<PlayerMission>> {
   const conditions = [eq(missionAssignments.playerId, playerId)];
   if (status) conditions.push(eq(missionAssignments.status, status));
+  const condition = and(...conditions);
 
-  const rows = await db
-    .select({ assignment: missionAssignments, mission: missions })
-    .from(missionAssignments)
-    .innerJoin(missions, eq(missions.id, missionAssignments.missionId))
-    .where(and(...conditions))
-    .orderBy(desc(missionAssignments.acceptedAt))
-    .limit(limit);
-  return rows;
+  const [items, totalRows] = await Promise.all([
+    db
+      .select({ assignment: missionAssignments, mission: missions })
+      .from(missionAssignments)
+      .innerJoin(missions, eq(missions.id, missionAssignments.missionId))
+      .where(condition)
+      .orderBy(desc(missionAssignments.acceptedAt), desc(missionAssignments.id))
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(missionAssignments).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /**
@@ -486,13 +493,26 @@ export async function abandonMission(
   });
 }
 
-/** Assignments for many missions of one player, used by the internal settle endpoint. */
-export function listAssignmentsForPlayer(playerId: string): Promise<MissionAssignment[]> {
-  return db
-    .select()
-    .from(missionAssignments)
-    .where(eq(missionAssignments.playerId, playerId))
-    .orderBy(desc(missionAssignments.acceptedAt));
+/**
+ * A page of one player's assignments (internal listing).
+ * @param playerId - Player id.
+ * @param limit - Max rows in the page.
+ * @param offset - Rows to skip.
+ * @returns Page of assignments.
+ */
+export async function listAssignmentsForPlayer(playerId: string, limit: number, offset: number): Promise<Page<MissionAssignment>> {
+  const condition = eq(missionAssignments.playerId, playerId);
+  const [items, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(missionAssignments)
+      .where(condition)
+      .orderBy(desc(missionAssignments.acceptedAt), desc(missionAssignments.id))
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(missionAssignments).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /** All missions referenced by a set of assignments. */

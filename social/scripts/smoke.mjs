@@ -153,6 +153,11 @@ let entityId = null;
   );
   check('B joined the corporation (default rank)', [joined.status, joined.json.joined], [200, true]);
 
+  const members = await req('GET', `/api/corporations/${corpId}/members`, undefined, asPlayer(A, 'alice'));
+  check('members list is a page', [members.status, members.json.items.length >= 2, typeof members.json.total, typeof members.json.limit, typeof members.json.offset], [200, true, 'number', 'number', 'number']);
+  const membersPage2 = await req('GET', `/api/corporations/${corpId}/members?limit=1&offset=2`, undefined, asPlayer(A, 'alice'));
+  check('second members page is empty', [membersPage2.json.items.length, membersPage2.json.total >= 2], [0, true]);
+
   const entity = await req(
     'POST',
     '/api/internal/politics',
@@ -365,6 +370,21 @@ console.log('\n# permission catalog');
   const frTrade = fr.json.actions.find((r) => r.action === 'market:trade');
   check('descriptions are localized (fr)', frTrade.description, 'Placer et régler des échanges de marché pour la corporation');
   check('descriptions are localized (en)', trade.description, 'Place and settle market trades for the corporation');
+
+  // Player-facing twin of the same catalog (JWT, or X-Player-Id in dev-bypass).
+  const mine = await req('GET', '/api/me/permissions/catalog', undefined, asPlayer(A, 'alice'));
+  check('GET /api/me/permissions/catalog', [mine.status, mine.json.actions?.length], [200, json.actions.length]);
+  const mineFr = await req('GET', '/api/me/permissions/catalog', undefined, {
+    ...asPlayer(A, 'alice'),
+    'Accept-Language': 'fr',
+  });
+  check(
+    'player catalog is localized (fr)',
+    mineFr.json.actions.find((r) => r.action === 'market:trade').description,
+    'Placer et régler des échanges de marché pour la corporation',
+  );
+  const anonymous = await req('GET', '/api/me/permissions/catalog');
+  check('player catalog without credentials', [anonymous.status, anonymous.json.error], [401, 'UNAUTHORIZED']);
 }
 
 // ── Validation and auth boundaries ───────────────────────────────────────────

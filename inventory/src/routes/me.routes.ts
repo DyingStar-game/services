@@ -29,6 +29,7 @@ import {
 } from '../services/pois.service.js';
 import {
   createPoiBody,
+  limitQuery,
   poiParams,
   poiShareParams,
   sharePoiBody,
@@ -39,12 +40,19 @@ import {
 /** Router for the current player's inventory. */
 export const meRoutes: IRouter = Router();
 
-/** GET /inventory — Stacks (with held/available) and owned instances. */
+/** GET /inventory?limit=&offset= — Stacks (with held/available) and paged owned instances. */
 meRoutes.get(
   '/inventory',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await getHolderInventory({ holderType: 'player', holderId: player.id }));
+    res.json(
+      await getHolderInventory(
+        { holderType: 'player', holderId: player.id },
+        Number(req.query.limit),
+        Number(req.query.offset),
+      ),
+    );
   }),
 );
 
@@ -64,12 +72,13 @@ meRoutes.get(
 
 // ── POIs ─────────────────────────────────────────────────────────────────────
 
-/** GET /pois — POIs of the player's own scope (owned, granted, public). */
+/** GET /pois?limit=&offset= — POIs of the player's own scope (owned, granted, public). */
 meRoutes.get(
   '/pois',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await listPlayerPois(player.id));
+    res.json(await listPlayerPois(player.id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

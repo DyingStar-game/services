@@ -22,6 +22,7 @@ import {
   type PresenceStatus,
 } from '../db/schema/index.js';
 import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { recordCorporationActivity } from './corporationActivity.service.js';
 import { requirePoliticalEntity } from './politics.service.js';
@@ -122,16 +123,24 @@ export async function getCorporationMembership(
 /**
  * Every membership of a player (a player may belong to several corporations).
  * @param playerId - Player id.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
  * @returns Memberships, ordered by corporation name.
  */
-export async function listCorporationMemberships(playerId: string): Promise<CorporationMembership[]> {
-  return db
-    .select({ corporation: corporations, member: corporationMembers, rank: corporationRanks })
-    .from(corporationMembers)
-    .innerJoin(corporations, eq(corporations.id, corporationMembers.corporationId))
-    .innerJoin(corporationRanks, eq(corporationRanks.id, corporationMembers.rankId))
-    .where(eq(corporationMembers.playerId, playerId))
-    .orderBy(asc(corporations.name));
+export async function listCorporationMemberships(playerId: string, limit: number, offset: number): Promise<Page<CorporationMembership>> {
+  const [[{ total }], rows] = await Promise.all([
+    db.select({ total: count() }).from(corporationMembers).where(eq(corporationMembers.playerId, playerId)),
+    db
+      .select({ corporation: corporations, member: corporationMembers, rank: corporationRanks })
+      .from(corporationMembers)
+      .innerJoin(corporations, eq(corporations.id, corporationMembers.corporationId))
+      .innerJoin(corporationRanks, eq(corporationRanks.id, corporationMembers.rankId))
+      .where(eq(corporationMembers.playerId, playerId))
+      .orderBy(asc(corporations.name), asc(corporations.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, total, limit, offset);
 }
 
 /**
@@ -192,21 +201,30 @@ export async function getCorporationRefMap(playerIds: string[]): Promise<Map<str
 /**
  * Lists corporations by name/ticker substring with member counts.
  * @param search - Substring (empty = all).
- * @param limit - Max results.
- * @returns Corporation summaries.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of corporation summaries.
  */
-export async function listCorporations(search: string, limit: number): Promise<CorporationSummary[]> {
+export async function listCorporations(search: string, limit: number, offset: number): Promise<Page<CorporationSummary>> {
   const memberCount = count(corporationMembers.playerId);
+  const condition = search
+    ? or(ilike(corporations.name, `%${search}%`), ilike(corporations.ticker, `%${search}%`))
+    : undefined;
   const query = db
     .select({ corporation: corporations, memberCount })
     .from(corporations)
     .leftJoin(corporationMembers, eq(corporationMembers.corporationId, corporations.id))
     .groupBy(corporations.id);
-  const filtered = search
-    ? query.where(or(ilike(corporations.name, `%${search}%`), ilike(corporations.ticker, `%${search}%`)))
-    : query;
-  const rows = await filtered.orderBy(desc(memberCount), corporations.name).limit(limit);
-  return rows.map((r) => ({ ...r.corporation, memberCount: r.memberCount }));
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporations).where(condition),
+    query.where(condition).orderBy(desc(memberCount), corporations.name, asc(corporations.id)).limit(limit).offset(offset),
+  ]);
+  return page(
+    rows.map((r) => ({ ...r.corporation, memberCount: r.memberCount })),
+    totalRow[0].total,
+    limit,
+    offset,
+  );
 }
 
 /**
@@ -291,15 +309,25 @@ export async function disbandCorporation(corporationId: string, actorId: string)
 /** Public corporation page: corporation, members, ranks and its place in the hierarchy. */
 export interface CorporationPage extends CorporationSummary {
   ranks: CorporationRank[];
+  /** First {@link PAGE_MEMBERS} members; `memberCount` is the full count. */
   members: CorporationMemberView[];
   /** Holding company, or null when independent. */
   parent: CorporationRef | null;
-  /** Direct subsidiaries of this corporation. */
+  /** First {@link PAGE_SUBSIDIARIES} direct subsidiaries. */
   subsidiaries: CorporationSummary[];
+  /** Total number of direct subsidiaries. */
+  subsidiaryCount: number;
 }
+
+/** Members embedded in the public corporation page. */
+export const PAGE_MEMBERS = 50;
+/** Subsidiaries embedded in the public corporation page. */
+export const PAGE_SUBSIDIARIES = 20;
 
 /**
  * Public corporation page: corporation, member count, ranks, members and hierarchy.
+ * Members and subsidiaries are truncated to {@link PAGE_MEMBERS} / {@link PAGE_SUBSIDIARIES}
+ * rows; the full lists live on the paginated sub-routes.
  * @param corporationId - Corporation id.
  * @returns Corporation page payload.
  */
@@ -307,11 +335,19 @@ export async function getCorporationPage(corporationId: string): Promise<Corpora
   const corporation = await requireCorporation(corporationId);
   const [ranks, members, parent, subsidiaries] = await Promise.all([
     listCorporationRanks(corporationId),
-    listCorporationMembers(corporationId),
+    listCorporationMembers(corporationId, PAGE_MEMBERS, 0),
     getCorporationRef(corporation.parentId),
-    listSubsidiaries(corporationId),
+    listSubsidiaries(corporationId, PAGE_SUBSIDIARIES, 0),
   ]);
-  return { ...corporation, memberCount: members.length, ranks, members, parent, subsidiaries };
+  return {
+    ...corporation,
+    memberCount: members.total,
+    ranks,
+    members: members.items,
+    parent,
+    subsidiaries: subsidiaries.items,
+    subsidiaryCount: subsidiaries.total,
+  };
 }
 
 /**
@@ -332,18 +368,31 @@ export async function getCorporationRef(corporationId: string | null): Promise<C
 /**
  * Direct subsidiaries of a corporation (corporations whose `parentId` is this id).
  * @param corporationId - Holding company id.
- * @returns Subsidiary summaries with member counts.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of subsidiary summaries with member counts.
  */
-export async function listSubsidiaries(corporationId: string): Promise<CorporationSummary[]> {
+export async function listSubsidiaries(corporationId: string, limit: number, offset: number): Promise<Page<CorporationSummary>> {
   const memberCount = count(corporationMembers.playerId);
-  const rows = await db
-    .select({ corporation: corporations, memberCount })
-    .from(corporations)
-    .leftJoin(corporationMembers, eq(corporationMembers.corporationId, corporations.id))
-    .where(eq(corporations.parentId, corporationId))
-    .groupBy(corporations.id)
-    .orderBy(asc(corporations.name));
-  return rows.map((r) => ({ ...r.corporation, memberCount: r.memberCount }));
+  const condition = eq(corporations.parentId, corporationId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporations).where(condition),
+    db
+      .select({ corporation: corporations, memberCount })
+      .from(corporations)
+      .leftJoin(corporationMembers, eq(corporationMembers.corporationId, corporations.id))
+      .where(condition)
+      .groupBy(corporations.id)
+      .orderBy(asc(corporations.name), asc(corporations.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(
+    rows.map((r) => ({ ...r.corporation, memberCount: r.memberCount })),
+    totalRow[0].total,
+    limit,
+    offset,
+  );
 }
 
 /**
@@ -443,21 +492,34 @@ export async function listCorporationRanks(corporationId: string): Promise<Corpo
 /**
  * Members of a corporation with profile, rank and presence (highest rank first).
  * @param corporationId - Corporation id.
- * @returns Members.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of members.
  */
-export async function listCorporationMembers(corporationId: string): Promise<CorporationMemberView[]> {
-  const rows = await db
-    .select({ profile: playerProfiles, member: corporationMembers, rank: corporationRanks })
-    .from(corporationMembers)
-    .innerJoin(playerProfiles, eq(playerProfiles.playerId, corporationMembers.playerId))
-    .innerJoin(corporationRanks, eq(corporationRanks.id, corporationMembers.rankId))
-    .where(eq(corporationMembers.corporationId, corporationId))
-    .orderBy(desc(corporationRanks.priority), corporationMembers.joinedAt);
+export async function listCorporationMembers(corporationId: string, limit: number, offset: number): Promise<Page<CorporationMemberView>> {
+  const condition = eq(corporationMembers.corporationId, corporationId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporationMembers).where(condition),
+    db
+      .select({ profile: playerProfiles, member: corporationMembers, rank: corporationRanks })
+      .from(corporationMembers)
+      .innerJoin(playerProfiles, eq(playerProfiles.playerId, corporationMembers.playerId))
+      .innerJoin(corporationRanks, eq(corporationRanks.id, corporationMembers.rankId))
+      .where(condition)
+      .orderBy(desc(corporationRanks.priority), corporationMembers.joinedAt, asc(corporationMembers.playerId))
+      .limit(limit)
+      .offset(offset),
+  ]);
   const presence = await getPresenceMap(rows.map((r) => r.profile.playerId));
-  return rows.map((r) => {
-    const p = presence.get(r.profile.playerId);
-    return { ...r.profile, joinedAt: r.member.joinedAt, rank: r.rank, status: p?.status ?? 'offline', location: p?.location ?? null };
-  });
+  return page(
+    rows.map((r) => {
+      const p = presence.get(r.profile.playerId);
+      return { ...r.profile, joinedAt: r.member.joinedAt, rank: r.rank, status: p?.status ?? 'offline', location: p?.location ?? null };
+    }),
+    totalRow[0].total,
+    limit,
+    offset,
+  );
 }
 
 async function requireMemberRow(

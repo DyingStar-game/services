@@ -7,16 +7,17 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import * as blocks from '../services/blocks.service.js';
-import { playerIdParams, targetPlayerBody } from './schemas.js';
+import { limitQuery, playerIdParams, targetPlayerBody } from './schemas.js';
 
 /** Router for the player's block list. */
 export const blocksRoutes: IRouter = Router();
 
-/** GET / — Blocked players. */
+/** GET / — Blocked players (paginated). */
 blocksRoutes.get(
   '/',
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await blocks.listBlocks(requirePlayer(req).id));
+    res.json(await blocks.listBlocks(requirePlayer(req).id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

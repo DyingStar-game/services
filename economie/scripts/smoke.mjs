@@ -414,6 +414,29 @@ console.log('\n# validation');
   check('non-uuid corporation id', [badTarget.status, badTarget.json.error], [400, 'VALIDATION_ERROR']);
 }
 
+// ── Pagination ──────────────────────────────────────────────────────────────
+
+console.log('\n# pagination');
+{
+  const ledger = await req('GET', '/api/me/wallet/transactions?limit=5', undefined, asPlayer(A));
+  check('ledger is a page', [ledger.status, typeof ledger.json.total, typeof ledger.json.limit, typeof ledger.json.offset], [200, 'number', 'number', 'number']);
+
+  const members = await req('GET', `/api/corporations/${CORP}/members`, undefined, asPlayer(A));
+  check('members list is a page', [members.status, members.json.items.length, typeof members.json.total], [200, 2, 'number']);
+
+  const taxes = await req('GET', '/api/me/taxes', undefined, asPlayer(A));
+  check('tax debts are a page', [taxes.status, typeof taxes.json.total, typeof taxes.json.limit, typeof taxes.json.offset], [200, 'number', 'number', 'number']);
+
+  // Treasury reads go through Social's ACL (or the dev bypass): only assert the shape
+  // when the call is allowed, so a strict environment skips it instead of failing.
+  const salaries = await req('GET', `/api/corporations/${CORP}/salaries`, undefined, asPlayer(A));
+  if (salaries.status === 200) {
+    check('salary overrides carry page bounds', [typeof salaries.json.memberOverridesTotal, typeof salaries.json.limit, typeof salaries.json.offset], ['number', 'number', 'number']);
+  } else {
+    console.log(`  note salaries page skipped (treasury ACL returned ${salaries.status})`);
+  }
+}
+
 // ── Money supply invariant ───────────────────────────────────────────────────
 
 console.log('\n# money supply');

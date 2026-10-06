@@ -57,7 +57,7 @@ corporationsRoutes.get(
   }),
 );
 
-/** GET /:corporationId/wallet/transactions?limit= — Treasury ledger (member only). */
+/** GET /:corporationId/wallet/transactions?limit=&offset= — Treasury ledger (member only). */
 corporationsRoutes.get(
   '/:corporationId/wallet/transactions',
   validate(corporationIdParams, 'params'),
@@ -66,19 +66,20 @@ corporationsRoutes.get(
     const player = requirePlayer(req);
     const { corporationId } = req.params;
     await requireCorporationMember(corporationId, player.id);
-    res.json(await listCorporationTransactions(corporationId, Number(req.query.limit)));
+    res.json(await listCorporationTransactions(corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
-/** GET /:corporationId/members — Treasury staff (member only). */
+/** GET /:corporationId/members?limit=&offset= — Treasury staff (member only). */
 corporationsRoutes.get(
   '/:corporationId/members',
   validate(corporationIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
     await requireCorporationMember(corporationId, player.id);
-    res.json(await listCorporationMembers(corporationId));
+    res.json(await listCorporationMembers(corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -97,15 +98,16 @@ corporationsRoutes.get(
   }),
 );
 
-/** GET /:corporationId/taxes — Tax debts of the corporation (member only). */
+/** GET /:corporationId/taxes?limit=&offset= — Tax debts of the corporation (member only). */
 corporationsRoutes.get(
   '/:corporationId/taxes',
   validate(corporationIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
     await requireCorporationMember(corporationId, player.id);
-    res.json(await getTaxDebts('corporation', corporationId));
+    res.json(await getTaxDebts('corporation', corporationId, { limit: Number(req.query.limit), offset: Number(req.query.offset) }));
   }),
 );
 
@@ -137,15 +139,16 @@ corporationsRoutes.post(
 
 // ── Payroll (salaries & primes) — economie:treasury:manage only ──────────────────
 
-/** GET /:corporationId/salaries — Role defaults and per-member overrides (`economie:treasury:manage`). */
+/** GET /:corporationId/salaries?limit=&offset= — Role defaults and a page of member overrides (`economie:treasury:manage`). */
 corporationsRoutes.get(
   '/:corporationId/salaries',
   validate(corporationIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
     await requireTreasuryPermission(corporationId, player.id);
-    res.json(await getSalaries(corporationId));
+    res.json(await getSalaries(corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

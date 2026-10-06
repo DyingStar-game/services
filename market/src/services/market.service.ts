@@ -3,7 +3,7 @@
  * trade settlement. This service never touches the physical world: a trade moves ownership
  * (inventory) and credits (economy), each idempotently, and is retryable while `pending`.
  */
-import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
@@ -21,6 +21,7 @@ import {
   type TradeStatus,
 } from '../db/schema/index.js';
 import { HttpError, conflict, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { ensureCorporationTrade } from './authorization.js';
 import { creditHolder, debitHolder, isEconomyConfigured } from './economy.client.js';
 import { isInventoryConfigured, transferInstance, transferStack, type Holder } from './inventory.client.js';
@@ -48,6 +49,7 @@ export interface OrderFilter {
   holderId?: string;
   status?: MarketOrder['status'];
   limit?: number;
+  offset?: number;
 }
 
 /** Demand query filter. */
@@ -57,6 +59,7 @@ export interface DemandFilter {
   holderId?: string;
   status?: MarketDemand['status'];
   limit?: number;
+  offset?: number;
 }
 
 /** Trade query filter. */
@@ -65,6 +68,7 @@ export interface TradeFilter {
   holderId?: string;
   status?: TradeStatus;
   limit?: number;
+  offset?: number;
 }
 
 /** Input accepted when placing an order (holder is derived by the route). */
@@ -352,17 +356,22 @@ export async function placeOrder(party: Party, input: PlaceOrderInput): Promise<
   return { order: fresh, trades };
 }
 
-/** Lists orders matching a filter. */
-export function listOrders(filter: OrderFilter): Promise<MarketOrder[]> {
+/** Lists a page of orders matching a filter (newest first). */
+export async function listOrders(filter: OrderFilter): Promise<Page<MarketOrder>> {
   const conditions = [];
   if (filter.goodType) conditions.push(eq(marketOrders.goodType, filter.goodType));
   if (filter.side) conditions.push(eq(marketOrders.side, filter.side));
   if (filter.holderType) conditions.push(eq(marketOrders.holderType, filter.holderType));
   if (filter.holderId) conditions.push(eq(marketOrders.holderId, filter.holderId));
   if (filter.status) conditions.push(eq(marketOrders.status, filter.status));
-  const query = db.select().from(marketOrders);
-  const filtered = conditions.length ? query.where(and(...conditions)) : query;
-  return filtered.orderBy(desc(marketOrders.createdAt)).limit(filter.limit ?? env.market.defaultLimit);
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const limit = filter.limit ?? env.market.defaultLimit;
+  const offset = filter.offset ?? 0;
+  const [items, totalRows] = await Promise.all([
+    db.select().from(marketOrders).where(condition).orderBy(desc(marketOrders.createdAt), desc(marketOrders.id)).limit(limit).offset(offset),
+    db.select({ total: count() }).from(marketOrders).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /** Fetches an order or throws 404. */
@@ -419,16 +428,21 @@ export async function createDemand(party: Party, input: CreateDemandInput): Prom
   return demand;
 }
 
-/** Lists demands matching a filter. */
-export function listDemands(filter: DemandFilter): Promise<MarketDemand[]> {
+/** Lists a page of demands matching a filter (newest first). */
+export async function listDemands(filter: DemandFilter): Promise<Page<MarketDemand>> {
   const conditions = [];
   if (filter.goodType) conditions.push(eq(marketDemands.goodType, filter.goodType));
   if (filter.holderType) conditions.push(eq(marketDemands.holderType, filter.holderType));
   if (filter.holderId) conditions.push(eq(marketDemands.holderId, filter.holderId));
   if (filter.status) conditions.push(eq(marketDemands.status, filter.status));
-  const query = db.select().from(marketDemands);
-  const filtered = conditions.length ? query.where(and(...conditions)) : query;
-  return filtered.orderBy(desc(marketDemands.createdAt)).limit(filter.limit ?? env.market.defaultLimit);
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const limit = filter.limit ?? env.market.defaultLimit;
+  const offset = filter.offset ?? 0;
+  const [items, totalRows] = await Promise.all([
+    db.select().from(marketDemands).where(condition).orderBy(desc(marketDemands.createdAt), desc(marketDemands.id)).limit(limit).offset(offset),
+    db.select({ total: count() }).from(marketDemands).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /** Fetches a demand or throws 404. */
@@ -498,8 +512,8 @@ export async function cancelDemand(demandId: string, party: Party): Promise<Mark
   return row;
 }
 
-/** Lists trades involving a holder (either side). */
-export function listTrades(filter: TradeFilter): Promise<MarketTrade[]> {
+/** Lists a page of trades involving a holder (either side), newest first. */
+export async function listTrades(filter: TradeFilter): Promise<Page<MarketTrade>> {
   const conditions = [];
   if (filter.status) conditions.push(eq(marketTrades.status, filter.status));
   if (filter.holderType && filter.holderId) {
@@ -510,9 +524,14 @@ export function listTrades(filter: TradeFilter): Promise<MarketTrade[]> {
       )!,
     );
   }
-  const query = db.select().from(marketTrades);
-  const filtered = conditions.length ? query.where(and(...conditions)) : query;
-  return filtered.orderBy(desc(marketTrades.createdAt)).limit(filter.limit ?? env.market.defaultLimit);
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const limit = filter.limit ?? env.market.defaultLimit;
+  const offset = filter.offset ?? 0;
+  const [items, totalRows] = await Promise.all([
+    db.select().from(marketTrades).where(condition).orderBy(desc(marketTrades.createdAt), desc(marketTrades.id)).limit(limit).offset(offset),
+    db.select({ total: count() }).from(marketTrades).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
 /** Fetches a trade or throws 404. */
@@ -529,14 +548,56 @@ function assertOwner(holderType: HolderType, holderId: string, party: Party, lab
   }
 }
 
-/** Counts open orders per side for a good type (order book depth). */
-export async function bookDepth(goodType: string): Promise<{ buy: number; sell: number }> {
-  const rows = await db
-    .select({ side: marketOrders.side, n: sql<number>`count(*)::int` })
-    .from(marketOrders)
-    .where(and(eq(marketOrders.goodType, goodType), inArray(marketOrders.status, ['open', 'partially_filled'])))
-    .groupBy(marketOrders.side);
-  const buy = rows.find((r) => r.side === 'buy')?.n ?? 0;
-  const sell = rows.find((r) => r.side === 'sell')?.n ?? 0;
-  return { buy: Number(buy), sell: Number(sell) };
+/** One page of the order book for a good type: bids (best first) and asks (best first). */
+export interface BookDepth {
+  goodType: string;
+  bids: MarketOrder[];
+  asks: MarketOrder[];
+  /** Open buy orders in total (beyond this page). */
+  bidTotal: number;
+  /** Open sell orders in total (beyond this page). */
+  askTotal: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Order book depth for a good type: a page of open buy orders and a page of open sell
+ * orders, best price first, with the totals on each side.
+ * @param goodType - Good type to depth.
+ * @param limit - Max orders per side.
+ * @param offset - Orders to skip on each side.
+ * @returns The book page.
+ */
+export async function bookDepth(goodType: string, limit: number, offset: number): Promise<BookDepth> {
+  const open = and(eq(marketOrders.goodType, goodType), inArray(marketOrders.status, ['open', 'partially_filled']));
+  const buySide = and(open, eq(marketOrders.side, 'buy'));
+  const sellSide = and(open, eq(marketOrders.side, 'sell'));
+  const [bids, asks, buyTotal, sellTotal] = await Promise.all([
+    db
+      .select()
+      .from(marketOrders)
+      .where(buySide)
+      .orderBy(desc(marketOrders.price), asc(marketOrders.createdAt), asc(marketOrders.id))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select()
+      .from(marketOrders)
+      .where(sellSide)
+      .orderBy(asc(marketOrders.price), asc(marketOrders.createdAt), asc(marketOrders.id))
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(marketOrders).where(buySide),
+    db.select({ total: count() }).from(marketOrders).where(sellSide),
+  ]);
+  return {
+    goodType,
+    bids,
+    asks,
+    bidTotal: buyTotal[0]?.total ?? 0,
+    askTotal: sellTotal[0]?.total ?? 0,
+    limit,
+    offset,
+  };
 }

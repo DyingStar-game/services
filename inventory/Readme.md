@@ -25,7 +25,8 @@ pnpm dev                      # tsx watch ; les migrations de ./drizzle sont app
 ```
 
 Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate`,
-`pnpm db:studio`. Smoke test : `node scripts/smoke.mjs`.
+`pnpm db:studio`, `pnpm db:reset -- --yes` (vide le schéma pour repartir de zéro : la migration
+unique `0000_init` est rejouée au prochain démarrage). Smoke test : `node scripts/smoke.mjs`.
 
 Sans Keycloak, mettre `AUTH_DEV_BYPASS=true` (ignoré en production) et passer
 `X-Player-Id` (+ `X-Player-Name`) à la place du bearer. Pour l'API interne sans Keycloak,
@@ -69,6 +70,27 @@ mettre `INTERNAL_DEV_BYPASS=true` et passer `X-Internal-Key: <INTERNAL_API_KEY>`
 - Aucune notion de position ni d'interaction avec `persistence`/`resourcesDynamic`
   (hors référence `parentId` opaque).
 
+## Pagination (rupture de contrat)
+
+Toutes les listes acceptent désormais `?limit=&offset=` et répondent par l'enveloppe
+`{ items, total, limit, offset }` au lieu d'un tableau brut :
+
+- `limit` : entier **1..100**, défaut `20`
+- `offset` : entier **≥ 0**, défaut `0` (décalage en lignes, pas en pages)
+- `items` : la page courante ; `total` : nombre total d'éléments correspondants,
+  calculé par une requête `count()` distincte (donc juste même sur une page vide)
+- l'ordre est déterministe (tri + `id` en critère d'arbitrage) : une page suivante
+  ne saute ni ne répète d'élément
+
+Exceptions & particularités :
+
+- `GET /api/me/inventory`, `GET /api/corporations/:id/inventory` et
+  `GET /api/internal/holders/:type/:id` : `stacks` reste complet (taille bornée par le
+  catalogue), `instances` est paginé — ajouts `instancesTotal`, `limit`, `offset`
+- les POIs (`/api/me/pois`, `/api/corporations/:id/pois`, `/api/politics/:id/pois`,
+  `/api/internal/holders/:type/:id/pois`) répondent l'enveloppe `{ items, total, limit, offset }`
+- `POST /api/internal/pois/resolve` garde sa clé `pois` (lot borné par la requête)
+
 ## Endpoints
 
 Spécification complète : [`openapi.yaml`](openapi.yaml). Erreurs : `{ "error": "CODE", "message": "...", "status": 4xx }`.
@@ -78,7 +100,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 ### Public
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/health` | Liveness |
+| GET | `/api/health` | Liveness (`?deep=1` vérifie aussi le schéma en base → `503` si absent) |
 | GET | `/openapi.yaml` | Document OpenAPI (aussi `/api/openapi.yaml`) |
 
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
@@ -145,7 +167,7 @@ src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
   db/schema/        tables drizzle (goods, holds, holders, pois)
-  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
+  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle (migration unique `0000_init`) et refuse de démarrer si le schéma manque
   middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
   routes/           un routeur par ressource (me, politics, corporations, internal),
                     schémas zod dans routes/schemas.ts

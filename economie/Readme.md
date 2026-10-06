@@ -17,7 +17,7 @@ pnpm install
 pnpm dev                      # tsx watch ; les migrations de ./drizzle sont appliquées au démarrage
 ```
 
-Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`.
+Autres scripts : `pnpm build` / `pnpm start` (prod), `pnpm type-check`, `pnpm db:generate` (après modification de `src/db/schema/`), `pnpm db:studio`, `pnpm db:reset -- --yes` (vide `public` + le schéma `drizzle` : on repart de zéro, la migration unique `0000_init` est rejouée au démarrage).
 
 Sans Keycloak, mettre `AUTH_DEV_BYPASS=true` (ignoré en production) et passer `X-Player-Id: <uuid>` (+ `X-Player-Name`) à la place du bearer :
 
@@ -55,6 +55,28 @@ curl localhost:3000/api/internal/players/$ID/wallet -H "Authorization: Bearer $T
 
 Montants en **unités entières** (crédits). Une devise est une simple chaîne (`credits` = monnaie universelle) ; un porteur possède un compte par devise (`unique(holder_type, holder_id, currency)`). Types de porteur : `player`, `npc`, `corporation`, `system` — les PNJ disposent donc de portefeuilles à parité avec les joueurs.
 
+## Pagination (rupture de contrat)
+
+Toutes les listes acceptent désormais `?limit=&offset=` et répondent par l'enveloppe
+`{ items, total, limit, offset }` au lieu d'un tableau brut :
+
+- `limit` : entier **1..100**, défaut `20`
+- `offset` : entier **≥ 0**, défaut `0` (décalage en lignes, pas en pages)
+- `items` : la page courante ; `total` : nombre total d'éléments correspondants,
+  calculé par une requête `count()` distincte (donc juste même sur une page vide)
+- l'ordre est déterministe (tri + `id` en critère d'arbitrage) : une page suivante
+  ne saute ni ne répète d'élément
+
+Exceptions & particularités :
+
+- `GET /api/corporations/:id/salaries` : `roleDefaults` reste complet, `memberOverrides`
+  est paginé — ajouts `memberOverridesTotal`, `limit`, `offset`
+- `GET /api/me/wallet/transactions`, `GET /api/me/taxes`, listes de membres, dettes fiscales
+  et journaux (internes compris) → enveloppe `{ items, total, limit, offset }`
+- `GET /api/admin/players` → enveloppe (résultats issus de Social)
+- exemptes : `GET /api/corporations/:id/report` et `GET /api/admin/stats` (agrégats),
+  comptes wallet (`{ accounts: [...] }`, un compte par devise)
+
 ## Endpoints
 
 Spécification complète (schémas, codes d'erreur) : [`openapi.yaml`](openapi.yaml).
@@ -66,21 +88,21 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 ### Public
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/health` | Liveness |
+| GET | `/api/health` | Liveness (`?deep=1` vérifie aussi le schéma en base → `503` si absent) |
 | GET | `/openapi.yaml` | Document OpenAPI du service (aussi exposé sur `/api/openapi.yaml`) |
 
 ### Joueur (`Authorization: Bearer <JWT Keycloak>`)
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/me/wallet` | Mes comptes (un par devise, `credits` créé au premier appel) |
-| GET | `/api/me/wallet/transactions?limit=` | Mon historique (toutes devises, plus récent d'abord) |
+| GET | `/api/me/wallet/transactions?limit=&offset=` | Mon historique (toutes devises, plus récent d'abord) |
 | POST | `/api/transfers` `{toPlayerId, amount, memo?}` | Transfert direct (taxe automatique `ECONOMY_TRANSFER_TAX_BPS` à la charge de l'émetteur) |
 
 ### Corporations (`Authorization: Bearer <JWT Keycloak>`) — adhésion renseignée par le serveur via l'API interne
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/corporations/:corporationId/wallet` | Trésorerie (membre) |
-| GET | `/api/corporations/:corporationId/wallet/transactions?limit=` | Journal de trésorerie (membre) |
+| GET | `/api/corporations/:corporationId/wallet/transactions?limit=&offset=` | Journal de trésorerie (membre) |
 | GET | `/api/corporations/:corporationId/members` | Membres et rôles (membre) |
 | GET | `/api/corporations/:corporationId/report?from=&to=` | Bilan financier par devise et par type (`economie:treasury:manage`) |
 | POST | `/api/corporations/:corporationId/donations` `{amount, memo?}` | Don d'un membre (respecte `allowDonations`, taxe interne `taxRateBps`) |
@@ -113,24 +135,24 @@ Chaque entité politique (commune, agglomération, département, région, pays, 
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/admin/stats?days=&top=` | Analytique : masse monétaire, volume/taxes, classements des plus riches (pseudos résolus via social), série journalière |
-| GET | `/api/admin/players?search=&limit=` | Rechercher des joueurs **par pseudo** (proxy vers l'API interne de social) et renvoyer leur portefeuille |
+| GET | `/api/admin/players?search=&limit=&offset=` | Rechercher des joueurs **par pseudo** (proxy vers l'API interne de social) et renvoyer leur portefeuille |
 
 ### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
 | Méthode | Route | Rôle requis | Description |
 |---|---|---|---|
 | PUT | `/api/internal/players/:playerId/wallet` | `economie:wallet:ensure` | Créer le compte `credits` au login (idempotent) |
 | GET | `/api/internal/players/:playerId/wallet` | `economie:wallet:read` | Comptes du joueur |
-| GET | `/api/internal/players/:playerId/wallet/transactions?limit=` | `economie:wallet:read` | Historique du joueur |
+| GET | `/api/internal/players/:playerId/wallet/transactions?limit=&offset=` | `economie:wallet:read` | Historique du joueur |
 | POST | `/api/internal/players/:playerId/wallet/credit` `{amount, currency?, reference?, externalId?, type?}` | `economie:wallet:credit` | Créditer (prime de mission, salaire…) |
 | POST | `/api/internal/players/:playerId/wallet/debit` | `economie:wallet:debit` | Débiter (refusé si solde insuffisant) |
 | PUT | `/api/internal/npcs/:npcId/wallet` | `economie:wallet:ensure` | Créer le compte `credits` d'un PNJ (idempotent) |
 | GET | `/api/internal/npcs/:npcId/wallet` | `economie:wallet:read` | Comptes du PNJ |
-| GET | `/api/internal/npcs/:npcId/wallet/transactions?limit=` | `economie:wallet:read` | Historique du PNJ |
+| GET | `/api/internal/npcs/:npcId/wallet/transactions?limit=&offset=` | `economie:wallet:read` | Historique du PNJ |
 | POST | `/api/internal/npcs/:npcId/wallet/credit` `{amount, currency?, reference?, externalId?, type?}` | `economie:wallet:credit` | Créditer un PNJ (salaire, prime, vente…) |
 | POST | `/api/internal/npcs/:npcId/wallet/debit` | `economie:wallet:debit` | Débiter un PNJ (refusé si solde insuffisant) |
 | PUT | `/api/internal/corporations/:corporationId/wallet` | `economie:wallet:ensure` | Créer le compte `credits` de la corporation |
 | GET | `/api/internal/corporations/:corporationId/wallet` | `economie:wallet:read` | Comptes de la trésorerie |
-| GET | `/api/internal/corporations/:corporationId/wallet/transactions?limit=` | `economie:wallet:read` | Journal de trésorerie |
+| GET | `/api/internal/corporations/:corporationId/wallet/transactions?limit=&offset=` | `economie:wallet:read` | Journal de trésorerie |
 | POST | `/api/internal/corporations/:corporationId/wallet/credit` `/debit` | `economie:wallet:credit` / `:debit` | Mouvements de trésorerie |
 | PUT | `/api/internal/corporations/:corporationId/members/:playerId` `{role, holderType?}` | `economie:corporation:manage` | Ajouter/mettre à jour un membre (leader/trésorier/member ; `holderType` = `player`\|`npc`) |
 | DELETE | `/api/internal/corporations/:corporationId/members/:playerId` | `economie:corporation:manage` | Retirer un membre |
@@ -139,7 +161,7 @@ Chaque entité politique (commune, agglomération, département, région, pays, 
 | PUT | `/api/internal/corporations/:corporationId/settings` `{taxRateBps?, allowDonations?}` | `economie:corporation:manage` | Régler la taxe interne / les dons |
 | PUT | `/api/internal/corporations/:corporationId/affiliation` `{politicalEntityId: uuid\|null}` | `economie:corporation:manage` | Définir le **siège fiscal** (entité politique) d'une corporation |
 | PUT/GET | `/api/internal/politics/:entityId/wallet` | `economie:wallet:ensure` / `economie:politics:read` | Créer / lire la trésorerie politique |
-| GET | `/api/internal/politics/:entityId/wallet/transactions?limit=` | `economie:politics:read` | Journal de la trésorerie politique |
+| GET | `/api/internal/politics/:entityId/wallet/transactions?limit=&offset=` | `economie:politics:read` | Journal de la trésorerie politique |
 | POST | `/api/internal/politics/:entityId/wallet/credit` `/debit` | `economie:politics:manage` | Mouvements de trésorerie politique |
 | POST | `/api/internal/politics/:entityId/taxes/assess` `{currency?}` | `economie:politics:manage` | Calculer et inscrire les dettes fiscales |
 | GET | `/api/internal/politics/:entityId/settings` | `economie:politics:read` | Taux (`corporateTaxBps`, `incomeTaxBps`) et politique d'émission |
@@ -163,7 +185,7 @@ src/
   index.ts          bootstrap Express, migrations, listen
   config/env.ts     variables d'environnement
   db/schema/        tables drizzle (accounts, transactions, corporation_*, political_*, salaires)
-  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle
+  db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle (migration unique `0000_init`) et refuse de démarrer si le schéma manque
   middleware/       auth (JWT joueur / service-account + rôles de capacité), validate (zod), errorHandler
   routes/           un routeur par ressource, schémas zod dans routes/schemas.ts
   services/         logique métier (une fonction exportée par cas d'usage) ; social.client.ts (pseudos + `authorizeAction`)

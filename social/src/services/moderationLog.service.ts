@@ -1,9 +1,10 @@
 /**
  * Moderator action audit log.
  */
-import { desc } from 'drizzle-orm';
+import { count, desc } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
+import { page, type Page } from '../lib/pagination.js';
 import { moderationLog, type ModerationLogEntry } from '../db/schema/index.js';
 
 /**
@@ -24,9 +25,19 @@ export async function logModeration(
 
 /**
  * Latest moderation log entries.
- * @param limit - Max entries.
- * @returns Entries, newest first.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of entries, newest first.
  */
-export async function listModerationLog(limit: number): Promise<ModerationLogEntry[]> {
-  return db.select().from(moderationLog).orderBy(desc(moderationLog.createdAt), desc(moderationLog.id)).limit(limit);
+export async function listModerationLog(limit: number, offset: number): Promise<Page<ModerationLogEntry>> {
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(moderationLog),
+    db
+      .select()
+      .from(moderationLog)
+      .orderBy(desc(moderationLog.createdAt), desc(moderationLog.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }

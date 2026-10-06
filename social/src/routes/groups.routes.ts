@@ -21,7 +21,14 @@ import {
   requireGroupMembership,
   updateGroup,
 } from '../services/groups.service.js';
-import { createGroupBody, groupIdParams, groupInviteBody, groupMemberParams, groupPatchBody } from './schemas.js';
+import {
+  createGroupBody,
+  groupIdParams,
+  groupInviteBody,
+  groupMemberParams,
+  groupPatchBody,
+  limitQuery,
+} from './schemas.js';
 
 /** Router mounted at `/api/groups`. */
 export const groupsRoutes: IRouter = Router();
@@ -71,13 +78,14 @@ groupsRoutes.delete(
   }),
 );
 
-/** GET /:groupId/members — Members with profile and presence (members only). */
+/** GET /:groupId/members — Members with profile and presence (members only, paginated). */
 groupsRoutes.get(
   '/:groupId/members',
   validate(groupIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await listGroupMembers(req.params.groupId, player.id));
+    res.json(await listGroupMembers(req.params.groupId, player.id, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 

@@ -84,7 +84,7 @@ missionsRoutes.get('/kinds', asyncHandler(async (_req, res) => {
   res.json(missionKindsCatalog());
 }));
 
-/** GET / — Browse missions: open (`available`/`active`) with a free slot, group-aware. */
+/** GET /?limit=&offset= — Browse missions: open (`available`/`active`) with a free slot, group-aware. */
 missionsRoutes.get(
   '/',
   validate(missionListQuery, 'query'),
@@ -113,9 +113,12 @@ missionsRoutes.get(
     ]);
     const viewerGroupId = groupMembership?.group.id ?? null;
     const viewerLocation = presence?.location ?? null;
-    res.json({
-      missions: await listMissions({ ...filters, viewerGroupId, viewerLocation }, Number(req.query.limit)),
-    });
+    const found = await listMissions(
+      { ...filters, viewerGroupId, viewerLocation },
+      Number(req.query.limit),
+      Number(req.query.offset),
+    );
+    res.json({ missions: found.items, total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
 

@@ -269,6 +269,7 @@ let deliveryObjectiveId;
 
   const list = await req('GET', '/api/missions', undefined, asPlayer(A));
   check('available missions listed for a player', list.json.missions?.some((m) => m.id === deliveryMissionId), true);
+  check('browse carries page bounds', [typeof list.json.total, typeof list.json.limit, typeof list.json.offset], ['number', 'number', 'number']);
 
   const detail = await req('GET', `/api/missions/${deliveryMissionId}`, undefined, asPlayer(A));
   check('mission detail exposes objectives', detail.json.objectives?.[0]?.targetQuantity, 10);
@@ -303,6 +304,7 @@ let deliveryObjectiveId;
 
   const mine = await req('GET', '/api/me/missions?status=completed', undefined, asPlayer(A));
   check('my completed missions', mine.json.missions?.some((m) => m.mission?.id === deliveryMissionId), true);
+  check('my missions are a page', [mine.json.total >= 1, typeof mine.json.limit, typeof mine.json.offset], [true, 'number', 'number']);
 
   const verify = await req('POST', `/api/missions/${deliveryMissionId}/verify`, undefined, asPlayer(A));
   check('verify endpoint (game kinds skipped)', [verify.status, verify.json.allComplete], [409, 'ASSIGNMENT_NOT_ACTIVE']);

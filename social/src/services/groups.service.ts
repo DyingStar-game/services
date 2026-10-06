@@ -19,6 +19,7 @@ import {
   type PresenceStatus,
 } from '../db/schema/index.js';
 import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { isBlockedEitherWay } from './blocks.service.js';
 import { getPresenceMap } from './presence.service.js';
@@ -245,27 +246,45 @@ export async function disbandGroup(groupId: string, actorId: string): Promise<vo
  * Members of a group with profile and presence (owner first, then oldest join).
  * @param groupId - Group id.
  * @param actorId - Acting member.
- * @returns Members.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of members.
  */
-export async function listGroupMembers(groupId: string, actorId: string): Promise<GroupMemberView[]> {
+export async function listGroupMembers(
+  groupId: string,
+  actorId: string,
+  limit: number,
+  offset: number,
+): Promise<Page<GroupMemberView>> {
   const { group } = await requireGroupMembership(groupId, actorId);
-  const rows = await db
-    .select({ profile: playerProfiles, member: groupMembers })
-    .from(groupMembers)
-    .innerJoin(playerProfiles, eq(playerProfiles.playerId, groupMembers.playerId))
-    .where(eq(groupMembers.groupId, groupId))
-    .orderBy(asc(groupMembers.joinedAt));
+  const condition = eq(groupMembers.groupId, groupId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(groupMembers).where(condition),
+    db
+      .select({ profile: playerProfiles, member: groupMembers })
+      .from(groupMembers)
+      .innerJoin(playerProfiles, eq(playerProfiles.playerId, groupMembers.playerId))
+      .where(condition)
+      .orderBy(asc(groupMembers.joinedAt), asc(groupMembers.playerId))
+      .limit(limit)
+      .offset(offset),
+  ]);
   const presence = await getPresenceMap(rows.map((r) => r.profile.playerId));
-  return rows.map((r) => {
-    const p = presence.get(r.profile.playerId);
-    return {
-      ...r.profile,
-      joinedAt: r.member.joinedAt,
-      isOwner: r.profile.playerId === group.ownerId,
-      status: p?.status ?? ('offline' as PresenceStatus),
-      location: p?.location ?? null,
-    };
-  });
+  return page(
+    rows.map((r) => {
+      const p = presence.get(r.profile.playerId);
+      return {
+        ...r.profile,
+        joinedAt: r.member.joinedAt,
+        isOwner: r.profile.playerId === group.ownerId,
+        status: p?.status ?? ('offline' as PresenceStatus),
+        location: p?.location ?? null,
+      };
+    }),
+    totalRow[0].total,
+    limit,
+    offset,
+  );
 }
 
 /**
@@ -380,24 +399,36 @@ export async function inviteGroupPlayer(groupId: string, actorId: string, player
 /**
  * Pending group invitations of a player.
  * @param playerId - Player id.
- * @returns Invitations with group refs.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of invitations with group refs.
  */
-export async function listPlayerGroupInvitations(playerId: string): Promise<PlayerGroupInvitationView[]> {
-  const rows = await db
-    .select({
-      invitation: groupInvitations,
-      group: {
-        id: groups.id,
-        name: groups.name,
-        description: groups.description,
-        maxMembers: groups.maxMembers,
-      },
-    })
-    .from(groupInvitations)
-    .innerJoin(groups, eq(groups.id, groupInvitations.groupId))
-    .where(eq(groupInvitations.playerId, playerId))
-    .orderBy(asc(groupInvitations.createdAt));
-  return rows.map((r) => ({ ...r.invitation, group: r.group }));
+export async function listPlayerGroupInvitations(
+  playerId: string,
+  limit: number,
+  offset: number,
+): Promise<Page<PlayerGroupInvitationView>> {
+  const condition = eq(groupInvitations.playerId, playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(groupInvitations).where(condition),
+    db
+      .select({
+        invitation: groupInvitations,
+        group: {
+          id: groups.id,
+          name: groups.name,
+          description: groups.description,
+          maxMembers: groups.maxMembers,
+        },
+      })
+      .from(groupInvitations)
+      .innerJoin(groups, eq(groups.id, groupInvitations.groupId))
+      .where(condition)
+      .orderBy(asc(groupInvitations.createdAt), asc(groupInvitations.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows.map((r) => ({ ...r.invitation, group: r.group })), totalRow[0].total, limit, offset);
 }
 
 /**

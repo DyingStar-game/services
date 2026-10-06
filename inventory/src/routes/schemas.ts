@@ -13,6 +13,7 @@ import {
   POI_OWNER_TYPES,
   POI_VISIBILITIES,
 } from '../db/schema/index.js';
+import { pageQuery } from '../lib/pagination.js';
 
 export const uuidSchema = z.string().uuid();
 
@@ -96,9 +97,11 @@ export const consumeHoldBody = z.object({
 
 export const holdIdParams = z.object({ holdId: uuidSchema });
 
-export const limitQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-});
+/**
+ * `?limit=&offset=` for list endpoints; the response is the envelope
+ * `{ items, total, limit, offset }` (see `lib/pagination.ts`).
+ */
+export const limitQuery = pageQuery;
 
 /** Bodies reused by player routes (holder derived from the JWT). */
 export const playerCreditBody = creditBody;

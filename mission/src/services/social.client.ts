@@ -163,7 +163,8 @@ async function fetchMappings<T>(playerId: string, corporationId?: string): Promi
  * @returns Corporation contexts.
  */
 export async function listPlayerCorporations(playerId: string): Promise<PlayerCorporation[]> {
-  return (await fetchMappings<PlayerCorporation[] | null>(playerId)) ?? [];
+  const page = await fetchMappings<{ items?: PlayerCorporation[] } | null>(playerId);
+  return page?.items ?? [];
 }
 
 /**

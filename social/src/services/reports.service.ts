@@ -1,7 +1,7 @@
 /**
  * Player and corporation reports, their moderation workflow and escalation.
  */
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
@@ -18,6 +18,7 @@ import {
   type ReportTargetType,
 } from '../db/schema/index.js';
 import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { requireCorporation } from './corporations.service.js';
 import { logModeration } from './moderationLog.service.js';
@@ -88,11 +89,17 @@ export async function createReport(
 /**
  * Reports filed by a player.
  * @param reporterId - Player id.
- * @param limit - Max rows.
- * @returns Reports, newest first.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of reports, newest first.
  */
-export async function listMyReports(reporterId: string, limit: number): Promise<Report[]> {
-  return db.select().from(reports).where(eq(reports.reporterId, reporterId)).orderBy(desc(reports.createdAt)).limit(limit);
+export async function listMyReports(reporterId: string, limit: number, offset: number): Promise<Page<Report>> {
+  const condition = eq(reports.reporterId, reporterId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(reports).where(condition),
+    db.select().from(reports).where(condition).orderBy(desc(reports.createdAt), desc(reports.id)).limit(limit).offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }
 
 async function toViews(rows: Report[]): Promise<ReportView[]> {
@@ -125,20 +132,31 @@ async function toViews(rows: Report[]): Promise<ReportView[]> {
 /**
  * Dashboard listing with optional filters.
  * @param filter - Status, escalation level, target player.
- * @param limit - Max rows.
- * @returns Report views, newest first.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of report views, newest first.
  */
 export async function listReports(
   filter: { status?: ReportStatus; escalation?: EscalationLevel; targetPlayerId?: string },
   limit: number,
-): Promise<ReportView[]> {
+  offset: number,
+): Promise<Page<ReportView>> {
   const conditions = [];
   if (filter.status) conditions.push(eq(reports.status, filter.status));
   if (filter.escalation) conditions.push(eq(reports.escalation, filter.escalation));
   if (filter.targetPlayerId) conditions.push(eq(reports.targetPlayerId, filter.targetPlayerId));
-  const query = db.select().from(reports);
-  const rows = await (conditions.length ? query.where(and(...conditions)) : query).orderBy(desc(reports.createdAt)).limit(limit);
-  return toViews(rows);
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(reports).where(condition),
+    db
+      .select()
+      .from(reports)
+      .where(condition)
+      .orderBy(desc(reports.createdAt), desc(reports.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(await toViews(rows), totalRow[0].total, limit, offset);
 }
 
 /**

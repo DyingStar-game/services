@@ -3,7 +3,7 @@
  * stored here — only who owns what and what is reserved. Transfers are only applied when
  * a trusted caller (game server, market, mission) reports that the exchange happened.
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
@@ -35,12 +35,18 @@ export interface StackView extends InventoryStack {
   available: number;
 }
 
-/** Full inventory of a holder. */
+/**
+ * Inventory of a holder. `stacks` is always complete (bounded by the good catalog);
+ * `instances` is a page (`instancesTotal` counts them all).
+ */
 export interface HolderInventory {
   holderType: HolderType;
   holderId: string;
   stacks: StackView[];
   instances: InventoryInstance[];
+  instancesTotal: number;
+  limit: number;
+  offset: number;
 }
 
 /**
@@ -94,24 +100,31 @@ async function isInstanceHeld(tx: Tx, instanceId: string): Promise<boolean> {
 }
 
 /**
- * Full inventory of a holder: stacks (with held/available) and owned instances.
+ * Inventory of a holder: all stacks (with held/available) plus a page of instances.
  * @param holder - Holder.
+ * @param limit - Page size for `instances`.
+ * @param offset - Instances to skip.
  * @returns Inventory.
  */
-export async function getHolderInventory(holder: Holder): Promise<HolderInventory> {
-  const [stacks, instances] = await Promise.all([
+export async function getHolderInventory(holder: Holder, limit: number, offset: number): Promise<HolderInventory> {
+  const instanceCondition = and(
+    eq(inventoryInstances.holderType, holder.holderType),
+    eq(inventoryInstances.holderId, holder.holderId),
+  );
+  const [stacks, instanceTotal, instances] = await Promise.all([
     db
       .select()
       .from(inventoryStacks)
       .where(and(eq(inventoryStacks.holderType, holder.holderType), eq(inventoryStacks.holderId, holder.holderId)))
       .orderBy(inventoryStacks.goodType),
+    db.select({ total: count() }).from(inventoryInstances).where(instanceCondition),
     db
       .select()
       .from(inventoryInstances)
-      .where(
-        and(eq(inventoryInstances.holderType, holder.holderType), eq(inventoryInstances.holderId, holder.holderId)),
-      )
-      .orderBy(inventoryInstances.createdAt),
+      .where(instanceCondition)
+      .orderBy(inventoryInstances.createdAt, inventoryInstances.id)
+      .limit(limit)
+      .offset(offset),
   ]);
 
   const views: StackView[] = [];
@@ -132,7 +145,15 @@ export async function getHolderInventory(holder: Holder): Promise<HolderInventor
     views.push({ ...stack, held: heldCount, available: stack.quantity - heldCount });
   }
 
-  return { holderType: holder.holderType, holderId: holder.holderId, stacks: views, instances };
+  return {
+    holderType: holder.holderType,
+    holderId: holder.holderId,
+    stacks: views,
+    instances,
+    instancesTotal: instanceTotal[0].total,
+    limit,
+    offset,
+  };
 }
 
 /**

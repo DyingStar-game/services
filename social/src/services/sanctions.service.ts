@@ -1,12 +1,13 @@
 /**
  * Sanctions: issue (manual or automatic), revoke, and query active ones.
  */
-import { and, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNull, or } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
 import { sanctions, type Sanction, type SanctionType } from '../db/schema/index.js';
 import { notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { logModeration } from './moderationLog.service.js';
 import { requireNotNpc, requireProfile } from './profiles.service.js';
@@ -113,16 +114,30 @@ export async function revokeSanction(sanctionId: number, actorId: string): Promi
 /**
  * Sanctions listing for the moderation dashboard.
  * @param filter - Optional player filter and active-only flag.
- * @param limit - Max rows.
- * @returns Sanctions, newest first.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of sanctions, newest first.
  */
-export async function listSanctions(filter: { playerId?: string; activeOnly: boolean }, limit: number): Promise<Sanction[]> {
+export async function listSanctions(
+  filter: { playerId?: string; activeOnly: boolean },
+  limit: number,
+  offset: number,
+): Promise<Page<Sanction>> {
   const conditions = [];
   if (filter.playerId) conditions.push(eq(sanctions.playerId, filter.playerId));
   if (filter.activeOnly) {
     conditions.push(isNull(sanctions.revokedAt), or(isNull(sanctions.expiresAt), gt(sanctions.expiresAt, new Date())));
   }
-  const query = db.select().from(sanctions);
-  const filtered = conditions.length ? query.where(and(...conditions)) : query;
-  return filtered.orderBy(desc(sanctions.createdAt)).limit(limit);
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(sanctions).where(condition),
+    db
+      .select()
+      .from(sanctions)
+      .where(condition)
+      .orderBy(desc(sanctions.createdAt), desc(sanctions.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
 }

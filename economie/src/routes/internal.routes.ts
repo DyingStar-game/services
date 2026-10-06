@@ -88,14 +88,14 @@ internalRoutes.get(
   }),
 );
 
-/** GET /players/:playerId/wallet/transactions?limit= — Player ledger. */
+/** GET /players/:playerId/wallet/transactions?limit=&offset= — Player ledger. */
 internalRoutes.get(
   '/players/:playerId/wallet/transactions',
   requireServiceRole(SERVICE_ROLES.walletRead),
   validate(playerIdParams, 'params'),
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listPlayerTransactions(req.params.playerId, Number(req.query.limit)));
+    res.json(await listPlayerTransactions(req.params.playerId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -161,14 +161,14 @@ internalRoutes.get(
   }),
 );
 
-/** GET /npcs/:npcId/wallet/transactions?limit= — NPC ledger. */
+/** GET /npcs/:npcId/wallet/transactions?limit=&offset= — NPC ledger. */
 internalRoutes.get(
   '/npcs/:npcId/wallet/transactions',
   requireServiceRole(SERVICE_ROLES.walletRead),
   validate(npcIdParams, 'params'),
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listNpcTransactions(req.params.npcId, Number(req.query.limit)));
+    res.json(await listNpcTransactions(req.params.npcId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -234,14 +234,14 @@ internalRoutes.get(
   }),
 );
 
-/** GET /corporations/:corporationId/wallet/transactions?limit= — Treasury ledger. */
+/** GET /corporations/:corporationId/wallet/transactions?limit=&offset= — Treasury ledger. */
 internalRoutes.get(
   '/corporations/:corporationId/wallet/transactions',
   requireServiceRole(SERVICE_ROLES.walletRead),
   validate(corporationIdParams, 'params'),
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listCorporationTransactions(req.params.corporationId, Number(req.query.limit)));
+    res.json(await listCorporationTransactions(req.params.corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -315,13 +315,14 @@ internalRoutes.delete(
   }),
 );
 
-/** GET /corporations/:corporationId/members — Treasury staff. */
+/** GET /corporations/:corporationId/members?limit=&offset= — Treasury staff. */
 internalRoutes.get(
   '/corporations/:corporationId/members',
   requireServiceRole(SERVICE_ROLES.corporationRead),
   validate(corporationIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listCorporationMembers(req.params.corporationId));
+    res.json(await listCorporationMembers(req.params.corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -381,14 +382,14 @@ internalRoutes.get(
   }),
 );
 
-/** GET /politics/:entityId/wallet/transactions?limit= — Treasury ledger. */
+/** GET /politics/:entityId/wallet/transactions?limit=&offset= — Treasury ledger. */
 internalRoutes.get(
   '/politics/:entityId/wallet/transactions',
   requireServiceRole(SERVICE_ROLES.politicsRead),
   validate(politicalEntityIdParams, 'params'),
   validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listPoliticalTransactions(req.params.entityId, Number(req.query.limit)));
+    res.json(await listPoliticalTransactions(req.params.entityId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
@@ -493,25 +494,27 @@ internalRoutes.delete(
   }),
 );
 
-/** GET /politics/:entityId/members — Treasury members. */
+/** GET /politics/:entityId/members?limit=&offset= — Treasury members. */
 internalRoutes.get(
   '/politics/:entityId/members',
   requireServiceRole(SERVICE_ROLES.politicsRead),
   validate(politicalEntityIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await listPoliticalMembers(req.params.entityId));
+    res.json(await listPoliticalMembers(req.params.entityId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
 
 // ── NPC taxes (game server) ──────────────────────────────────────────────────
 
-/** GET /npcs/:npcId/taxes — NPC tax debts. */
+/** GET /npcs/:npcId/taxes?limit=&offset= — NPC tax debts. */
 internalRoutes.get(
   '/npcs/:npcId/taxes',
   requireServiceRole(SERVICE_ROLES.politicsRead),
   validate(npcIdParams, 'params'),
+  validate(limitQuery, 'query'),
   asyncHandler(async (req, res) => {
-    res.json(await getTaxDebts('npc', req.params.npcId));
+    res.json(await getTaxDebts('npc', req.params.npcId, { limit: Number(req.query.limit), offset: Number(req.query.offset) }));
   }),
 );
 
