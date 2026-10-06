@@ -1,0 +1,6 @@
+# Context is `services/`: keep only what the weather image needs.
+*
+!weather/
+!resourcesDynamic/data/system/
+weather/target/
+weather/.git/

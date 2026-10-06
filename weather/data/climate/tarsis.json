@@ -1,0 +1,46 @@
+{
+  "_comment": "Climate knobs the celestial data does not carry, by body name as in tarsis.json. Any field may be omitted (defaults: quartz sand 2650 kg/m3, 100 um grains, lift bias 0.5, thermal inertia 300 TIU, no condensable volatiles, wind cap 60 m/s, dust tau cap 10, roughness 1e-4 m). Sources: GDD worldbuilding pages and the 2026-10-06 weather R&D (.claude-docs/rapports/2026-10-06-meteo).",
+
+  "SandBox": {
+    "weather_seed": 20261006,
+    "dust_grain_density_kg_m3": 4000.0,
+    "dust_grain_diameter_m": 0.0001,
+    "dust_lift_bias": 0.9,
+    "thermal_inertia_tiu": 120.0,
+    "humidity_inventory": 0.0,
+    "wind_scale_max_ms": 45.0,
+    "dust_tau_max": 8.0
+  },
+  "Gaea": {
+    "dust_grain_density_kg_m3": 2650.0,
+    "dust_lift_bias": 0.3,
+    "thermal_inertia_tiu": 2000.0,
+    "humidity_inventory": 0.8,
+    "wind_scale_max_ms": 50.0,
+    "dust_tau_max": 3.0
+  },
+  "Tarsis 1": {
+    "dust_grain_density_kg_m3": 3000.0,
+    "dust_lift_bias": 0.4,
+    "thermal_inertia_tiu": 800.0
+  },
+  "Tarsis 2": {
+    "dust_grain_density_kg_m3": 3000.0,
+    "dust_lift_bias": 0.7,
+    "thermal_inertia_tiu": 250.0,
+    "dust_tau_max": 6.0
+  },
+  "Tarsis 5": { "weather_enabled": false },
+  "Tarsis 6": { "weather_enabled": false },
+  "Tarsis 7": {
+    "dust_grain_density_kg_m3": 1500.0,
+    "dust_lift_bias": 0.6,
+    "thermal_inertia_tiu": 400.0,
+    "humidity_inventory": 0.2
+  },
+  "Tarsis 8": {
+    "dust_grain_density_kg_m3": 4000.0,
+    "dust_lift_bias": 0.8,
+    "thermal_inertia_tiu": 150.0
+  }
+}

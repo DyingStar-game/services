@@ -1,0 +1,27 @@
+[package]
+name = "weather-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DyingStar weather service: replayable planetary weather, published to Horizon through ds_bridge, with an HTTP map API"
+
+[[bin]]
+name = "weather"
+path = "src/main.rs"
+
+[dependencies]
+weather-core = { path = "../weather-core" }
+ds-weather-proto = { path = "../ds-weather-proto" }
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+prometheus = { version = "0.13", features = ["process"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+anyhow = "1"
+dotenvy = "0.15"
+ureq = { version = "2", default-features = false, features = ["json"] }
+futures = "0.3"
+uuid = { version = "1", features = ["v5"] }
