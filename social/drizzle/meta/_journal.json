@@ -5,43 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1790363428766,
-      "tag": "0000_nervous_typhoid_mary",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1790972889872,
-      "tag": "0001_mysterious_wildside",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1790976940166,
-      "tag": "0002_square_selene",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1791033828469,
-      "tag": "0003_yielding_phalanx",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1791035465184,
-      "tag": "0004_tiresome_fallen_one",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1791118032969,
-      "tag": "0005_zippy_iron_monger",
+      "when": 1791321408010,
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

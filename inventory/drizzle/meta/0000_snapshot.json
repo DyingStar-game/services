@@ -1,5 +1,5 @@
 {
-  "id": "4ca016e4-af54-4bbe-861a-ed5897e2beb8",
+  "id": "a2f1782b-9f3e-4793-83d6-6e370856b388",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -413,6 +413,297 @@
         "inventory_holds_kind_consistent": {
           "name": "inventory_holds_kind_consistent",
           "value": "(\"inventory_holds\".\"kind\" = 'instance' and \"inventory_holds\".\"instance_id\" is not null) or (\"inventory_holds\".\"kind\" = 'stack' and \"inventory_holds\".\"instance_id\" is null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.inventory_poi_shares": {
+      "name": "inventory_poi_shares",
+      "schema": "",
+      "columns": {
+        "poi_id": {
+          "name": "poi_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grantee_type": {
+          "name": "grantee_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grantee_id": {
+          "name": "grantee_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shared_by": {
+          "name": "shared_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "inventory_poi_shares_grantee_idx": {
+          "name": "inventory_poi_shares_grantee_idx",
+          "columns": [
+            {
+              "expression": "grantee_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "grantee_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "inventory_poi_shares_poi_id_inventory_pois_id_fk": {
+          "name": "inventory_poi_shares_poi_id_inventory_pois_id_fk",
+          "tableFrom": "inventory_poi_shares",
+          "tableTo": "inventory_pois",
+          "columnsFrom": [
+            "poi_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "inventory_poi_shares_poi_id_grantee_type_grantee_id_pk": {
+          "name": "inventory_poi_shares_poi_id_grantee_type_grantee_id_pk",
+          "columns": [
+            "poi_id",
+            "grantee_type",
+            "grantee_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "inventory_poi_shares_grantee_type_valid": {
+          "name": "inventory_poi_shares_grantee_type_valid",
+          "value": "\"inventory_poi_shares\".\"grantee_type\" in ('player','npc','corporation','political')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.inventory_pois": {
+      "name": "inventory_pois",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "owner_type": {
+          "name": "owner_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "system": {
+          "name": "system",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scene": {
+          "name": "scene",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parent_id": {
+          "name": "parent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "x": {
+          "name": "x",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "y": {
+          "name": "y",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "z": {
+          "name": "z",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "radius_m": {
+          "name": "radius_m",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'private'"
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "inventory_pois_owner_idx": {
+          "name": "inventory_pois_owner_idx",
+          "columns": [
+            {
+              "expression": "owner_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inventory_pois_system_idx": {
+          "name": "inventory_pois_system_idx",
+          "columns": [
+            {
+              "expression": "system",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inventory_pois_scene_idx": {
+          "name": "inventory_pois_scene_idx",
+          "columns": [
+            {
+              "expression": "scene",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inventory_pois_visibility_idx": {
+          "name": "inventory_pois_visibility_idx",
+          "columns": [
+            {
+              "expression": "visibility",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "inventory_pois_owner_type_valid": {
+          "name": "inventory_pois_owner_type_valid",
+          "value": "\"inventory_pois\".\"owner_type\" in ('player','npc','corporation','political','system')"
+        },
+        "inventory_pois_radius_valid": {
+          "name": "inventory_pois_radius_valid",
+          "value": "\"inventory_pois\".\"radius_m\" is null or \"inventory_pois\".\"radius_m\" >= 0"
+        },
+        "inventory_pois_visibility_valid": {
+          "name": "inventory_pois_visibility_valid",
+          "value": "\"inventory_pois\".\"visibility\" in ('private','public')"
+        },
+        "inventory_pois_name_not_empty": {
+          "name": "inventory_pois_name_not_empty",
+          "value": "length(btrim(\"inventory_pois\".\"name\")) > 0"
         }
       },
       "isRLSEnabled": false

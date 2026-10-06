@@ -5,36 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1790365490869,
-      "tag": "0000_zippy_moondragon",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1790621072125,
-      "tag": "0001_soft_revanche",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1791025316655,
-      "tag": "0002_rapid_darkhawk",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1791032174376,
-      "tag": "0003_curious_ricochet",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1791035402448,
-      "tag": "0004_daily_dark_phoenix",
+      "when": 1791321400206,
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

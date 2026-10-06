@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1791027129528,
-      "tag": "0000_flaky_karen_page",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1791304513034,
-      "tag": "0001_chief_lorna_dane",
+      "when": 1791321406959,
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

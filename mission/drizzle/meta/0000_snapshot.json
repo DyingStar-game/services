@@ -1,5 +1,5 @@
 {
-  "id": "835db0ce-250c-4e3e-9cd4-8eec3ea322aa",
+  "id": "f889fe96-cce6-4506-b0b2-03cc5d472a6b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -289,6 +289,13 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "escrow_payer_type": {
+          "name": "escrow_payer_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'player'"
         },
         "escrow_external_id": {
           "name": "escrow_external_id",

@@ -54,7 +54,6 @@ async function start(): Promise<void> {
     process.exit(1);
   }
   await runMigrations();
-  console.log('Database migrations applied');
 
   if (env.authDevBypass) {
     console.warn('AUTH_DEV_BYPASS is enabled: X-Player-Id headers are trusted without a JWT');

@@ -38,6 +38,7 @@ CREATE TABLE "missions" (
 	"escrow_amount" integer,
 	"escrow_currency" text,
 	"escrow_payer_id" uuid,
+	"escrow_payer_type" text DEFAULT 'player' NOT NULL,
 	"escrow_external_id" text,
 	"escrow_item_status" text DEFAULT 'none' NOT NULL,
 	"escrow_item_hold_ids" jsonb,
