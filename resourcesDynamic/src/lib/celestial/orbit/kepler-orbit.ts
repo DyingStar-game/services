@@ -126,11 +126,17 @@ export class KeplerOrbit {
     incRad: number,
     nodeRad: number,
   ): Basis3D {
+    // Ry(Ω) · Rx(i) · Ry(ω): the textbook Rz(Ω)·Rx(i)·Rz(ω) with the up axis renamed, because the
+    // reference plane is XZ and its north is +Y — the axis every body spins about (rotation-quaternion.ts),
+    // so a tilt below 90° is a prograde rotation. rotated() PRE-multiplies, hence ω first, Ω last.
+    // The game's kepler_orbit.gd is the twin of this function; both are pinned by the same closed-form
+    // test (kepler-orbit.test.ts / test_kepler_orbit.gd).
+    // Until 2026-10-06 the node and the periapsis were turned about Z, an axis lying IN the XZ plane,
+    // which tipped every orbit out of the ecliptic by Ω + ω (Tarsis 1 orbited in a vertical plane).
     let b = Basis3D.identity();
-    // Rotation sequence: Rz(Ω) * Rx(i) * Rz(ω)
-    b = b.rotated({ x: 0, y: 0, z: 1 }, nodeRad);
+    b = b.rotated({ x: 0, y: 1, z: 0 }, argPeriRad);
     b = b.rotated({ x: 1, y: 0, z: 0 }, incRad);
-    b = b.rotated({ x: 0, y: 0, z: 1 }, argPeriRad);
+    b = b.rotated({ x: 0, y: 1, z: 0 }, nodeRad);
     return b;
   }
 
@@ -158,7 +164,9 @@ export class KeplerOrbit {
   private keplerPositionPlane(a: number, e: number, M: number): Vector3Type {
     const E = this.solveKeplerEquation(M, e);
     const xp = a * (Math.cos(E) - e);
-    const zp = a * Math.sqrt(Math.max(1.0 - e * e, 0)) * Math.sin(E);
+    // -sin: from +X toward -Z is the positive turn about +Y, so the orbit runs COUNTER-CLOCKWISE seen
+    // from +Y, the sense a body spins in (angular momentum along +Y). It ran clockwise until 2026-10-06.
+    const zp = -a * Math.sqrt(Math.max(1.0 - e * e, 0)) * Math.sin(E);
     return { x: xp, y: 0, z: zp };
   }
 
