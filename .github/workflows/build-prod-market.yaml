@@ -1,0 +1,37 @@
+name: "Build Production Image: market"
+
+on:
+  push:
+    tags:
+      - "market-v*"
+
+jobs:
+  extract-version:
+    name: Extract version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Extract version
+        id: tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#market-}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build market (prod)
+    needs: extract-version
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: market
+      context_path: market
+      dockerfile_path: market/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/market
+      image_tag: ${{ needs.extract-version.outputs.version }}
+      additional_tags: latest
+      chart_name: service-market
+      trigger_preprod_deploy: false
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}

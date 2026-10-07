@@ -1,0 +1,18 @@
+name: "PR Build Check: market"
+
+on:
+  pull_request:
+    paths:
+      - "market/**"
+
+jobs:
+  build:
+    name: Build market (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: market
+      context_path: market
+      dockerfile_path: market/docker/Dockerfile
+      image_name: local/market
+      image_tag: pr-check
+      push: false
