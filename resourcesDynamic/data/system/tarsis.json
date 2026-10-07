@@ -560,7 +560,7 @@
           "Uranium": null,
           "Zinc": null
         },
-        "density_kg_m3": 5200,
+        "density_kg_m3": 4375,
         "eccentricity": 0.03,
         "inclination_deg": 1.5,
         "mass_Me": 0.788,
@@ -799,7 +799,7 @@
         "orbit_center": "primary",
         "periapsis_AU": 0.5335,
         "period_days": 171.05,
-        "radius_Re": 0.941,
+        "radius_Re": 0.998,
         "radius_km": 6356,
         "resources": {
           "Aluminium": null,
