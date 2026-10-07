@@ -26,7 +26,7 @@ ENV KC_DB=postgres \
 COPY --from=download /home/curl_user/download/keycloak-discord-1.3.1.jar /opt/keycloak/providers/keycloak-discord-1.3.1.jar
 
 # Pre-build the optimized server distribution.
-RUN /opt/keycloak/bin/kc.sh build
+RUN /opt/keycloak/bin/kc.sh build --features=client-admin-api:v2
 
 FROM quay.io/keycloak/keycloak:${KEYCLOAK_VERSION}
 
