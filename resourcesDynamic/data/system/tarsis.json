@@ -1478,7 +1478,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2520,
+            "density_kg_m3": 3511,
             "eccentricity": 0.0,
             "inclination_deg": 2.73,
             "index": 3,
@@ -1600,7 +1600,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 1930,
+            "density_kg_m3": 1170,
             "eccentricity": 0.0,
             "inclination_deg": 3.7,
             "index": 4,
@@ -1719,7 +1719,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2200,
+            "density_kg_m3": 2693,
             "eccentricity": 0.0,
             "inclination_deg": 1.7,
             "index": 5,
@@ -1841,7 +1841,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2550,
+            "density_kg_m3": 1900,
             "eccentricity": 0.0,
             "inclination_deg": 1.92,
             "index": 6,
@@ -2052,7 +2052,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2630,
+            "density_kg_m3": 1902,
             "eccentricity": 0.0,
             "inclination_deg": -3.03,
             "index": 1,
@@ -2174,7 +2174,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2930,
+            "density_kg_m3": 3484,
             "eccentricity": 0.0,
             "inclination_deg": 2.77,
             "index": 2,
