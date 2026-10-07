@@ -1,0 +1,346 @@
+/**
+ * Corporate treasury: members and their roles (leader / treasurer / member), the
+ * configurable internal tax and donations from members. Membership is keyed on the
+ * opaque `corporationId` shared with the Social service.
+ */
+import { and, count, desc, eq, gte, inArray, lte, or } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
+
+import { env } from '../config/env.js';
+import { db } from '../db/connection.js';
+import {
+  corporationMembers,
+  corporationSettings,
+  transactions,
+  type CorporationMember,
+  type CorporationMemberHolderType,
+  type CorporationRole,
+  type CorporationSettings,
+  type Transaction,
+} from '../db/schema/index.js';
+import { HttpError } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
+import {
+  ensureAccount,
+  ensureCorporationAccount,
+  ensurePlayerAccount,
+  getCorporationAccounts,
+} from './accounts.service.js';
+import { authorizeAction, isSocialConfigured } from './social.client.js';
+import { transfer, type MovementResult } from './transactions.service.js';
+
+const ROLE_RANK: Record<CorporationRole, number> = { member: 1, treasurer: 2, leader: 3 };
+
+/**
+ * Whether a membership grants at least `min` role (leader > treasurer > member).
+ * @param member - Current membership.
+ * @param min - Minimum required role.
+ * @returns True when allowed.
+ */
+export function hasCorporationRole(member: CorporationMember, min: CorporationRole): boolean {
+  return ROLE_RANK[member.role] >= ROLE_RANK[min];
+}
+
+/**
+ * Fetches a player's membership in a corporation.
+ * @param corporationId - Corporation id.
+ * @param playerId - Player id.
+ * @returns Membership, or null.
+ */
+export async function getCorporationMember(
+  corporationId: string,
+  playerId: string,
+): Promise<CorporationMember | null> {
+  const rows = await db
+    .select()
+    .from(corporationMembers)
+    .where(and(eq(corporationMembers.corporationId, corporationId), eq(corporationMembers.playerId, playerId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Requires a membership, else throws 403.
+ * @param corporationId - Corporation id.
+ * @param playerId - Player id.
+ * @returns Membership.
+ */
+export async function requireCorporationMember(
+  corporationId: string,
+  playerId: string,
+): Promise<CorporationMember> {
+  const member = await getCorporationMember(corporationId, playerId);
+  if (!member) throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'You are not a member of this corporation');
+  return member;
+}
+
+/**
+ * Requires a membership holding at least `min`.
+ * @param corporationId - Corporation id.
+ * @param playerId - Player id.
+ * @param min - Minimum role.
+ * @returns Membership.
+ */
+export async function requireCorporationRole(
+  corporationId: string,
+  playerId: string,
+  min: CorporationRole,
+): Promise<CorporationMember> {
+  const member = await requireCorporationMember(corporationId, playerId);
+  if (!hasCorporationRole(member, min)) {
+    throw new HttpError(403, 'FORBIDDEN', t('corp.requires_role', { min }));
+  }
+  return member;
+}
+
+/** Catalogued action gating every corporate-treasury operation of this service. */
+export const TREASURY_ACTION = 'economie:treasury:manage';
+
+/**
+ * Requires the `economie:treasury:manage` action on the corporation, decided by Social
+ * (only the CEO passes implicitly: the action has no legacy fallback, so a rank must
+ * grant it explicitly). The local leader/treasurer mirror is not consulted — it stays the
+ * source of truth for salaries and holder types only.
+ * @param corporationId - Corporation id.
+ * @param playerId - Acting player.
+ * @throws 503 when Social is unavailable, 403 `NOT_CORPORATION_MEMBER` / `FORBIDDEN`.
+ */
+export async function requireTreasuryPermission(corporationId: string, playerId: string): Promise<void> {
+  if (!isSocialConfigured()) {
+    // Local dev without Social: trust the authenticated player.
+    if (env.authDevBypass) return;
+    throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
+  }
+  const decision = await authorizeAction({
+    holderType: 'corporation',
+    holderId: corporationId,
+    playerId,
+    action: TREASURY_ACTION,
+  });
+  if (decision.allowed) return;
+  if (decision.reason === 'not_member') {
+    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'You are not a member of this corporation');
+  }
+  throw new HttpError(403, 'FORBIDDEN', t('corp.requires_permission', { action: TREASURY_ACTION }));
+}
+
+/**
+ * Sets (add or update) a member with a role.
+ * @param corporationId - Corporation id.
+ * @param playerId - Player or NPC id.
+ * @param role - Role to grant.
+ * @param holderType - Whether the member is a player or an NPC (defaults to player).
+ * @returns The membership.
+ */
+export async function setCorporationMember(
+  corporationId: string,
+  playerId: string,
+  role: CorporationRole,
+  holderType: CorporationMemberHolderType = 'player',
+): Promise<CorporationMember> {
+  const [row] = await db
+    .insert(corporationMembers)
+    .values({ corporationId, playerId, role, holderType })
+    .onConflictDoUpdate({
+      target: [corporationMembers.corporationId, corporationMembers.playerId],
+      set: { role, holderType },
+    })
+    .returning();
+  return row;
+}
+
+/**
+ * Removes a member from a corporation's treasury.
+ * @param corporationId - Corporation id.
+ * @param playerId - Player id.
+ */
+export async function removeCorporationMember(corporationId: string, playerId: string): Promise<void> {
+  await db
+    .delete(corporationMembers)
+    .where(and(eq(corporationMembers.corporationId, corporationId), eq(corporationMembers.playerId, playerId)));
+}
+
+/**
+ * Members of a corporation, ordered by role then join date.
+ * @param corporationId - Corporation id.
+ * @param limit - Max members in the page.
+ * @param offset - Members to skip.
+ * @returns Page of members.
+ */
+export async function listCorporationMembers(corporationId: string, limit: number, offset: number): Promise<Page<CorporationMember>> {
+  const condition = eq(corporationMembers.corporationId, corporationId);
+  const [items, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(corporationMembers)
+      .where(condition)
+      .orderBy(corporationMembers.role, corporationMembers.joinedAt, corporationMembers.playerId)
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(corporationMembers).where(condition),
+  ]);
+  return page(items, totalRows[0]?.total ?? 0, limit, offset);
+}
+
+/**
+ * Returns the corporation's economic settings, creating the default row on first contact.
+ * @param corporationId - Corporation id.
+ * @returns Settings.
+ */
+export async function getCorporationSettings(corporationId: string): Promise<CorporationSettings> {
+  const existing = await db
+    .select()
+    .from(corporationSettings)
+    .where(eq(corporationSettings.corporationId, corporationId))
+    .limit(1);
+  if (existing[0]) return existing[0];
+  const [created] = await db
+    .insert(corporationSettings)
+    .values({ corporationId })
+    .onConflictDoNothing()
+    .returning();
+  if (created) return created;
+  const raced = await db
+    .select()
+    .from(corporationSettings)
+    .where(eq(corporationSettings.corporationId, corporationId))
+    .limit(1);
+  return raced[0];
+}
+
+/**
+ * Updates the internal tax rate and/or donation policy.
+ * @param corporationId - Corporation id.
+ * @param patch - Fields to change.
+ * @returns Updated settings.
+ */
+export async function updateCorporationSettings(
+  corporationId: string,
+  patch: { taxRateBps?: number; allowDonations?: boolean; politicalEntityId?: string | null },
+): Promise<CorporationSettings> {
+  const [updated] = await db
+    .update(corporationSettings)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(eq(corporationSettings.corporationId, corporationId))
+    .returning();
+  return updated;
+}
+
+/**
+ * Donation from a member's wallet to the corporation treasury. The configured internal
+ * tax is deducted from the payer and stays within the corporation account.
+ * @param fromPlayerId - Donor player id (must be a member).
+ * @param corporationId - Corporation id.
+ * @param amount - Amount in minor units.
+ * @param memo - Optional note.
+ * @returns The ledger row and balances.
+ */
+export async function donate(
+  fromPlayerId: string,
+  corporationId: string,
+  amount: number,
+  memo?: string,
+): Promise<MovementResult> {
+  await requireCorporationMember(corporationId, fromPlayerId);
+  const settings = await getCorporationSettings(corporationId);
+  if (!settings.allowDonations) {
+    throw new HttpError(403, 'DONATIONS_DISABLED', 'Donations are disabled for this corporation');
+  }
+  const [fromAccount, toAccount] = await Promise.all([
+    ensurePlayerAccount(fromPlayerId),
+    ensureCorporationAccount(corporationId),
+  ]);
+  return transfer({
+    fromAccountId: fromAccount.id,
+    toAccountId: toAccount.id,
+    amount,
+    type: 'donation',
+    taxBps: settings.taxRateBps,
+    taxToAccountId: toAccount.id,
+    reference: memo ? 'member_donation' : undefined,
+    details: memo ? { memo } : undefined,
+  });
+}
+
+/** Totals per currency over a report period. */
+export interface CorporationTotals {
+  currency: string;
+  inflow: number;
+  outflow: number;
+}
+
+/** Per-direction breakdown tracked for the report. */
+interface DirectionBucket {
+  count: number;
+  inflow: number;
+  outflow: number;
+}
+
+/** Financial report of a corporation: inflow/outflow totals and a breakdown by type. */
+export interface CorporationReport {
+  corporationId: string;
+  from?: Date;
+  to?: Date;
+  totals: CorporationTotals[];
+  byType: { type: string; currency: string; count: number; inflow: number; outflow: number }[];
+}
+
+/**
+ * Builds the treasury report over every account of the corporation (all currencies).
+ * Inflow counts the credited amount (plus any tax routed back to the corporation),
+ * outflow the full amount debited from the corporation (tax included).
+ * @param corporationId - Corporation id.
+ * @param from - Start of the period (inclusive).
+ * @param to - End of the period (inclusive).
+ * @returns Aggregated report.
+ */
+export async function getCorporationReport(
+  corporationId: string,
+  from?: Date,
+  to?: Date,
+): Promise<CorporationReport> {
+  const corporationAccounts = await getCorporationAccounts(corporationId);
+  const ids = corporationAccounts.map((a) => a.id);
+  if (ids.length === 0) return { corporationId, from, to, totals: [], byType: [] };
+
+  const conditions = [or(inArray(transactions.toAccountId, ids), inArray(transactions.fromAccountId, ids))];
+  if (from) conditions.push(gte(transactions.createdAt, from));
+  if (to) conditions.push(lte(transactions.createdAt, to));
+
+  const rows = await db
+    .select()
+    .from(transactions)
+    .where(and(...conditions))
+    .orderBy(desc(transactions.createdAt));
+
+  /** True when the collected tax of this row was routed back to the corporation account. */
+  function taxStayed(row: Transaction): boolean {
+    return row.details?.taxTo === row.toAccountId;
+  }
+
+  const byType = new Map<string, DirectionBucket>();
+  const byCurrency = new Map<string, DirectionBucket>();
+  const bump = (map: Map<string, DirectionBucket>, key: string, inflow: number, outflow: number) => {
+    const bucket = map.get(key) ?? { count: 0, inflow: 0, outflow: 0 };
+    bucket.count += 1;
+    bucket.inflow += inflow;
+    bucket.outflow += outflow;
+    map.set(key, bucket);
+  };
+
+  for (const row of rows) {
+    const inflow = row.toAccountId && ids.includes(row.toAccountId) ? row.amount + (taxStayed(row) ? row.taxAmount : 0) : 0;
+    const outflow = row.fromAccountId && ids.includes(row.fromAccountId) ? row.amount + row.taxAmount : 0;
+    if (inflow > 0 || outflow > 0) {
+      bump(byType, `${row.type}|${row.currency}`, inflow, outflow);
+      bump(byCurrency, row.currency, inflow, outflow);
+    }
+  }
+
+  const totals = [...byCurrency.entries()].map(([currency, b]) => ({ currency, inflow: b.inflow, outflow: b.outflow }));
+  const typeRows = [...byType.entries()].map(([key, b]) => {
+    const [type, currency] = key.split('|');
+    return { type, currency, count: b.count, inflow: b.inflow, outflow: b.outflow };
+  });
+  return { corporationId, from, to, totals, byType: typeRows };
+}

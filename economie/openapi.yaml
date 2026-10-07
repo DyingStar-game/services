@@ -1,0 +1,1914 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Economie API
+  version: 0.1.0
+  description: >
+    Economy API of DyingStar: per-player and per-corporation wallet accounts, direct
+    transfers with automatic taxes, corporate treasuries and financial reports.
+
+    Three kinds of callers:
+
+    * **Players** send a Keycloak JWT (`Authorization: Bearer`). The player id is
+      the `sub` claim. With `AUTH_DEV_BYPASS=true` (never in production) the
+      `X-Player-Id` / `X-Player-Name` / `X-Player-Roles` headers are accepted instead.
+    * **The game server** and trusted services authenticate with a Keycloak
+      service-account token (`client_credentials`, `Authorization: Bearer`) whose
+      `azp` is an allowed client and whose `aud` targets `economie-api`. Each
+      `/api/internal/*` route requires a capability role (e.g.
+      `economie:wallet:credit`). Membership of corporations and their roles are
+      pushed through this channel (mirrors the Social service). Dev only
+      (`INTERNAL_DEV_BYPASS=true`): the legacy `X-Internal-Key` header is accepted.
+
+    Amounts are integer minor units (crédits). A holder owns one account per currency
+    (`credits` is the universal currency). Every error is
+    `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+
+    Language: every response honours the standard `Accept-Language: fr|en` header
+    (default `en`) for error messages; zod validation messages stay in English.
+    Technical identifiers (codes, kind names, fields, `{params}`) are never translated.
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: public
+    description: Unauthenticated endpoints
+  - name: me
+    description: The authenticated player's own wallet and ledger
+  - name: transfers
+    description: Direct player-to-player transfers (automatic tax)
+  - name: corporations
+    description: Corporate treasuries, members, donations, payroll and financial reports
+  - name: politics
+    description: Political treasuries, tax debts and currency issuance
+  - name: admin
+    description: Admin/moderation dashboard analytics (requires role `moderator` at least)
+  - name: internal
+    description: Game-server integration (Keycloak service accounts, capability roles)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ── Public ─────────────────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [public]
+      summary: Liveness check
+      responses:
+        '200':
+          description: API is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: economie }
+                  version: { type: string, example: 0.1.0 }
+
+  /openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document (alias under /api)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  # ── Me (own wallet) ────────────────────────────────────────────────────────
+  /api/me/wallet:
+    get:
+      tags: [me]
+      summary: All wallet accounts of the caller (one per currency, `credits` auto-created)
+      responses:
+        '200':
+          description: Wallet accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/me/wallet/transactions:
+    get:
+      tags: [me]
+      summary: Ledger of the caller across all currencies
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Transactions, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TransactionPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Transfers ──────────────────────────────────────────────────────────────
+  /api/transfers:
+    post:
+      tags: [transfers]
+      summary: Direct credits transfer to another player (automatic tax, payer side)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferBody' }
+      responses:
+        '201':
+          description: Transfer recorded (a tax may have been collected)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Insufficient balance or already recorded `externalId` (`INSUFFICIENT_FUNDS` / `DUPLICATE_EXTERNAL_ID`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ── Corporations ───────────────────────────────────────────────────────────
+  /api/corporations/{corporationId}/wallet:
+    get:
+      tags: [corporations]
+      summary: Treasury accounts (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Corporation treasury accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corporationId, accounts]
+                properties:
+                  corporationId: { type: string, format: uuid }
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not a member of this corporation (`NOT_CORPORATION_MEMBER`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/wallet/transactions:
+    get:
+      tags: [corporations]
+      summary: Treasury ledger (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Corporation ledger across currencies
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TransactionPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/members:
+    get:
+      tags: [corporations]
+      summary: Treasury staff and roles (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Corporation treasury members
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationMemberPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/report:
+    get:
+      tags: [corporations]
+      summary: Financial report (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+      responses:
+        '200':
+          description: Totals and breakdown by transaction type and currency
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationReport' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/donations:
+    post:
+      tags: [corporations]
+      summary: Donate credits from the member's wallet to the treasury
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DonationBody' }
+      responses:
+        '201':
+          description: Donation recorded (internal tax stays in the corporation)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not a member, or donations disabled (`DONATIONS_DISABLED`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Payroll (salaries & primes) ────────────────────────────────────────────
+  /api/corporations/{corporationId}/salaries:
+    get:
+      tags: [corporations]
+      summary: Role defaults and per-member salary overrides (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Salary configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSalaries' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/salaries/roles/{role}:
+    put:
+      tags: [corporations]
+      summary: Set the default salary for a role (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/role'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SalaryBody' }
+      responses:
+        '200':
+          description: Stored role salary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSalaryRole' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/salaries/members/{playerId}:
+    put:
+      tags: [corporations]
+      summary: Set a per-member salary override (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SalaryBody' }
+      responses:
+        '200':
+          description: Stored member salary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationMemberSalary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: The player is not a member of this corporation (`NOT_FOUND`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [corporations]
+      summary: Remove a per-member salary override (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Override removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/payroll:
+    post:
+      tags: [corporations]
+      summary: Pay every member's salary now from the treasury (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/currencyQuery'
+      responses:
+        '200':
+          description: Payout summary (atomic, aborted if the treasury is short)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PayrollResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Treasury balance too low for the whole run (`INSUFFICIENT_FUNDS`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/corporations/{corporationId}/members/{playerId}/prime:
+    post:
+      tags: [corporations]
+      summary: Pay a one-off prime to a member from the treasury (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrimeBody' }
+      responses:
+        '201':
+          description: Prime recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrimeResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: The player is not a member of this corporation (`NOT_FOUND`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Admin dashboard ────────────────────────────────────────────────────────
+  /api/admin/stats:
+    get:
+      tags: [admin]
+      summary: Economic analytics for the admin dashboard (role `moderator` at least)
+      parameters:
+        - $ref: '#/components/parameters/days'
+        - $ref: '#/components/parameters/top'
+      responses:
+        '200':
+          description: Money supply, transaction volume, rankings and daily series
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EconomyStats' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Missing `moderator` role (`FORBIDDEN`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/players:
+    get:
+      tags: [admin]
+      summary: Search players by pseudonym, with their wallet balances (role `moderator` at least)
+      description: >
+        Pseudonyms live in the Social service; this resolves the search through Social's
+        internal API and attaches each player's Economy wallet accounts. Returns an empty
+        array when the Social integration is not configured.
+      parameters:
+        - name: search
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Matching players with their wallet accounts
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AdminPlayerPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Missing `moderator` role (`FORBIDDEN`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: The Social lookup failed (`SOCIAL_LOOKUP_FAILED`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ── Internal (game server) ─────────────────────────────────────────────────
+  /api/internal/players/{playerId}/wallet:
+    put:
+      tags: [internal]
+      summary: Ensure the player's `credits` account exists (login)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: The `credits` account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    get:
+      tags: [internal]
+      summary: List the player's accounts
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Player accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/wallet/transactions:
+    get:
+      tags: [internal]
+      summary: Player ledger
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Transactions, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TransactionPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/wallet/credit:
+    post:
+      tags: [internal]
+      summary: Credit the player's wallet (mission reward, salary, etc.)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/wallet/debit:
+    post:
+      tags: [internal]
+      summary: Debit the player's wallet (rejected when balance is insufficient)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/npcs/{npcId}/wallet:
+    put:
+      tags: [internal]
+      summary: Ensure the NPC's `credits` account exists
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/npcId'
+      responses:
+        '200':
+          description: The `credits` account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    get:
+      tags: [internal]
+      summary: List the NPC's accounts
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/npcId'
+      responses:
+        '200':
+          description: NPC accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/npcs/{npcId}/wallet/transactions:
+    get:
+      tags: [internal]
+      summary: NPC ledger
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/npcId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Transactions, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TransactionPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/npcs/{npcId}/wallet/credit:
+    post:
+      tags: [internal]
+      summary: Credit the NPC's wallet (salary, prime, sale, etc.)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/npcId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/npcs/{npcId}/wallet/debit:
+    post:
+      tags: [internal]
+      summary: Debit the NPC's wallet (rejected when balance is insufficient)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/npcId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/corporations/{corporationId}/wallet:
+    put:
+      tags: [internal]
+      summary: Ensure the corporation's `credits` treasury account exists
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: The `credits` treasury account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    get:
+      tags: [internal]
+      summary: List the corporation's treasury accounts
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Treasury accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/corporations/{corporationId}/wallet/transactions:
+    get:
+      tags: [internal]
+      summary: Treasury ledger
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Corporation ledger across currencies
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TransactionPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/corporations/{corporationId}/wallet/credit:
+    post:
+      tags: [internal]
+      summary: Credit the corporation treasury
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/corporations/{corporationId}/wallet/debit:
+    post:
+      tags: [internal]
+      summary: Debit the corporation treasury (rejected when balance is insufficient)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/corporations/{corporationId}/members/{playerId}:
+    put:
+      tags: [internal]
+      summary: Set (add or update) a treasury member with a role
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberRoleBody' }
+      responses:
+        '200':
+          description: Upserted membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationMember' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    delete:
+      tags: [internal]
+      summary: Remove a treasury member
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/corporations/{corporationId}/members:
+    get:
+      tags: [internal]
+      summary: Treasury staff
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Corporation treasury members
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationMemberPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/corporations/{corporationId}/settings:
+    get:
+      tags: [internal]
+      summary: Internal tax and donation policy
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: Corporation settings (default row created on first access)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    put:
+      tags: [internal]
+      summary: Update internal tax and donation policy
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CorporationSettingsBody' }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSettings' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  # ── Player & corporation taxes ─────────────────────────────────────────────
+  /api/me/taxes:
+    get:
+      tags: [me]
+      summary: My tax debts (due and settled)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Tax debts, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalTaxDebtPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/me/taxes/pay:
+    post:
+      tags: [me]
+      summary: Settle all my affordable due tax debts
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currency: { type: string, maxLength: 16 }
+                entityId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Payment summary (partial when the balance is insufficient)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaxPaymentResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/corporations/{corporationId}/taxes:
+    get:
+      tags: [corporations]
+      summary: Tax debts of the corporation (member only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Tax debts
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalTaxDebtPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/corporations/{corporationId}/taxes/pay:
+    post:
+      tags: [corporations]
+      summary: Settle the corporation's affordable due taxes (economie:treasury:manage)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currency: { type: string, maxLength: 16 }
+                entityId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Payment summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaxPaymentResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Internal: corporation affiliation ──────────────────────────────────────
+  /api/internal/corporations/{corporationId}/affiliation:
+    put:
+      tags: [internal]
+      summary: Set the corporation's political (fiscal) home
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [politicalEntityId]
+              properties:
+                politicalEntityId: { type: string, format: uuid, nullable: true }
+      responses:
+        '200':
+          description: Updated corporation settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationSettings' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  # ── Internal: political treasuries, taxes & minting ────────────────────────
+  /api/internal/politics/{entityId}/wallet:
+    put:
+      tags: [internal]
+      summary: Ensure a political treasury `credits` account exists
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      responses:
+        '200':
+          description: The treasury account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    get:
+      tags: [internal]
+      summary: Political treasury accounts (one per currency)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      responses:
+        '200':
+          description: Accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Account' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/politics/{entityId}/wallet/transactions:
+    get:
+      tags: [internal]
+      summary: Political treasury ledger
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Ledger rows, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TransactionPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/politics/{entityId}/wallet/credit:
+    post:
+      tags: [internal]
+      summary: Credit the political treasury
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/politics/{entityId}/wallet/debit:
+    post:
+      tags: [internal]
+      summary: Debit the political treasury (rejected when balance insufficient)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementBody' }
+      responses:
+        '201':
+          description: Movement result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/politics/{entityId}/mint:
+    post:
+      tags: [internal]
+      summary: Create currency and credit the entity's treasury (country/federation)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { type: integer, minimum: 1 }
+                currency: { type: string, maxLength: 16 }
+                reason: { type: string, maxLength: 128 }
+      responses:
+        '201':
+          description: Issuance result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/politics/{entityId}/taxes/assess:
+    post:
+      tags: [internal]
+      summary: Compute and book the entity's tax debts
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currency: { type: string, maxLength: 16 }
+      responses:
+        '200':
+          description: Assessment summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssessmentResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/politics/{entityId}/settings:
+    get:
+      tags: [internal]
+      summary: Tax rates and minting policy
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      responses:
+        '200':
+          description: Political settings (default row created on first access)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    put:
+      tags: [internal]
+      summary: Update tax rates and minting policy
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                corporateTaxBps: { type: integer, minimum: 0, maximum: 10000 }
+                incomeTaxBps: { type: integer, minimum: 0, maximum: 10000 }
+                allowMinting: { type: boolean }
+                mintCeiling: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalSettings' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/politics/{entityId}/members/{playerId}:
+    put:
+      tags: [internal]
+      summary: Set a political treasury member (and their role)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: '#/components/schemas/PoliticalMemberRole' }
+                holderType: { $ref: '#/components/schemas/PoliticalMemberHolderType' }
+      responses:
+        '200':
+          description: The membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalMember' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    delete:
+      tags: [internal]
+      summary: Remove a political treasury member
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/politics/{entityId}/members:
+    get:
+      tags: [internal]
+      summary: Political treasury members
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalMemberPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/npcs/{npcId}/taxes:
+    get:
+      tags: [internal]
+      summary: Tax debts of an NPC
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/npcId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Tax debts
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalTaxDebtPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/npcs/{npcId}/taxes/pay:
+    post:
+      tags: [internal]
+      summary: Settle the NPC's affordable due taxes
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/npcId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currency: { type: string, maxLength: 16 }
+                entityId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Payment summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaxPaymentResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak access token (RS256, validated against the realm JWKS). The player id
+        is the `sub` claim. Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id`,
+        `X-Player-Name`, `X-Player-Roles` headers may replace the token.
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak service-account access token (client_credentials, RS256, validated
+        against the realm JWKS). `azp` must be an allowed client
+        (`INTERNAL_SERVICE_CLIENTS`) and `aud` must contain `economie-api`; each route
+        then needs its capability role. Dev only (`INTERNAL_DEV_BYPASS=true`): the
+        legacy `X-Internal-Key` header is accepted instead.
+
+  parameters:
+    playerId:
+      name: playerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    npcId:
+      name: npcId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    corporationId:
+      name: corporationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    politicalEntityId:
+      name: entityId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    role:
+      name: role
+      in: path
+      required: true
+      description: Treasury role the salary applies to
+      schema: { $ref: '#/components/schemas/CorporationRole' }
+    currencyQuery:
+      name: currency
+      in: query
+      description: Currency to pay in (defaults to `credits`)
+      schema: { type: string, maxLength: 16, default: credits }
+    days:
+      name: days
+      in: query
+      description: Length of the analytics window and time series, in days
+      schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+    top:
+      name: top
+      in: query
+      description: Number of richest holders returned per ranking
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    from:
+      name: from
+      in: query
+      description: Start of the report period (ISO date/time, inclusive)
+      schema: { type: string, format: date-time }
+    to:
+      name: to
+      in: query
+      description: End of the report period (ISO date/time, inclusive)
+      schema: { type: string, format: date-time }
+
+    offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
+  responses:
+    ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: >
+        Missing `economie:treasury:manage` / not a corporation member (`FORBIDDEN`, `NOT_CORPORATION_MEMBER`),
+        account is locked/frozen (`ACCOUNT_LOCKED`), or donations disabled (`DONATIONS_DISABLED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict (`CONFLICT`, `INSUFFICIENT_FUNDS`, `DUPLICATE_EXTERNAL_ID`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServiceForbidden:
+      description: >
+        The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or the
+        service account lacks the route's capability role (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, status]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, ACCOUNT_LOCKED, INSUFFICIENT_FUNDS, DUPLICATE_EXTERNAL_ID, NOT_CORPORATION_MEMBER, NOT_FOUND, INTERNAL_ERROR]
+        message: { type: string }
+        status: { type: integer }
+
+    # ── Enums ──
+    AccountHolderType:
+      type: string
+      enum: [player, npc, corporation, political, system]
+    AccountStatus:
+      type: string
+      enum: [active, locked, frozen]
+    TransactionType:
+      type: string
+      enum: [transfer, deposit, withdrawal, tax, fee, mission_reward, salary, prime, donation, corporation_fund, issuance, system]
+    CorporationRole:
+      type: string
+      enum: [leader, treasurer, member]
+    PoliticalMemberRole:
+      type: string
+      enum: [head, treasurer, member]
+    PoliticalMemberHolderType:
+      type: string
+      enum: [player, npc]
+    TaxDebtorType:
+      type: string
+      enum: [player, npc, corporation]
+    TaxType:
+      type: string
+      enum: [corporate_tax, income_tax]
+    TaxDebtStatus:
+      type: string
+      enum: [due, paid, cancelled]
+
+    # ── Accounts & movements ──
+    Account:
+      type: object
+      required: [id, holderType, holderId, currency, balance, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        holderType: { $ref: '#/components/schemas/AccountHolderType' }
+        holderId: { type: string, format: uuid, description: Keycloak subject for players, Social `corporationId` for corporations, reserved key for the system vault }
+        currency: { type: string, default: credits }
+        balance: { type: integer, description: Integer minor units, never negative }
+        status: { $ref: '#/components/schemas/AccountStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Transaction:
+      type: object
+      required: [id, type, currency, amount, taxAmount, feeAmount, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        fromAccountId: { type: [string, 'null'], format: uuid }
+        toAccountId: { type: [string, 'null'], format: uuid }
+        type: { $ref: '#/components/schemas/TransactionType' }
+        currency: { type: string }
+        amount: { type: integer, description: Amount credited to `toAccountId` }
+        taxAmount: { type: integer, description: Tax collected from the payer and routed to `details.taxTo` }
+        feeAmount: { type: integer }
+        externalId: { type: [string, 'null'], description: Idempotency key unique when present }
+        reference: { type: [string, 'null'] }
+        caller: { type: [string, 'null'], description: Keycloak client id of the calling service; null for player-driven movements }
+        details:
+          oneOf:
+            - type: object
+              description: Free-form; `taxTo` records where the collected tax went (`system` or an account id)
+            - type: 'null'
+        createdAt: { type: string, format: date-time }
+
+    MovementResult:
+      type: object
+      required: [transaction, amount, taxAmount]
+      properties:
+        transaction: { $ref: '#/components/schemas/Transaction' }
+        amount: { type: integer }
+        taxAmount: { type: integer }
+        fromBalance: { type: integer, description: New payer balance after the movement }
+        toBalance: { type: integer, description: New receiver balance after the movement }
+
+    TransferBody:
+      type: object
+      required: [toPlayerId, amount]
+      properties:
+        toPlayerId: { type: string, format: uuid, description: Must differ from the caller }
+        amount: { type: integer, minimum: 1, description: Integer minor units — what the receiver gets; the payer also pays the tax }
+        memo: { type: string, maxLength: 256 }
+
+    MovementBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 1 }
+        currency: { type: string, maxLength: 16, default: credits }
+        reference: { type: string, maxLength: 128 }
+        externalId: { type: string, minLength: 1, maxLength: 128, description: Idempotency key; replaying a movement returns `409 DUPLICATE_EXTERNAL_ID` }
+        type:
+          description: Overrides the default type (default `deposit` on credit, `withdrawal` on debit)
+          oneOf:
+            - { type: string }
+            - { $ref: '#/components/schemas/TransactionType' }
+
+    DonationBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 1 }
+        memo: { type: string, maxLength: 256 }
+
+    # ── Corporations ──
+    CorporationMember:
+      type: object
+      required: [corporationId, playerId, holderType, role, joinedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        holderType:
+          type: string
+          enum: [player, npc]
+          description: Whether the member is a player or an NPC
+        role: { $ref: '#/components/schemas/CorporationRole' }
+        joinedAt: { type: string, format: date-time }
+
+    MemberRoleBody:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: '#/components/schemas/CorporationRole' }
+        holderType:
+          type: string
+          enum: [player, npc]
+          default: player
+          description: Whether the member is a player or an NPC (drives which wallet receives payouts)
+
+    CorporationSettings:
+      type: object
+      required: [corporationId, taxRateBps, allowDonations, updatedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        taxRateBps: { type: integer, minimum: 0, maximum: 10000, description: Internal tax on donations, in basis points; stays in the corporation }
+        allowDonations: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    CorporationSettingsBody:
+      type: object
+      minProperties: 1
+      properties:
+        taxRateBps: { type: integer, minimum: 0, maximum: 10000 }
+        allowDonations: { type: boolean }
+
+    CorporationReport:
+      type: object
+      required: [corporationId, totals, byType]
+      properties:
+        corporationId: { type: string, format: uuid }
+        from: { type: [string, 'null'], format: date-time }
+        to: { type: [string, 'null'], format: date-time }
+        totals:
+          type: array
+          description: Inflow/outflow per currency (outflow includes taxes paid by the corporation)
+          items:
+            type: object
+            required: [currency, inflow, outflow]
+            properties:
+              currency: { type: string }
+              inflow: { type: integer }
+              outflow: { type: integer }
+        byType:
+          type: array
+          description: Breakdown of the same flows by transaction type and currency
+          items:
+            type: object
+            required: [type, currency, count, inflow, outflow]
+            properties:
+              type: { $ref: '#/components/schemas/TransactionType' }
+              currency: { type: string }
+              count: { type: integer }
+              inflow: { type: integer }
+              outflow: { type: integer }
+
+    # ── Payroll ──
+    CorporationSalaryRole:
+      type: object
+      required: [corporationId, role, currency, amount, enabled, updatedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        role: { $ref: '#/components/schemas/CorporationRole' }
+        currency: { type: string, default: credits }
+        amount: { type: integer, minimum: 0, description: Integer minor units paid per period }
+        enabled: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    CorporationMemberSalary:
+      type: object
+      required: [corporationId, playerId, currency, amount, enabled, updatedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        currency: { type: string, default: credits }
+        amount: { type: integer, minimum: 0, description: Overrides the role default }
+        enabled: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    SalaryBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 0, description: Integer minor units; 0 disables the payout }
+        currency: { type: string, maxLength: 16, default: credits }
+        enabled: { type: boolean, default: true }
+
+    PayrollResult:
+      type: object
+      required: [corporationId, currency, paid, skipped, total]
+      properties:
+        corporationId: { type: string, format: uuid }
+        currency: { type: string }
+        paid:
+          type: array
+          items:
+            type: object
+            required: [playerId, amount, source]
+            properties:
+              playerId: { type: string, format: uuid }
+              amount: { type: integer }
+              source:
+                type: string
+                enum: [member, role]
+                description: Whether the amount came from a per-member override or the role default
+        skipped:
+          type: array
+          description: Members with no enabled salary
+          items: { type: string, format: uuid }
+        total: { type: integer, description: Total debited from the treasury }
+
+    PrimeBody:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, minimum: 1, description: Integer minor units }
+        currency: { type: string, maxLength: 16, default: credits }
+        memo: { type: string, maxLength: 256 }
+
+    PrimeResult:
+      type: object
+      required: [transaction, treasuryBalance, memberBalance]
+      properties:
+        transaction: { $ref: '#/components/schemas/Transaction' }
+        treasuryBalance: { type: integer }
+        memberBalance: { type: integer }
+
+    # ── Admin analytics ──
+    EconomyStats:
+      type: object
+      required: [moneySupply, transactions, richestPlayers, richestNpcs, richestCorporations, series]
+      properties:
+        moneySupply:
+          type: array
+          description: Total balance and account count per currency
+          items:
+            type: object
+            required: [currency, total, accounts]
+            properties:
+              currency: { type: string }
+              total: { type: integer }
+              accounts: { type: integer }
+        transactions:
+          type: object
+          required: [total, period]
+          properties:
+            total: { $ref: '#/components/schemas/TransactionTotals' }
+            period: { $ref: '#/components/schemas/TransactionTotals' }
+        richestPlayers:
+          type: array
+          description: Holder ids only; the admin UI resolves display names through the Social service
+          items: { $ref: '#/components/schemas/RichestHolder' }
+        richestNpcs:
+          type: array
+          items: { $ref: '#/components/schemas/RichestHolder' }
+        richestCorporations:
+          type: array
+          items: { $ref: '#/components/schemas/RichestHolder' }
+        series:
+          type: array
+          description: Daily transaction count, volume and tax collected
+          items:
+            type: object
+            required: [date, transactions, volume, tax]
+            properties:
+              date: { type: string, description: 'Day in YYYY-MM-DD' }
+              transactions: { type: integer }
+              volume: { type: integer }
+              tax: { type: integer }
+
+    TransactionTotals:
+      type: object
+      required: [count, volume, tax, fee]
+      properties:
+        count: { type: integer }
+        volume: { type: integer, description: Sum of credited amounts }
+        tax: { type: integer }
+        fee: { type: integer }
+
+    RichestHolder:
+      type: object
+      required: [holderId, currency, balance]
+      properties:
+        holderId: { type: string, format: uuid, description: Player id (Keycloak subject) or corporation id }
+        currency: { type: string }
+        balance: { type: integer }
+        displayName: { type: [string, 'null'], description: Player pseudonym resolved through Social (null when unknown or for corporations) }
+
+    AdminPlayer:
+      type: object
+      required: [playerId, displayName, entityType, accounts]
+      properties:
+        playerId: { type: string, format: uuid }
+        displayName: { type: string }
+        entityType: { type: string, enum: [player, npc] }
+        accounts:
+          type: array
+          items: { $ref: '#/components/schemas/Account' }
+
+    # ── Politics, taxes & minting ──
+    PoliticalSettings:
+      type: object
+      required: [entityId, corporateTaxBps, incomeTaxBps, allowMinting, mintCeiling, lastAssessedAt, updatedAt]
+      properties:
+        entityId: { type: string, format: uuid }
+        corporateTaxBps: { type: integer, minimum: 0, maximum: 10000, description: Corporate tax on the corporation treasury balance }
+        incomeTaxBps: { type: integer, minimum: 0, maximum: 10000, description: Income tax on citizen income since the last assessment }
+        allowMinting: { type: boolean, description: Whether the entity may create currency (countries/federations only, enforced upstream) }
+        mintCeiling: { type: integer, description: Absolute ceiling of a single mint; 0 = no ceiling }
+        lastAssessedAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PoliticalMember:
+      type: object
+      required: [entityId, playerId, holderType, role, joinedAt]
+      properties:
+        entityId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        holderType: { $ref: '#/components/schemas/PoliticalMemberHolderType' }
+        role: { $ref: '#/components/schemas/PoliticalMemberRole' }
+        joinedAt: { type: string, format: date-time }
+
+    PoliticalTaxDebt:
+      type: object
+      required: [id, assessmentId, entityId, debtorType, debtorId, currency, amount, taxType, status, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        assessmentId: { type: string, format: uuid, description: Groups every debt booked by one assessment run }
+        entityId: { type: string, format: uuid }
+        debtorType: { $ref: '#/components/schemas/TaxDebtorType' }
+        debtorId: { type: string, format: uuid }
+        currency: { type: string }
+        amount: { type: integer, description: Integer minor units }
+        taxType: { $ref: '#/components/schemas/TaxType' }
+        status: { $ref: '#/components/schemas/TaxDebtStatus' }
+        details: { type: [object, 'null'], additionalProperties: true, description: Assessment base and rate used }
+        createdAt: { type: string, format: date-time }
+        paidAt: { type: [string, 'null'], format: date-time }
+
+    AssessmentResult:
+      type: object
+      required: [entityId, assessmentId, currency, since, corporateDebts, incomeDebts, booked]
+      properties:
+        entityId: { type: string, format: uuid }
+        assessmentId: { type: string, format: uuid }
+        currency: { type: string }
+        since: { type: string, format: date-time, description: Start of the income window used }
+        corporateDebts: { type: integer }
+        incomeDebts: { type: integer }
+        booked: { type: integer }
+
+    TaxPaymentResult:
+      type: object
+      required: [debtorType, debtorId, paid, paidTotal, remaining]
+      properties:
+        debtorType: { $ref: '#/components/schemas/TaxDebtorType' }
+        debtorId: { type: string, format: uuid }
+        paid:
+          type: array
+          items:
+            type: object
+            required: [debtId, entityId, amount]
+            properties:
+              debtId: { type: integer, format: int64 }
+              entityId: { type: string, format: uuid }
+              amount: { type: integer }
+        paidTotal: { type: integer }
+        remaining: { type: integer, description: Debts still due after this payment }
+    CorporationSalaries:
+      properties:
+        corporationId:
+          format: uuid
+          type: string
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        memberOverrides:
+          items:
+            $ref: '#/components/schemas/CorporationMemberSalary'
+          type: array
+        memberOverridesTotal:
+          minimum: 0
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        roleDefaults:
+          items:
+            $ref: '#/components/schemas/CorporationSalaryRole'
+          type: array
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - corporationId
+      - roleDefaults
+      - memberOverrides
+      - memberOverridesTotal
+      - total
+      - limit
+      - offset
+      type: object
+    TransactionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Transaction'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalTaxDebtPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalTaxDebt'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    AdminPlayerPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AdminPlayer'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

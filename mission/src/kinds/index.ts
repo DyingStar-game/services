@@ -1,0 +1,166 @@
+/**
+ * The kind registries and the discovery catalogue served by `GET /api/missions/kinds`.
+ * Objective kinds live in `./objectives`, prerequisite kinds in `./prerequisites`
+ * (one file per kind). The catalogue localizes summaries from the ambient request
+ * language and exposes each kind's allowed mission categories.
+ */
+import { MISSION_CATEGORIES, type MissionCategory } from '../db/schema/index.js';
+import { currentLang } from '../i18n/index.js';
+import { d, localizeJsonSchema } from './schemaI18n.js';
+import type { JsonSchema, KindCategories, MessageText, ObjectiveKind, PrerequisiteKind } from './types.js';
+import { deliverItemsKind } from './objectives/deliverItems.js';
+import { deliverMaterialKind } from './objectives/deliverMaterial.js';
+import { hasCreditsKind } from './objectives/hasCredits.js';
+import { manualKind } from './objectives/manual.js';
+import { ownsItemsKind } from './objectives/ownsItems.js';
+import { transportKind } from './objectives/transport.js';
+import { visitKind } from './objectives/visit.js';
+import { corporationMemberKind } from './prerequisites/corporationMember.js';
+import { hasCreditsPrerequisite } from './prerequisites/hasCredits.js';
+import { minReputationKind } from './prerequisites/minReputation.js';
+import { ownsItemsPrerequisite } from './prerequisites/ownsItems.js';
+
+export type {
+  EvaluationMode,
+  JsonSchema,
+  KindCategories,
+  MessageText,
+  ObjectiveKind,
+  PrerequisiteContext,
+  PrerequisiteKind,
+} from './types.js';
+
+/** Picks the language side of a bilingual text (ambient request language, default en). */
+function pickText(text: MessageText): string {
+  return currentLang() === 'fr' ? text.fr : text.en;
+}
+
+const OBJECTIVE_KIND_LIST: ObjectiveKind[] = [
+  deliverMaterialKind,
+  transportKind,
+  visitKind,
+  manualKind,
+  ownsItemsKind,
+  hasCreditsKind,
+  deliverItemsKind,
+];
+
+/** Prerequisite kinds, checked at acceptance time. */
+const PREREQUISITE_KIND_LIST: PrerequisiteKind[] = [
+  hasCreditsPrerequisite,
+  ownsItemsPrerequisite,
+  minReputationKind,
+  corporationMemberKind,
+];
+
+// Fail fast on an inconsistent registry: every `service` objective kind must define its
+// measurement probe (the pipeline dispatches on it).
+for (const kind of OBJECTIVE_KIND_LIST) {
+  if (kind.evaluation === 'service' && !kind.measure) {
+    throw new Error(`Service objective kind "${kind.kind}" must define a measure() handler`);
+  }
+}
+
+export const OBJECTIVE_KINDS: ReadonlyMap<string, ObjectiveKind> = new Map(
+  OBJECTIVE_KIND_LIST.map((k) => [k.kind, k]),
+);
+export const PREREQUISITE_KINDS: ReadonlyMap<string, PrerequisiteKind> = new Map(
+  PREREQUISITE_KIND_LIST.map((k) => [k.kind, k]),
+);
+
+/** Looks up an objective kind, or undefined when unknown. */
+export function getObjectiveKind(kind: string): ObjectiveKind | undefined {
+  return OBJECTIVE_KINDS.get(kind);
+}
+
+/** Looks up a prerequisite kind, or undefined when unknown. */
+export function getPrerequisiteKind(kind: string): PrerequisiteKind | undefined {
+  return PREREQUISITE_KINDS.get(kind);
+}
+
+/** JSON Schema of a reward component list, served to mission builders. */
+const REWARDS_JSON_SCHEMA: JsonSchema = {
+  type: 'array',
+  description: d(
+    'Reward components: at most one credits component, any number of item components (distinct items)',
+    'Composants de récompense : au plus un composant crédits, un nombre quelconque de composants objets (biens distincts)',
+  ),
+  items: {
+    oneOf: [
+      {
+        type: 'object',
+        required: ['type', 'amount'],
+        properties: {
+          type: { const: 'credits' },
+          currency: { type: 'string', maxLength: 16, default: 'credits' },
+          amount: { type: 'integer', minimum: 1 },
+        },
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        required: ['type', 'itemId', 'quantity'],
+        properties: {
+          type: { const: 'item' },
+          itemId: { type: 'string', maxLength: 128 },
+          quantity: { type: 'integer', minimum: 1 },
+          instanceId: { type: 'string', format: 'uuid', description: d('Unique instance (single assignee only)', 'Récompense instance unique (assigné seul uniquement)') },
+        },
+        additionalProperties: false,
+      },
+    ],
+  },
+};
+
+/** Serializable description of one kind (no functions) for the discovery endpoint. */
+export interface ObjectiveKindInfo {
+  kind: string;
+  /** Short localized label (no placeholder) for mission builders. */
+  name: string;
+  evaluation: ObjectiveKind['evaluation'];
+  quantity: boolean;
+  summary: string;
+  /** Mission categories this kind may be used on (`all` = every category). */
+  categories: KindCategories;
+  params: JsonSchema;
+}
+
+/** Serializable description of one prerequisite kind. */
+export interface PrerequisiteKindInfo {
+  kind: string;
+  /** Short localized label (no placeholder) for mission builders. */
+  name: string;
+  summary: string;
+  /** Mission categories this prerequisite may be used on (`all` = every category). */
+  categories: KindCategories;
+  params: JsonSchema;
+}
+
+/** Full catalogue of categories, kinds and reward shape for mission builders. */
+export function missionKindsCatalog(): {
+  categories: readonly MissionCategory[];
+  objectiveKinds: ObjectiveKindInfo[];
+  prerequisiteKinds: PrerequisiteKindInfo[];
+  rewards: JsonSchema;
+} {
+  return {
+    categories: MISSION_CATEGORIES,
+    objectiveKinds: OBJECTIVE_KIND_LIST.map((k) => ({
+      kind: k.kind,
+      name: pickText(k.name),
+      evaluation: k.evaluation,
+      quantity: k.quantity,
+      summary: pickText(k.summary),
+      categories: k.categories,
+      params: localizeJsonSchema(k.paramsJsonSchema),
+    })),
+    prerequisiteKinds: PREREQUISITE_KIND_LIST.map((k) => ({
+      kind: k.kind,
+      name: pickText(k.name),
+      summary: pickText(k.summary),
+      categories: k.categories,
+      params: localizeJsonSchema(k.paramsJsonSchema),
+    })),
+    rewards: localizeJsonSchema(REWARDS_JSON_SCHEMA),
+  };
+}

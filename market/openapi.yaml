@@ -1,0 +1,837 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Market API
+  version: 0.1.0
+  description: >
+    Market exchange of DyingStar: a continuous order book (sell orders for stacks and unique
+    instances, buy orders for fungible goods), demand/contracts and trade settlement. This
+    service owns **exchange flows only** — it never touches the physical world. A trade moves
+    ownership of goods (delegated to the **Inventory** service) and credits (delegated to the
+    **Economy** service), each step idempotent and retryable while the trade is `pending`.
+
+    Three kinds of callers:
+
+    * **Players** send a Keycloak JWT (`Authorization: Bearer`). A player can trade from
+      their own wallet, or from a corporation by passing `corporationId` (`market:trade`
+      decided by the Social service — granted to every member). Dev only
+      (`AUTH_DEV_BYPASS=true`): `X-Player-Id` / `X-Player-Name`.
+    * **The game server** authenticates with a Keycloak service-account token whose `azp` is
+      an allowed client and whose `aud` targets `market-api`; each `/api/internal/*` route
+      needs a capability role (e.g. `market:manage`). Dev only (`INTERNAL_DEV_BYPASS=true`):
+      the legacy `X-Internal-Key` header is accepted.
+
+    Errors are `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+
+    Language: every response honours the standard `Accept-Language: fr|en` header
+    (default `en`) for error messages; zod validation messages stay in English.
+    Technical identifiers (codes, kind names, fields, `{params}`) are never translated.
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: public
+    description: Unauthenticated endpoints
+  - name: market
+    description: Order book, demands/contracts and trades (authenticated player)
+  - name: internal
+    description: Game-server integration (catalog push, reads, settlement retry)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      tags: [public]
+      summary: Liveness check
+      responses:
+        '200':
+          description: API is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: market }
+                  version: { type: string, example: 0.1.0 }
+
+  /openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.yaml:
+    get:
+      tags: [public]
+      summary: This service's OpenAPI document (alias under /api)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  # ── Market (player) ────────────────────────────────────────────────────────
+  /api/market/catalog:
+    get:
+      tags: [market]
+      summary: Tradable good types (enabled only)
+      responses:
+        '200':
+          description: Catalog entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CatalogEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/market/book:
+    get:
+      tags: [market]
+      summary: Order book depth (open buy/sell counts) for a good type
+      parameters:
+        - $ref: '#/components/parameters/goodType'
+        - in: query
+          name: limit
+          schema:
+            default: 100
+            maximum: 500
+            minimum: 1
+            type: integer
+        - in: query
+          name: offset
+          schema:
+            default: 0
+            minimum: 0
+            type: integer
+      responses:
+        '200':
+          description: Open order counts per side
+          content:
+            application/json:
+              schema:
+                properties:
+                  askTotal:
+                    minimum: 0
+                    type: integer
+                  asks:
+                    items:
+                      $ref: '#/components/schemas/Order'
+                    type: array
+                  bidTotal:
+                    minimum: 0
+                    type: integer
+                  bids:
+                    items:
+                      $ref: '#/components/schemas/Order'
+                    type: array
+                  goodType:
+                    type: string
+                  limit:
+                    default: 100
+                    maximum: 500
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                required:
+                - goodType
+                - bids
+                - asks
+                - bidTotal
+                - askTotal
+                - limit
+                - offset
+                type: object
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/market/orders:
+    get:
+      tags: [market]
+      summary: Order book (newest first)
+      parameters:
+        - $ref: '#/components/parameters/goodTypeOptional'
+        - $ref: '#/components/parameters/orderSide'
+        - $ref: '#/components/parameters/orderStatus'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Orders
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrderPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [market]
+      summary: Place an order (immediately matched against the book)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderBody' }
+      responses:
+        '201':
+          description: The order and the trades it generated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order, trades]
+                properties:
+                  order: { $ref: '#/components/schemas/Order' }
+                  trades:
+                    type: array
+                    items: { $ref: '#/components/schemas/Trade' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/market/orders/{id}:
+    get:
+      tags: [market]
+      summary: One order
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: The order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/market/orders/{id}/cancel:
+    post:
+      tags: [market]
+      summary: Cancel one of the caller's orders
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: The cancelled order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/market/demands:
+    get:
+      tags: [market]
+      summary: Demands/contracts (newest first)
+      parameters:
+        - $ref: '#/components/parameters/goodTypeOptional'
+        - $ref: '#/components/parameters/demandStatus'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Demands
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DemandPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [market]
+      summary: Create a demand/contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DemandBody' }
+      responses:
+        '201':
+          description: The demand
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Demand' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/market/demands/{id}:
+    get:
+      tags: [market]
+      summary: One demand
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: The demand
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Demand' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/market/demands/{id}/fulfill:
+    post:
+      tags: [market]
+      summary: Fulfil a demand as a supplier (settles the trade)
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FulfillBody' }
+      responses:
+        '201':
+          description: The created trade (settled or pending)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Trade' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/market/demands/{id}/cancel:
+    post:
+      tags: [market]
+      summary: Cancel one of the caller's demands
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: The cancelled demand
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Demand' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/market/trades:
+    get:
+      tags: [market]
+      summary: Trades where the caller is buyer or seller
+      parameters:
+        - $ref: '#/components/parameters/tradeStatus'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Trades
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TradePage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Internal (game server) ─────────────────────────────────────────────────
+  /api/internal/catalog:
+    get:
+      tags: [internal]
+      summary: All catalog entries (including disabled)
+      security: [{ serviceAuth: [] }]
+      responses:
+        '200':
+          description: Catalog entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CatalogEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/catalog/{goodType}:
+    put:
+      tags: [internal]
+      summary: Upsert a catalog entry (game-defined good type)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/goodType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CatalogBody' }
+      responses:
+        '200':
+          description: The stored entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CatalogEntry' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    patch:
+      tags: [internal]
+      summary: Enable/disable a good type
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/goodType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: The updated entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CatalogEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/orders:
+    get:
+      tags: [internal]
+      summary: Order book (all holders)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/goodTypeOptional'
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Orders
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrderPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/demands:
+    get:
+      tags: [internal]
+      summary: Demands (all holders)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/goodTypeOptional'
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Demands
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DemandPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/trades:
+    get:
+      tags: [internal]
+      summary: Trades (all holders)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/tradeStatus'
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Trades
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TradePage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/trades/{id}:
+    get:
+      tags: [internal]
+      summary: One trade
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: The trade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Trade' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/trades/{id}/settle:
+    post:
+      tags: [internal]
+      summary: Retry settling a pending trade (idempotent)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: The settled (or still pending) trade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Trade' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak access token (RS256). The player id is the `sub` claim. Dev only
+        (`AUTH_DEV_BYPASS=true`): `X-Player-Id`, `X-Player-Name`, `X-Player-Roles` headers.
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak service-account access token (client_credentials). `azp` must be an allowed
+        client (`INTERNAL_SERVICE_CLIENTS`) and `aud` must contain `market-api`; each route
+        then needs its capability role. Dev only (`INTERNAL_DEV_BYPASS=true`): `X-Internal-Key`.
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    goodType:
+      name: goodType
+      in: path
+      required: true
+      schema: { type: string, maxLength: 128 }
+    goodTypeOptional:
+      name: goodType
+      in: query
+      required: false
+      schema: { type: string, maxLength: 128 }
+    holderType:
+      name: holderType
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/HolderType' }
+    holderId:
+      name: holderId
+      in: query
+      required: false
+      schema: { type: string, format: uuid }
+    orderSide:
+      name: side
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/OrderSide' }
+    orderStatus:
+      name: status
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/OrderStatus' }
+    demandStatus:
+      name: status
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/DemandStatus' }
+    tradeStatus:
+      name: status
+      in: query
+      required: false
+      schema: { $ref: '#/components/schemas/TradeStatus' }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+    offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
+  responses:
+    ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Not the resource owner (`FORBIDDEN`), or the corporation `market:trade` check refused (`NOT_CORPORATION_MEMBER`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict (`CONFLICT`, `INSUFFICIENT_GOODS`, `INSUFFICIENT_FUNDS`, unknown/disabled good)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServiceForbidden:
+      description: >
+        The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or lacks the
+        route's capability role (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, status]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, INSUFFICIENT_FUNDS, GOOD_DISABLED, GOOD_KIND_MISMATCH, INTERNAL_ERROR]
+        message: { type: string }
+        status: { type: integer }
+
+    # ── Enums ──
+    HolderType:
+      type: string
+      enum: [player, npc, corporation, system]
+    GoodKind:
+      type: string
+      enum: [stack, instance]
+    OrderSide:
+      type: string
+      enum: [buy, sell]
+    OrderStatus:
+      type: string
+      enum: [open, partially_filled, filled, cancelled, expired]
+    DemandStatus:
+      type: string
+      enum: [open, fulfilled, cancelled, expired]
+    TradeStatus:
+      type: string
+      enum: [pending, settled, cancelled]
+
+    # ── Model ──
+    CatalogEntry:
+      type: object
+      required: [goodType, kind, enabled, createdAt, updatedAt]
+      properties:
+        goodType: { type: string }
+        kind: { $ref: '#/components/schemas/GoodKind' }
+        unit: { type: [string, 'null'] }
+        displayName: { type: [string, 'null'] }
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Order:
+      type: object
+      required: [id, side, goodType, kind, quantity, remaining, price, currency, holderType, holderId, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        side: { $ref: '#/components/schemas/OrderSide' }
+        goodType: { type: string }
+        kind: { $ref: '#/components/schemas/GoodKind' }
+        instanceId: { type: [string, 'null'], format: uuid }
+        quantity: { type: integer }
+        remaining: { type: integer }
+        price: { type: integer, description: Credits per unit (stack) or total price (instance) }
+        currency: { type: string }
+        holderType: { $ref: '#/components/schemas/HolderType' }
+        holderId: { type: string, format: uuid }
+        isCorporation: { type: boolean }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        createdBy: { type: [string, 'null'] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Demand:
+      type: object
+      required: [id, goodType, kind, quantity, maxPrice, currency, holderType, holderId, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        goodType: { type: string }
+        kind: { $ref: '#/components/schemas/GoodKind' }
+        instanceId: { type: [string, 'null'], format: uuid }
+        quantity: { type: integer }
+        maxPrice: { type: integer, description: Maximum credits per unit }
+        currency: { type: string }
+        holderType: { $ref: '#/components/schemas/HolderType' }
+        holderId: { type: string, format: uuid }
+        isCorporation: { type: boolean }
+        message: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/DemandStatus' }
+        createdBy: { type: [string, 'null'] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Trade:
+      type: object
+      required: [id, goodType, kind, quantity, unitPrice, totalPrice, currency, buyerType, buyerId, sellerType, sellerId, status, goodsMoved, moneyMoved, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        goodType: { type: string }
+        kind: { $ref: '#/components/schemas/GoodKind' }
+        instanceId: { type: [string, 'null'], format: uuid }
+        quantity: { type: integer }
+        unitPrice: { type: integer }
+        totalPrice: { type: integer }
+        currency: { type: string }
+        buyerType: { $ref: '#/components/schemas/HolderType' }
+        buyerId: { type: string, format: uuid }
+        sellerType: { $ref: '#/components/schemas/HolderType' }
+        sellerId: { type: string, format: uuid }
+        buyOrderId: { type: [string, 'null'], format: uuid }
+        sellOrderId: { type: [string, 'null'], format: uuid }
+        demandId: { type: [string, 'null'], format: uuid }
+        status: { $ref: '#/components/schemas/TradeStatus' }
+        goodsMoved: { type: boolean, description: Inventory ownership has been transferred }
+        moneyMoved: { type: boolean, description: Credits have been moved between the wallets }
+        failureReason: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        settledAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    # ── Bodies ──
+    OrderBody:
+      type: object
+      required: [side, goodType, kind, quantity, price]
+      properties:
+        side: { $ref: '#/components/schemas/OrderSide' }
+        goodType: { type: string, maxLength: 128 }
+        kind: { $ref: '#/components/schemas/GoodKind' }
+        instanceId: { type: string, format: uuid, description: Required for instance sell orders }
+        quantity: { type: integer, minimum: 1 }
+        price: { type: integer, minimum: 0, description: Credits per unit (stack) or total price (instance) }
+        currency: { type: string, maxLength: 16, default: credits }
+        corporationId: { type: string, format: uuid, description: Trade from a corporation the caller belongs to }
+
+    DemandBody:
+      type: object
+      required: [goodType, kind, quantity, maxPrice]
+      properties:
+        goodType: { type: string, maxLength: 128 }
+        kind: { $ref: '#/components/schemas/GoodKind' }
+        instanceId: { type: string, format: uuid, description: Required for instance demands }
+        quantity: { type: integer, minimum: 1 }
+        maxPrice: { type: integer, minimum: 0 }
+        currency: { type: string, maxLength: 16, default: credits }
+        message: { type: string, maxLength: 500 }
+        corporationId: { type: string, format: uuid }
+
+    FulfillBody:
+      type: object
+      required: [unitPrice]
+      properties:
+        unitPrice: { type: integer, minimum: 0 }
+        corporationId: { type: string, format: uuid, description: Fulfil from a corporation the caller belongs to }
+
+    CatalogBody:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: '#/components/schemas/GoodKind' }
+        unit: { type: [string, 'null'], maxLength: 32 }
+        displayName: { type: [string, 'null'], maxLength: 128 }
+        enabled: { type: boolean, default: true }
+
+    OrderPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Order'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    DemandPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Demand'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    TradePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Trade'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

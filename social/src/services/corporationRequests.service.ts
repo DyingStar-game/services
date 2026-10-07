@@ -1,0 +1,247 @@
+/**
+ * Joining a corporation: direct join, applications (player → corporation) and invitations (corporation → player).
+ */
+import { and, count, desc, eq } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
+
+import { db } from '../db/connection.js';
+import {
+  corporationJoinRequests,
+  corporations,
+  playerProfiles,
+  type Corporation,
+  type CorporationJoinRequest,
+  type PlayerProfile,
+} from '../db/schema/index.js';
+import { conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
+import { recordActivity } from './activity.service.js';
+import { isBlockedEitherWay } from './blocks.service.js';
+import { recordCorporationActivity } from './corporationActivity.service.js';
+import {
+  addCorporationMember,
+  getCorporationMembership,
+  hasCorporationPermission,
+  requireCorporation,
+  requireCorporationMember,
+  requireCorporationPermission,
+} from './corporations.service.js';
+import { requireProfile } from './profiles.service.js';
+
+/** A request as seen from the corporation side. */
+export interface CorporationRequestView extends CorporationJoinRequest {
+  player: PlayerProfile;
+}
+
+/** A request as seen from the player side. */
+export interface PlayerCorporationRequestView extends CorporationJoinRequest {
+  corporation: Pick<Corporation, 'id' | 'name' | 'ticker' | 'logoUrl'>;
+}
+
+async function findRequest(corporationId: string, playerId: string): Promise<CorporationJoinRequest | null> {
+  const rows = await db
+    .select()
+    .from(corporationJoinRequests)
+    .where(
+      and(
+        eq(corporationJoinRequests.corporationId, corporationId),
+        eq(corporationJoinRequests.playerId, playerId),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+async function requireRequest(id: number): Promise<CorporationJoinRequest> {
+  const rows = await db.select().from(corporationJoinRequests).where(eq(corporationJoinRequests.id, id)).limit(1);
+  if (!rows[0]) throw notFound(t('not_found.request', { id: id }));
+  return rows[0];
+}
+
+/**
+ * Player asks to join: joins directly when recruitment is `open`, files an application when `apply`.
+ * A pending invitation from that corporation is accepted instead.
+ * @param corporationId - Corporation id.
+ * @param playerId - Player.
+ * @param message - Optional application message.
+ * @returns `{ joined: true }` or the created application.
+ */
+export async function requestJoinCorporation(
+  corporationId: string,
+  playerId: string,
+  message?: string,
+): Promise<{ joined: true } | { joined: false; request: CorporationJoinRequest }> {
+  const corporation = await requireCorporation(corporationId);
+  await requireProfile(playerId);
+  if (await getCorporationMembership(corporationId, playerId)) {
+    throw conflict(t('conflict.corp_member'));
+  }
+
+  const existing = await findRequest(corporationId, playerId);
+  if (existing?.kind === 'invitation') {
+    await addCorporationMember(corporationId, playerId, playerId);
+    return { joined: true };
+  }
+  if (existing) throw conflict(t('conflict.application_pending'));
+
+  if (corporation.recruitment === 'closed') throw forbidden(t('forbidden.not_recruiting'));
+  if (corporation.recruitment === 'open') {
+    await addCorporationMember(corporationId, playerId, playerId);
+    return { joined: true };
+  }
+  const [request] = await db
+    .insert(corporationJoinRequests)
+    .values({ corporationId, playerId, kind: 'application', message: message ?? null })
+    .returning();
+  await recordActivity(playerId, 'corporation_application_sent', { corporationId });
+  return { joined: false, request };
+}
+
+/**
+ * Invites a player (requires `invite`). A pending application from that player is accepted instead.
+ * @param corporationId - Corporation id.
+ * @param actorId - Inviting member.
+ * @param playerId - Invitee.
+ * @returns `{ joined: true }` or the created invitation.
+ */
+export async function inviteCorporationPlayer(
+  corporationId: string,
+  actorId: string,
+  playerId: string,
+): Promise<{ joined: true } | { joined: false; request: CorporationJoinRequest }> {
+  await requireCorporationPermission(corporationId, actorId, 'invite');
+  await requireProfile(playerId);
+  if (await getCorporationMembership(corporationId, playerId)) {
+    throw conflict(t('conflict.player_corp_member'));
+  }
+  if (await isBlockedEitherWay(actorId, playerId)) throw conflict(t('conflict.block_exists'));
+
+  const existing = await findRequest(corporationId, playerId);
+  if (existing?.kind === 'application') {
+    await addCorporationMember(corporationId, playerId, actorId);
+    return { joined: true };
+  }
+  if (existing) throw conflict(t('conflict.invitation_pending'));
+
+  const [request] = await db
+    .insert(corporationJoinRequests)
+    .values({ corporationId, playerId, kind: 'invitation', createdBy: actorId })
+    .returning();
+  await recordCorporationActivity(corporationId, actorId, 'player_invited', { playerId });
+  await recordActivity(playerId, 'corporation_invitation_received', { corporationId, by: actorId });
+  return { joined: false, request };
+}
+
+/**
+ * Pending applications and invitations of a corporation (requires `recruit` or `invite`).
+ * @param corporationId - Corporation id.
+ * @param actorId - Acting member.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of requests with player profiles.
+ */
+export async function listCorporationRequests(
+  corporationId: string,
+  actorId: string,
+  limit: number,
+  offset: number,
+): Promise<Page<CorporationRequestView>> {
+  const { rank } = await requireCorporationMember(corporationId, actorId);
+  if (!hasCorporationPermission(rank, 'recruit') && !hasCorporationPermission(rank, 'invite')) {
+    throw forbidden(t('forbidden.corp_permission'));
+  }
+  const condition = eq(corporationJoinRequests.corporationId, corporationId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporationJoinRequests).where(condition),
+    db
+      .select({ request: corporationJoinRequests, player: playerProfiles })
+      .from(corporationJoinRequests)
+      .innerJoin(playerProfiles, eq(playerProfiles.playerId, corporationJoinRequests.playerId))
+      .where(condition)
+      .orderBy(desc(corporationJoinRequests.createdAt), desc(corporationJoinRequests.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows.map((r) => ({ ...r.request, player: r.player })), totalRow[0].total, limit, offset);
+}
+
+/**
+ * Corporation-side decision on an application (requires `recruit`), or withdrawal of an invitation (requires `invite`).
+ * @param corporationId - Corporation id.
+ * @param actorId - Acting member.
+ * @param requestId - Request id.
+ * @param accept - Accept (applications only) or decline/withdraw.
+ */
+export async function resolveCorporationRequest(
+  corporationId: string,
+  actorId: string,
+  requestId: number,
+  accept: boolean,
+): Promise<void> {
+  const request = await requireRequest(requestId);
+  if (request.corporationId !== corporationId) throw notFound(t('not_found.request', { id: requestId }));
+  if (request.kind === 'invitation') {
+    if (accept) throw forbidden(t('forbidden.invited_only'));
+    await requireCorporationPermission(corporationId, actorId, 'invite');
+    await db.delete(corporationJoinRequests).where(eq(corporationJoinRequests.id, requestId));
+    await recordCorporationActivity(corporationId, actorId, 'invitation_withdrawn', { playerId: request.playerId });
+    return;
+  }
+  await requireCorporationPermission(corporationId, actorId, 'recruit');
+  if (accept) {
+    await addCorporationMember(corporationId, request.playerId, actorId);
+    return;
+  }
+  await db.delete(corporationJoinRequests).where(eq(corporationJoinRequests.id, requestId));
+  await recordCorporationActivity(corporationId, actorId, 'application_declined', { playerId: request.playerId });
+  await recordActivity(request.playerId, 'corporation_application_declined', { corporationId });
+}
+
+/**
+ * Pending invitations and applications of a player.
+ * @param playerId - Player id.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of requests with corporation refs.
+ */
+export async function listPlayerRequests(playerId: string, limit: number, offset: number): Promise<Page<PlayerCorporationRequestView>> {
+  const condition = eq(corporationJoinRequests.playerId, playerId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(corporationJoinRequests).where(condition),
+    db
+      .select({
+        request: corporationJoinRequests,
+        corporation: { id: corporations.id, name: corporations.name, ticker: corporations.ticker, logoUrl: corporations.logoUrl },
+      })
+      .from(corporationJoinRequests)
+      .innerJoin(corporations, eq(corporations.id, corporationJoinRequests.corporationId))
+      .where(condition)
+      .orderBy(desc(corporationJoinRequests.createdAt), desc(corporationJoinRequests.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows.map((r) => ({ ...r.request, corporation: r.corporation })), totalRow[0].total, limit, offset);
+}
+
+/**
+ * Player-side decision: accept/decline an invitation, or withdraw an application.
+ * @param playerId - Player id.
+ * @param requestId - Request id.
+ * @param accept - Accept (invitations only) or decline/withdraw.
+ */
+export async function resolvePlayerRequest(playerId: string, requestId: number, accept: boolean): Promise<void> {
+  const request = await requireRequest(requestId);
+  if (request.playerId !== playerId) throw notFound(t('not_found.request', { id: requestId }));
+  if (accept) {
+    if (request.kind !== 'invitation') throw forbidden(t('forbidden.corp_only_application'));
+    await addCorporationMember(request.corporationId, playerId, request.createdBy ?? playerId);
+    return;
+  }
+  await db.delete(corporationJoinRequests).where(eq(corporationJoinRequests.id, requestId));
+  if (request.kind === 'invitation') {
+    await recordCorporationActivity(request.corporationId, playerId, 'invitation_declined', { playerId });
+  }
+  await recordActivity(playerId, request.kind === 'invitation' ? 'corporation_invitation_declined' : 'corporation_application_withdrawn', {
+    corporationId: request.corporationId,
+  });
+}

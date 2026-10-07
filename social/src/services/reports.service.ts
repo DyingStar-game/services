@@ -1,0 +1,238 @@
+/**
+ * Player and corporation reports, their moderation workflow and escalation.
+ */
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import { t } from '../i18n/index.js';
+
+import { env } from '../config/env.js';
+import { db } from '../db/connection.js';
+import {
+  ESCALATION_LEVELS,
+  corporations,
+  playerProfiles,
+  reports,
+  type EscalationLevel,
+  type Report,
+  type ReportReason,
+  type ReportStatus,
+  type ReportTargetType,
+} from '../db/schema/index.js';
+import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
+import { page, type Page } from '../lib/pagination.js';
+import { recordActivity } from './activity.service.js';
+import { requireCorporation } from './corporations.service.js';
+import { logModeration } from './moderationLog.service.js';
+import { requireNotNpc, requireProfile } from './profiles.service.js';
+import { adjustReputation } from './reputation.service.js';
+
+/** Report enriched with target labels for dashboards. */
+export interface ReportView extends Report {
+  reporterName: string | null;
+  targetName: string | null;
+}
+
+const OPEN_STATUSES: ReportStatus[] = ['open', 'reviewing'];
+
+/**
+ * Files a report against a player or a corporation. The reported player loses `reportPenalty` points.
+ * @param reporterId - Reporting player.
+ * @param input - Target and reason.
+ * @returns Created report.
+ */
+export async function createReport(
+  reporterId: string,
+  input: { targetType: ReportTargetType; targetId: string; reason: ReportReason; message?: string },
+): Promise<Report> {
+  const targetPlayerId = input.targetType === 'player' ? input.targetId : null;
+  const targetCorporationId = input.targetType === 'corporation' ? input.targetId : null;
+  if (targetPlayerId === reporterId) throw new HttpError(400, 'INVALID_TARGET', t('target.report_self'));
+  if (targetPlayerId) {
+    await requireProfile(targetPlayerId);
+    await requireNotNpc(targetPlayerId);
+  }
+  if (targetCorporationId) await requireCorporation(targetCorporationId);
+
+  const duplicate = await db
+    .select({ id: reports.id })
+    .from(reports)
+    .where(
+      and(
+        eq(reports.reporterId, reporterId),
+        targetPlayerId ? eq(reports.targetPlayerId, targetPlayerId) : eq(reports.targetCorporationId, targetCorporationId!),
+        inArray(reports.status, OPEN_STATUSES),
+      ),
+    )
+    .limit(1);
+  if (duplicate.length) throw conflict(t('conflict.open_report'));
+
+  const [report] = await db
+    .insert(reports)
+    .values({
+      reporterId,
+      targetType: input.targetType,
+      targetPlayerId,
+      targetCorporationId,
+      reason: input.reason,
+      message: input.message ?? null,
+    })
+    .returning();
+  await recordActivity(reporterId, 'report_filed', { reportId: report.id, targetType: input.targetType, targetId: input.targetId });
+  if (targetPlayerId) {
+    await adjustReputation(targetPlayerId, -env.reputation.reportPenalty, 'report', `Reported: ${input.reason}`, {
+      actorId: reporterId,
+      details: { reportId: report.id },
+    });
+  }
+  return report;
+}
+
+/**
+ * Reports filed by a player.
+ * @param reporterId - Player id.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of reports, newest first.
+ */
+export async function listMyReports(reporterId: string, limit: number, offset: number): Promise<Page<Report>> {
+  const condition = eq(reports.reporterId, reporterId);
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(reports).where(condition),
+    db.select().from(reports).where(condition).orderBy(desc(reports.createdAt), desc(reports.id)).limit(limit).offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
+}
+
+async function toViews(rows: Report[]): Promise<ReportView[]> {
+  const playerIds = [...new Set(rows.flatMap((r) => [r.reporterId, r.targetPlayerId]).filter((id): id is string => !!id))];
+  const corporationIds = [
+    ...new Set(rows.map((r) => r.targetCorporationId).filter((id): id is string => !!id)),
+  ];
+  const [players, corporationRows] = await Promise.all([
+    playerIds.length
+      ? db
+          .select({ id: playerProfiles.playerId, name: playerProfiles.displayName })
+          .from(playerProfiles)
+          .where(inArray(playerProfiles.playerId, playerIds))
+      : [],
+    corporationIds.length
+      ? db
+          .select({ id: corporations.id, name: corporations.name })
+          .from(corporations)
+          .where(inArray(corporations.id, corporationIds))
+      : [],
+  ]);
+  const names = new Map([...players, ...corporationRows].map((r) => [r.id, r.name]));
+  return rows.map((r) => ({
+    ...r,
+    reporterName: r.reporterId ? (names.get(r.reporterId) ?? null) : null,
+    targetName: names.get(r.targetPlayerId ?? r.targetCorporationId ?? '') ?? null,
+  }));
+}
+
+/**
+ * Dashboard listing with optional filters.
+ * @param filter - Status, escalation level, target player.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of report views, newest first.
+ */
+export async function listReports(
+  filter: { status?: ReportStatus; escalation?: EscalationLevel; targetPlayerId?: string },
+  limit: number,
+  offset: number,
+): Promise<Page<ReportView>> {
+  const conditions = [];
+  if (filter.status) conditions.push(eq(reports.status, filter.status));
+  if (filter.escalation) conditions.push(eq(reports.escalation, filter.escalation));
+  if (filter.targetPlayerId) conditions.push(eq(reports.targetPlayerId, filter.targetPlayerId));
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(reports).where(condition),
+    db
+      .select()
+      .from(reports)
+      .where(condition)
+      .orderBy(desc(reports.createdAt), desc(reports.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(await toViews(rows), totalRow[0].total, limit, offset);
+}
+
+/**
+ * Fetches one report or throws 404.
+ * @param id - Report id.
+ * @returns Report view.
+ */
+export async function requireReport(id: number): Promise<ReportView> {
+  const [row] = await db.select().from(reports).where(eq(reports.id, id)).limit(1);
+  if (!row) throw notFound(t('not_found.report', { id: id }));
+  const [view] = await toViews([row]);
+  return view;
+}
+
+/**
+ * Moves a report through the workflow. `resolved` (upheld) costs the reported player
+ * `upheldReportPenalty`; `dismissed` refunds the initial report penalty.
+ * @param id - Report id.
+ * @param actorId - Moderator id.
+ * @param status - New status.
+ * @param note - Resolution note.
+ * @returns Updated report.
+ */
+export async function updateReportStatus(
+  id: number,
+  actorId: string,
+  status: Exclude<ReportStatus, 'open'>,
+  note?: string,
+): Promise<Report> {
+  const report = await requireReport(id);
+  if (!OPEN_STATUSES.includes(report.status)) throw conflict(t('conflict.report_state', { status: report.status }));
+  const closing = status !== 'reviewing';
+  const [updated] = await db
+    .update(reports)
+    .set({
+      status,
+      resolvedBy: closing ? actorId : null,
+      resolutionNote: note ?? null,
+      resolvedAt: closing ? new Date() : null,
+    })
+    .where(eq(reports.id, id))
+    .returning();
+  await logModeration(actorId, `report_${status}`, report.targetPlayerId, { reportId: id, note });
+
+  if (report.targetPlayerId && report.reporterId) {
+    if (status === 'resolved') {
+      await adjustReputation(report.targetPlayerId, -env.reputation.upheldReportPenalty, 'moderation', `Report upheld: ${report.reason}`, {
+        actorId,
+        details: { reportId: id },
+      });
+    } else if (status === 'dismissed') {
+      await adjustReputation(report.targetPlayerId, env.reputation.reportPenalty, 'moderation', 'Report dismissed', {
+        actorId,
+        details: { reportId: id },
+      });
+    }
+  }
+  if (report.reporterId && closing) {
+    await recordActivity(report.reporterId, `report_${status}`, { reportId: id });
+  }
+  return updated;
+}
+
+/**
+ * Escalates a report one level up (moderator → admin → supervisor).
+ * @param id - Report id.
+ * @param actorId - Moderator id.
+ * @returns Updated report.
+ */
+export async function escalateReport(id: number, actorId: string): Promise<Report> {
+  const report = await requireReport(id);
+  if (!OPEN_STATUSES.includes(report.status)) throw conflict(t('conflict.report_state', { status: report.status }));
+  const idx = ESCALATION_LEVELS.indexOf(report.escalation);
+  if (idx >= ESCALATION_LEVELS.length - 1) throw forbidden(t('forbidden.report_max_escalation'));
+  const escalation = ESCALATION_LEVELS[idx + 1];
+  const [updated] = await db.update(reports).set({ escalation, status: 'open' }).where(eq(reports.id, id)).returning();
+  await logModeration(actorId, 'report_escalated', report.targetPlayerId, { reportId: id, to: escalation });
+  return updated;
+}

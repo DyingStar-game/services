@@ -1,0 +1,25 @@
+name: "Build & Deploy to Preprod: mission"
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "mission/**"
+
+jobs:
+  build:
+    name: Build mission (preprod)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: mission
+      context_path: mission
+      dockerfile_path: mission/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/mission
+      image_tag: develop
+      chart_name: service-mission
+      trigger_preprod_deploy: true
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      KUBERNETES_REPO_TOKEN: ${{ secrets.KUBERNETES_REPO_TOKEN }}

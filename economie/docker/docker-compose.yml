@@ -1,0 +1,63 @@
+# Local stack: API in watch mode + PostgreSQL. Run from the service root:
+#   docker compose -f docker/docker-compose.yml --env-file .env up
+name: economie
+
+services:
+  app:
+    image: node:22
+    command: >
+      sh -c "
+        corepack enable &&
+        corepack prepare pnpm@10 --activate &&
+        pnpm install --config.confirmModulesPurge=false &&
+        pnpm dev
+      "
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - ..:/app
+      # Container-owned node_modules: keeps the host install (different pnpm store / platform) out of the way
+      - node_modules:/app/node_modules
+      - pnpm_store:/app/.pnpm-store
+    working_dir: /app
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-economie}
+      - NODE_ENV=${NODE_ENV:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+
+  postgres:
+    image: postgres:17
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-economie}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-economie}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  node_modules:
+  pnpm_store:
+
+networks:
+  backend:
+    driver: bridge

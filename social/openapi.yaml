@@ -1,0 +1,4376 @@
+openapi: 3.1.0
+info:
+  title: DyingStar Social API
+  version: 0.1.0
+  description: >
+    Social API of DyingStar: player profiles, friends, presence, corporations,
+    reputation and moderation.
+
+    Three kinds of callers:
+
+    * **Players** send a Keycloak JWT (`Authorization: Bearer`). The player id is
+      the `sub` claim. With `AUTH_DEV_BYPASS=true` (never in production) the
+      `X-Player-Id` / `X-Player-Name` / `X-Player-Roles` headers are accepted instead.
+    * **Moderation staff** are players carrying a Keycloak role:
+      `moderator` < `admin` < `supervisor` (`/api/admin/*`).
+    * **The game server** and trusted services authenticate with a Keycloak
+      service-account token (`client_credentials`, `Authorization: Bearer`) whose
+      `azp` is an allowed client and whose `aud` targets `social-api`. Each
+      `/api/internal/*` route requires a capability role (e.g.
+      `social:profile:write`). Dev only (`INTERNAL_DEV_BYPASS=true`): the legacy
+      `X-Internal-Key` header is accepted.
+
+    A player under an active **suspension** or **ban** gets `403 SANCTIONED` on
+    every player route except `GET /api/me/reputation` and `GET /api/me/sanctions`.
+
+    Every error is `{ "error": "CODE", "message": "...", "status": 4xx }`.
+
+
+    Language: every response honours the standard `Accept-Language: fr|en` header
+    (default `en`) for error messages; zod validation messages stay in English.
+    Technical identifiers (codes, kind names, fields, `{params}`) are never translated.
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: public
+    description: Unauthenticated endpoints
+  - name: me
+    description: The authenticated player's own profile, activity, corporation and reputation
+  - name: profiles
+    description: Looking up other players
+  - name: friends
+    description: Friend list, requests and suggestions
+  - name: blocks
+    description: Block list
+  - name: corporations
+    description: Corporation directory, pages, members, ranks and recruitment
+  - name: groups
+    description: 'Temporary groups (mission sharing): members, invitations, ownership'
+  - name: politics
+    description: Political entities (commune, agglomeration, department, region, country, federation), offices, members and hierarchy
+  - name: reports
+    description: Reporting players or corporations
+  - name: admin
+    description: Moderation dashboard (`moderator` role at least)
+  - name: internal
+    description: Game-server integration (Keycloak service accounts, capability roles)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ── Public ──────────────────────────────────────────────────────────────────
+  /api/health:
+    get:
+      tags: [public]
+      operationId: getHealth
+      summary: Liveness check
+      security: []
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+                  service: { type: string, const: social }
+                  version: { type: string, example: 0.1.0 }
+
+  /openapi.yaml:
+    get:
+      tags: [public]
+      operationId: getOpenapi
+      summary: This service's OpenAPI document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.yaml:
+    get:
+      tags: [public]
+      operationId: getOpenapiAlias
+      summary: This service's OpenAPI document (alias under /api)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document (YAML)
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  # ── Me ──────────────────────────────────────────────────────────────────────
+  /api/me:
+    get:
+      tags: [me]
+      operationId: getMe
+      summary: Own profile with presence, corporations, group and political memberships
+      description: The profile is created on first call from the token identity.
+      responses:
+        '200':
+          description: Own profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: object
+                    required: [presence, corporations, politics, group]
+                    properties:
+                      presence: { $ref: '#/components/schemas/Presence' }
+                      corporations:
+                        type: array
+                        items: { $ref: '#/components/schemas/CorporationRef' }
+                      politics:
+                        type: array
+                        description: Political entities the player belongs to (commune, country, federation, …)
+                        items: { $ref: '#/components/schemas/PoliticalEntityRef' }
+                      group:
+                        description: The player's group (a player belongs to at most one)
+                        oneOf:
+                          - allOf:
+                              - $ref: '#/components/schemas/Group'
+                              - type: object
+                                required: [joinedAt]
+                                properties:
+                                  joinedAt: { type: string, format: date-time }
+                          - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    patch:
+      tags: [me]
+      operationId: updateMe
+      summary: Update editable profile fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfilePatch' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409':
+          description: Display name already taken
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/me/activity:
+    get:
+      tags: [me]
+      operationId: getMyActivity
+      summary: Own activity history (newest first)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Activity entries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ActivityPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/corporations:
+    get:
+      tags: [me]
+      operationId: getMyCorporations
+      summary: Every corporation the caller belongs to, with rank
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Corporation memberships (empty when the player belongs to none)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationMembershipPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/corporation/requests:
+    get:
+      tags: [me]
+      operationId: getMyCorporationRequests
+      summary: My pending corporation invitations and applications
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Pending requests with the corporation reference
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlayerCorporationRequestPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/corporation/requests/{id}/accept:
+    post:
+      tags: [me]
+      operationId: acceptCorporationInvitation
+      summary: Accept a corporation invitation
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Joined the corporation }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/me/corporation/requests/{id}/decline:
+    post:
+      tags: [me]
+      operationId: declineCorporationRequest
+      summary: Decline an invitation or withdraw an application
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Request removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Group ───────────────────────────────────────────────────────────────────
+  /api/me/groups:
+    get:
+      tags: [me]
+      operationId: getMyGroup
+      summary: The player's group (a player belongs to at most one), or null
+      responses:
+        '200':
+          description: The group with the caller's join date, or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - allOf:
+                      - $ref: '#/components/schemas/Group'
+                      - type: object
+                        required: [joinedAt]
+                        properties:
+                          joinedAt: { type: string, format: date-time }
+                  - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/group/invitations:
+    get:
+      tags: [me]
+      operationId: getMyGroupInvitations
+      summary: My pending group invitations
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Pending invitations with the group reference
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlayerGroupInvitationPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/me/group/invitations/{id}/accept:
+    post:
+      tags: [me]
+      operationId: acceptGroupInvitation
+      summary: Accept a group invitation and join the group
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Joined the group }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already in a group (`ALREADY_IN_GROUP`) or the group is full (`GROUP_FULL`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/me/group/invitations/{id}/decline:
+    post:
+      tags: [me]
+      operationId: declineGroupInvitation
+      summary: Decline a group invitation
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Invitation removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/me/reputation:
+    get:
+      tags: [me]
+      operationId: getMyReputation
+      summary: Own reputation score, history and active sanctions
+      description: Reachable while suspended or banned.
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Reputation summary
+          content:
+            application/json:
+              schema:
+                properties:
+                  activeSanctions:
+                    items:
+                      $ref: '#/components/schemas/Sanction'
+                    type: array
+                  events:
+                    items:
+                      $ref: '#/components/schemas/ReputationEvent'
+                    type: array
+                  eventsTotal:
+                    minimum: 0
+                    type: integer
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  reputation:
+                    type: integer
+                required:
+                - reputation
+                - events
+                - activeSanctions
+                - eventsTotal
+                - limit
+                - offset
+                type: object
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/me/sanctions:
+    get:
+      tags: [me]
+      operationId: getMySanctions
+      summary: Own active sanctions
+      description: Reachable while suspended or banned.
+      responses:
+        '200':
+          description: Active sanctions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Sanction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ── Profiles ────────────────────────────────────────────────────────────────
+  /api/profiles:
+    get:
+      tags: [profiles]
+      operationId: searchProfiles
+      summary: Search profiles by display name
+      parameters:
+        - $ref: '#/components/parameters/search'
+        - $ref: '#/components/parameters/limit'
+        - name: entityType
+          in: query
+          required: false
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ProfileKind'
+              - type: 'null'
+          description: "Restrict to players or NPCs (default: both)."
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Matching profiles, sorted by display name
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlayerProfilePage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/profiles/{playerId}:
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      summary: Public profile with online status
+      description: Location is not exposed here (friends only, see `/api/friends`).
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: object
+                    required: [status, corporations, politics]
+                    properties:
+                      status: { $ref: '#/components/schemas/PresenceStatus' }
+                      corporations:
+                        type: array
+                        items: { $ref: '#/components/schemas/CorporationRef' }
+                      politics:
+                        type: array
+                        items: { $ref: '#/components/schemas/PoliticalEntityRef' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Friends ─────────────────────────────────────────────────────────────────
+  /api/friends:
+    get:
+      tags: [friends]
+      operationId: listFriends
+      summary: Friends with presence
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Accepted friends with status and location
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FriendPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/friends/online:
+    get:
+      tags: [friends]
+      operationId: listOnlineFriends
+      summary: Friends currently online or in mission
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Friends whose status is not `offline`
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FriendPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/friends/suggestions:
+    get:
+      tags: [friends]
+      operationId: listFriendSuggestions
+      summary: Recently met players who are not friends yet
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Suggested players
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FriendSuggestionPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/friends/requests:
+    get:
+      tags: [friends]
+      operationId: listFriendRequests
+      summary: Pending friend requests
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Incoming and outgoing requests
+          content:
+            application/json:
+              schema:
+                properties:
+                  incoming:
+                    items:
+                      $ref: '#/components/schemas/FriendRequest'
+                    type: array
+                  incomingTotal:
+                    minimum: 0
+                    type: integer
+                  limit:
+                    default: 20
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  offset:
+                    default: 0
+                    minimum: 0
+                    type: integer
+                  outgoing:
+                    items:
+                      $ref: '#/components/schemas/FriendRequest'
+                    type: array
+                  outgoingTotal:
+                    minimum: 0
+                    type: integer
+                required:
+                - incoming
+                - outgoing
+                - incomingTotal
+                - outgoingTotal
+                - limit
+                - offset
+                type: object
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [friends]
+      operationId: sendFriendRequest
+      summary: Send a friend request
+      description: If the target already sent a pending request, it is accepted instead (`200`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '201':
+          description: Request created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Friendship' }
+        '200':
+          description: Reverse request auto-accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Friendship' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already friends, request already pending, or a block exists (`BLOCKED`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/friends/requests/{id}/accept:
+    post:
+      tags: [friends]
+      operationId: acceptFriendRequest
+      summary: Accept an incoming request (addressee only)
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '200':
+          description: Accepted friendship
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Friendship' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/friends/requests/{id}/decline:
+    post:
+      tags: [friends]
+      operationId: declineFriendRequest
+      summary: Decline (addressee) or cancel (requester) a pending request
+      parameters:
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Request removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/friends/{playerId}:
+    delete:
+      tags: [friends]
+      operationId: removeFriend
+      summary: Remove a friend
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Friendship removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Blocks ──────────────────────────────────────────────────────────────────
+  /api/blocks:
+    get:
+      tags: [blocks]
+      operationId: listBlocks
+      summary: Blocked players
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Blocked profiles with block date
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BlockedProfilePage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [blocks]
+      operationId: blockPlayer
+      summary: Block a player
+      description: >
+        Drops any friendship or pending request between the two players, prevents
+        new ones and costs the blocked player `REPUTATION_BLOCK_PENALTY` (refunded on unblock).
+        Idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '204': { description: Player blocked }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/blocks/{playerId}:
+    delete:
+      tags: [blocks]
+      operationId: unblockPlayer
+      summary: Unblock a player
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '204': { description: Block removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Corporations ──────────────────────────────────────────────────────────────────
+  /api/corporations:
+    get:
+      tags: [corporations]
+      operationId: listCorporations
+      summary: Corporation directory
+      parameters:
+        - $ref: '#/components/parameters/search'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Corporations matching name or ticker, with member counts
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationSummaryPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [corporations]
+      operationId: createCorporation
+      summary: Create a corporation
+      description: >
+        The caller becomes the CEO and holds the CEO rank. Default ranks are created:
+        CEO (100, all permissions), Director (50: invite, recruit, manage_members),
+        Member (0, default rank). A player belongs to at most one corporation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCorporation' }
+      responses:
+        '201':
+          description: Corporation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409':
+          description: Already in a corporation, or name/ticker already taken
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/corporations/{corporationId}:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+    get:
+      tags: [corporations]
+      operationId: getCorporation
+      summary: Public corporation page
+      responses:
+        '200':
+          description: Corporation with ranks and members (with presence)
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/CorporationSummary'
+                - properties:
+                    memberCount:
+                      minimum: 0
+                      type: integer
+                    members:
+                      items:
+                        $ref: '#/components/schemas/CorporationMember'
+                      type: array
+                    parent:
+                      oneOf:
+                      - $ref: '#/components/schemas/CorporationRef'
+                      - type: 'null'
+                    ranks:
+                      items:
+                        $ref: '#/components/schemas/CorporationRank'
+                      type: array
+                    subsidiaries:
+                      items:
+                        $ref: '#/components/schemas/CorporationSummary'
+                      type: array
+                    subsidiaryCount:
+                      minimum: 0
+                      type: integer
+                  required:
+                  - ranks
+                  - members
+                  - parent
+                  - subsidiaries
+                  - memberCount
+                  - subsidiaryCount
+                  type: object
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [corporations]
+      operationId: updateCorporation
+      summary: Edit a corporation
+      description: Requires the `manage_corporation` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CorporationPatch' }
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [corporations]
+      operationId: disbandCorporation
+      summary: Disband a corporation (CEO only)
+      responses:
+        '204': { description: Corporation disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/subsidiaries:
+    get:
+      tags: [corporations]
+      operationId: listSubsidiaries
+      summary: Direct subsidiaries of a corporation
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Subsidiary summaries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationSummaryPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/parent:
+    put:
+      tags: [corporations]
+      operationId: setCorporationParent
+      summary: Attach to a holding company, or detach (manage_corporation)
+      description: >
+        Sets the corporation's parent (making it a subsidiary of a holding company) or clears
+        it with `parentId: null`. Refuses cycles (`409 CORPORATION_CYCLE`).
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parentId]
+              properties:
+                parentId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/corporations/{corporationId}/politics:
+    put:
+      tags: [corporations]
+      operationId: setCorporationPoliticalEntity
+      summary: Attach to a political entity (fiscal home), or detach (manage_corporation)
+      description: >
+        Sets the corporation's political entity (its fiscal home) or clears it with
+        `politicalEntityId: null`. The entity must exist (`404` otherwise).
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [politicalEntityId]
+              properties:
+                politicalEntityId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/transfer:
+    post:
+      tags: [corporations]
+      operationId: transferCorporationOwnership
+      summary: Transfer leadership to another member (CEO only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/activity:
+    get:
+      tags: [corporations]
+      operationId: getCorporationActivity
+      summary: Internal corporation journal (members only)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Journal entries, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationActivityPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/members:
+    get:
+      tags: [corporations]
+      operationId: listCorporationMembers
+      summary: Members with rank and presence
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationMemberPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+      - $ref: '#/components/parameters/playerId'
+    patch:
+      tags: [corporations]
+      operationId: setCorporationMemberRank
+      summary: Change a member's rank
+      description: Requires `manage_members`; only ranks strictly below the actor's own may be given or taken.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rankId]
+              properties:
+                rankId: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [corporations]
+      operationId: removeCorporationMember
+      summary: Leave (self) or kick (`manage_members`) a member
+      description: The CEO cannot leave; transfer leadership or disband first.
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/ranks:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+    get:
+      tags: [corporations]
+      operationId: listCorporationRanks
+      summary: Ranks, highest priority first
+      responses:
+        '200':
+          description: Ranks
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CorporationRank' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [corporations]
+      operationId: createCorporationRank
+      summary: Create a rank (`manage_ranks`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRank' }
+      responses:
+        '201':
+          description: Rank created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationRank' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/corporations/{corporationId}/ranks/{rankId}:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+      - name: rankId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    patch:
+      tags: [corporations]
+      operationId: updateCorporationRank
+      summary: Edit a rank (`manage_ranks`)
+      description: The CEO rank only accepts a rename.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RankPatch' }
+      responses:
+        '200':
+          description: Updated rank
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationRank' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [corporations]
+      operationId: deleteCorporationRank
+      summary: Delete a rank (`manage_ranks`)
+      description: Members holding it are moved to the default rank. The CEO and default ranks cannot be deleted.
+      responses:
+        '204': { description: Rank deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/corporations/{corporationId}/join:
+    post:
+      tags: [corporations]
+      operationId: joinCorporation
+      summary: Join directly (`open`) or apply (`apply`)
+      description: A pending invitation from that corporation is accepted instead (`200`).
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Joined the corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinedResult' }
+        '201':
+          description: Application created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PendingRequestResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Corporation is `closed`, or caller is sanctioned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already in a corporation, or application already pending
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/corporations/{corporationId}/invitations:
+    post:
+      tags: [corporations]
+      operationId: inviteToCorporation
+      summary: Invite a player (`invite`)
+      description: A pending application from that player is accepted instead (`200`).
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TargetPlayer' }
+      responses:
+        '200':
+          description: Player joined the corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinedResult' }
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PendingRequestResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Player already in a corporation, invitation already pending, or a block exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/corporations/{corporationId}/requests:
+    get:
+      tags: [corporations]
+      operationId: listCorporationRequests
+      summary: Pending applications and invitations (`recruit` or `invite`)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Requests with the player's profile
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CorporationRequestPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/corporations/{corporationId}/requests/{id}/accept:
+    post:
+      tags: [corporations]
+      operationId: acceptCorporationApplication
+      summary: Accept an application (`recruit`)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Player added to the corporation }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/corporations/{corporationId}/requests/{id}/decline:
+    post:
+      tags: [corporations]
+      operationId: declineCorporationApplication
+      summary: Decline an application (`recruit`) or withdraw an invitation (`invite`)
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+        - $ref: '#/components/parameters/requestId'
+      responses:
+        '204': { description: Request removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Reports ─────────────────────────────────────────────────────────────────
+  # ── Groups ─────────────────────────────────────────────────────────────────
+  /api/groups:
+    post:
+      tags: [groups]
+      operationId: createGroup
+      summary: Create a temporary group (the caller becomes its owner and first member)
+      description: >
+        A player belongs to at most one group. Groups have no expiry: they are disbanded
+        manually by the owner, and ownership passes to the oldest remaining member when
+        the owner leaves (an empty group is deleted).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGroup' }
+      responses:
+        '201':
+          description: Group created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Group' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409':
+          description: Already in a group (`ALREADY_IN_GROUP`) or name taken (`CONFLICT`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/groups/{groupId}:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    get:
+      tags: [groups]
+      operationId: getGroup
+      summary: Group summary with its member count (members only)
+      responses:
+        '200':
+          description: Group summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [groups]
+      operationId: updateGroup
+      summary: Edit the group (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupPatch' }
+      responses:
+        '200':
+          description: Updated group
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Group' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [groups]
+      operationId: disbandGroup
+      summary: Disband the group (owner only, cascade-deletes members and invitations)
+      responses:
+        '204': { description: Group disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/members:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    get:
+      tags: [groups]
+      operationId: listGroupMembers
+      summary: Members with profile and presence (owner first, then oldest join)
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GroupMemberPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+      - $ref: '#/components/parameters/playerId'
+    delete:
+      tags: [groups]
+      operationId: removeGroupMember
+      summary: Remove a member (owner only; the owner leaves on their own)
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/leave:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    post:
+      tags: [groups]
+      operationId: leaveGroup
+      summary: Leave the group (the oldest member becomes owner; an empty group is deleted)
+      responses:
+        '204': { description: Left the group }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/groups/{groupId}/invitations:
+    parameters:
+      - $ref: '#/components/parameters/groupId'
+    post:
+      tags: [groups]
+      operationId: inviteGroupPlayer
+      summary: Invite a player to the group (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupInvitation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: >
+            Invitee already in a group (`ALREADY_IN_GROUP`), invitation pending,
+            group full (`GROUP_FULL`) or a block exists (`CONFLICT`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/reports:
+    post:
+      tags: [reports]
+      operationId: createReport
+      summary: Report a player or a corporation
+      description: Reporting a player costs them `REPUTATION_REPORT_PENALTY` (refunded if the report is dismissed).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReport' }
+      responses:
+        '201':
+          description: Report filed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [reports]
+      operationId: listMyReports
+      summary: Reports I filed
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Reports, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReportPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  # ── Admin ───────────────────────────────────────────────────────────────────
+  /api/admin/stats:
+    get:
+      tags: [admin]
+      operationId: getCommunityStats
+      summary: Community analytics
+      responses:
+        '200':
+          description: Aggregated counters and top lists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommunityStats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/log:
+    get:
+      tags: [admin]
+      operationId: getModerationLog
+      summary: Moderation audit log
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Log entries, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ModerationLogEntryPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/reports:
+    get:
+      tags: [admin]
+      operationId: listReports
+      summary: Report queue
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ReportStatus' }
+        - name: escalation
+          in: query
+          schema: { $ref: '#/components/schemas/EscalationLevel' }
+        - name: targetPlayerId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Reports, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReportViewPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/reports/{id}:
+    parameters:
+      - $ref: '#/components/parameters/reportId'
+    get:
+      tags: [admin]
+      operationId: getReport
+      summary: One report
+      responses:
+        '200':
+          description: Report with reporter and target names
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [admin]
+      operationId: updateReportStatus
+      summary: Move a report through the workflow
+      description: >
+        `resolved` upholds the report (target loses `REPUTATION_UPHELD_REPORT_PENALTY`),
+        `dismissed` refunds the initial report penalty.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [reviewing, resolved, dismissed]
+                note: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: Updated report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/admin/reports/{id}/escalate:
+    post:
+      tags: [admin]
+      operationId: escalateReport
+      summary: Escalate one level (moderator → admin → supervisor)
+      parameters:
+        - $ref: '#/components/parameters/reportId'
+      responses:
+        '200':
+          description: Escalated report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already at the top level
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/players/{playerId}:
+    get:
+      tags: [admin]
+      operationId: getPlayerRecord
+      summary: Player record
+      description: Profile with reputation history, sanctions, reports received and activity (50 rows each).
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Player record
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: object
+                    required: [reputationEvents, sanctions, reports, activity]
+                    properties:
+                      reputationEvents:
+                        type: array
+                        items: { $ref: '#/components/schemas/ReputationEvent' }
+                      sanctions:
+                        type: array
+                        items: { $ref: '#/components/schemas/Sanction' }
+                      reports:
+                        type: array
+                        items: { $ref: '#/components/schemas/ReportView' }
+                      activity:
+                        type: array
+                        items: { $ref: '#/components/schemas/ActivityEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/admin/players/{playerId}/reputation:
+    post:
+      tags: [admin]
+      operationId: adjustReputation
+      summary: Manual reputation adjustment (`admin`)
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [delta, reason]
+              properties:
+                delta:
+                  type: integer
+                  minimum: -100
+                  maximum: 100
+                  description: Non-zero
+                reason: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: New score
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, reputation]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  reputation: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/admin/players/{playerId}/sanctions:
+    post:
+      tags: [admin]
+      operationId: issueSanction
+      summary: Issue a sanction
+      description: '`warning` / `mute`: moderator. `suspension` / `ban`: admin.'
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, reason]
+              properties:
+                type: { $ref: '#/components/schemas/SanctionType' }
+                reason: { type: string, minLength: 1, maxLength: 256 }
+                durationHours:
+                  type: [integer, 'null']
+                  minimum: 1
+                  maximum: 8760
+                  description: Omit or `null` for a permanent sanction (warnings are instantaneous)
+      responses:
+        '201':
+          description: Sanction issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sanction' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/admin/sanctions:
+    get:
+      tags: [admin]
+      operationId: listSanctions
+      summary: Sanctions listing
+      parameters:
+        - name: playerId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: active
+          in: query
+          description: Only active (not revoked, not expired) sanctions
+          schema:
+            type: string
+            enum: ['true', 'false']
+            default: 'true'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Sanctions, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SanctionPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/admin/sanctions/{id}:
+    delete:
+      tags: [admin]
+      operationId: revokeSanction
+      summary: Revoke a sanction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Revoked sanction
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sanction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ── Internal ────────────────────────────────────────────────────────────────
+  /api/internal/players/{playerId}:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerProfile
+      summary: Full profile (incl. reputation), or null when it does not exist
+      description: Requires the `social:profile:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Profile or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PlayerProfile'
+                  - type: 'null'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    put:
+      tags: [internal]
+      operationId: internalUpsertPlayer
+      summary: Ensure a profile exists at login
+      description: An existing display name is kept. On collision a short suffix is appended.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                displayName: { type: string, minLength: 2, maxLength: 32 }
+      responses:
+        '200':
+          description: Existing or created profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/npc:
+    put:
+      tags: [internal]
+      operationId: internalUpsertNpc
+      summary: Create or update a server-managed NPC profile
+      description: >
+        Unlike players, a taken display name is an error (409), never silently renamed:
+        the shared unique `display_name` prevents a player from impersonating an NPC.
+        The id must be a UUID assigned by the game server.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                displayName: { type: string, minLength: 2, maxLength: 32 }
+                avatarUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+                faction: { type: [string, 'null'], maxLength: 64 }
+                biography: { type: [string, 'null'], maxLength: 2000 }
+                role: { type: [string, 'null'], maxLength: 64 }
+      responses:
+        '200':
+          description: Existing or created NPC profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/presence:
+    get:
+      tags: [internal]
+      operationId: internalGetPresence
+      summary: Status and location of a player (defaults to offline, location null)
+      description: >
+        Used by Mission to filter/accept zone-scoped missions. Requires the
+        `social:profile:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Presence row (defaulted when the player was never seen)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, status, location]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  status: { $ref: '#/components/schemas/PresenceStatus' }
+                  location:
+                    oneOf:
+                      - { $ref: '#/components/schemas/Location' }
+                      - type: 'null'
+                  updatedAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    put:
+      tags: [internal]
+      operationId: internalSetPresence
+      summary: Set status and location
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/PresenceStatus' }
+                location:
+                  oneOf:
+                    - $ref: '#/components/schemas/Location'
+                    - type: 'null'
+                  description: '`null` clears the location; omitted keeps the previous one'
+      responses:
+        '200':
+          description: Stored presence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    required: [playerId]
+                    properties:
+                      playerId: { type: string, format: uuid }
+                  - $ref: '#/components/schemas/Presence'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/stats:
+    post:
+      tags: [internal]
+      operationId: internalApplyStats
+      summary: Apply playtime / reputation deltas and role
+      description: "Reputation changes go through the event system (`source: game`)."
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                playtimeSecondsDelta: { type: integer, minimum: 0 }
+                role: { type: [string, 'null'], maxLength: 64 }
+                reputationDelta: { type: integer }
+                reputationReason: { type: string, maxLength: 128, default: Game event }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlayerProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/activity:
+    post:
+      tags: [internal]
+      operationId: internalRecordActivity
+      summary: Append an activity entry
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, minLength: 1, maxLength: 64 }
+                details: { type: object, additionalProperties: true }
+      responses:
+        '204': { description: Entry recorded }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players:
+    get:
+      tags: [internal]
+      operationId: internalResolveProfiles
+      summary: Resolve profiles by display-name substring and/or explicit ids
+      description: >
+        Trusted-service lookup for callers that only store opaque player ids (e.g. the
+        Economy admin dashboard). With `search`, returns profiles whose display name
+        matches (like the public search) as `{playerId, displayName, entityType}`; without
+        it, resolves the ids passed in `playerIds`.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema: { type: string, maxLength: 64, default: '' }
+        - name: playerIds
+          in: query
+          required: false
+          description: Comma-separated player ids (used when `search` is empty)
+          schema: { type: string }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Matching profiles
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProfileIdentityPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/corporation:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerCorporation
+      summary: Corporation(s) and rank of a player
+      description: >
+        With `?corporationId`, returns that membership (or `null`). Without it, returns the
+        list of the player's memberships (a player may belong to several corporations).
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+        - name: corporationId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: A membership, `null`, or the list of memberships
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - allOf:
+                  - $ref: '#/components/schemas/Corporation'
+                  - properties:
+                      rank:
+                        $ref: '#/components/schemas/CorporationRank'
+                    required:
+                    - rank
+                    type: object
+                - type: 'null'
+                - $ref: '#/components/schemas/CorporationMembershipPage'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    put:
+      tags: [internal]
+      operationId: internalAddNpcToCorporation
+      summary: Add an NPC to a corporation
+      description: >
+        NPC-only. Uses `rankId` when given, otherwise the corporation's default rank.
+        An NPC can never be the CEO or hold the CEO rank.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [corporationId]
+              properties:
+                corporationId: { type: string, format: uuid }
+                rankId: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Created membership row
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corporationId, playerId, rankId, joinedAt]
+                properties:
+                  corporationId: { type: string, format: uuid }
+                  playerId: { type: string, format: uuid }
+                  rankId: { type: integer }
+                  joinedAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+    delete:
+      tags: [internal]
+      operationId: internalRemoveNpcFromCorporation
+      summary: Remove an NPC from one corporation
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+        - name: corporationId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Membership removed }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/group:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerGroup
+      summary: Group of a player (a player belongs to at most one group)
+      description: >
+        With `?groupId`, returns that membership (or `null`). Without it, returns the
+        player's single group membership (or `null`). Requires the `social:group:read`
+        capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+        - name: groupId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Membership or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/GroupMembership'
+                  - type: 'null'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/groups/{groupId}:
+    get:
+      tags: [internal]
+      operationId: internalGetGroup
+      summary: Group summary with member count, or null when it does not exist
+      description: Requires the `social:group:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/groupId'
+      responses:
+        '200':
+          description: Group summary or null
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/GroupSummary'
+                  - type: 'null'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/{playerId}/sanctions:
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerSanctions
+      summary: Active sanctions (to enforce mutes / bans in game)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Active sanctions, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Sanction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/reputation/rehabilitate:
+    post:
+      tags: [internal]
+      operationId: internalRehabilitate
+      summary: Run one rehabilitation pass now
+      description: >
+        Players below 0 with no reputation event for `REPUTATION_REHAB_AFTER_DAYS`
+        days gain `REPUTATION_REHAB_STEP` point(s).
+      security: [{ serviceAuth: [] }]
+      responses:
+        '200':
+          description: Number of players rehabilitated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rehabilitated]
+                properties:
+                  rehabilitated: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/encounters:
+    post:
+      tags: [internal]
+      operationId: internalRecordEncounter
+      summary: Record that two players met
+      description: Feeds friend suggestions. Symmetric.
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId, otherPlayerId]
+              properties:
+                playerId: { type: string, format: uuid }
+                otherPlayerId: { type: string, format: uuid }
+      responses:
+        '204': { description: Encounter recorded }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  # ── Authorization (policy decision point) ─────────────────────────────────
+  /api/internal/authorize:
+    post:
+      tags: [internal]
+      operationId: internalAuthorize
+      summary: Decide whether a player holds an action on an organisation
+      description: |
+        Central ACL. Accepts one check or `{ "checks": [...] }` (max 50) and **always
+        answers 200**: a refusal is a result, never an error, so a batch keeps all of its
+        answers. Requires the `social:authorize` capability role.
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/AuthorizeCheck'
+                - type: object
+                  required: [checks]
+                  properties:
+                    checks:
+                      type: array
+                      minItems: 1
+                      maxItems: 50
+                      items: { $ref: '#/components/schemas/AuthorizeCheck' }
+      responses:
+        '200':
+          description: 'The decision (single check → one result, batch → `{ results: [...] }`)'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AuthorizeResult'
+                  - type: object
+                    required: [results]
+                    properties:
+                      results:
+                        type: array
+                        items: { $ref: '#/components/schemas/AuthorizeResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/permissions/catalog:
+    get:
+      tags: [internal]
+      operationId: internalPermissionCatalog
+      summary: Every catalogued action and its evaluation rules
+      description: Localized through `Accept-Language`. Requires the `social:authorize` capability role.
+      security: [{ serviceAuth: [] }]
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actions]
+                properties:
+                  actions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PermissionCatalogRow' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/me/permissions/catalog:
+    get:
+      tags: [me]
+      operationId: myPermissionCatalog
+      summary: Catalog of organisation actions and their evaluation rules
+      description: >
+        Same static catalog as `GET /api/internal/permissions/catalog`, readable by any
+        authenticated player. Localized through `Accept-Language`. Use it to render what a
+        rank or office permission means (legacy, `satisfiedBy`, `defaultMember`).
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actions]
+                properties:
+                  actions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PermissionCatalogRow' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+
+  # ── Politics ────────────────────────────────────────────────────────────────
+  /api/me/politics:
+    get:
+      tags: [me]
+      operationId: getMyPolitics
+      summary: Every political entity the player belongs to, with office
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Memberships with office
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalMembershipPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/politics:
+    get:
+      tags: [politics]
+      operationId: listPoliticalEntities
+      summary: Political entity directory
+      parameters:
+        - $ref: '#/components/parameters/search'
+        - name: type
+          in: query
+          schema: { $ref: '#/components/schemas/PoliticalEntityType' }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Entities with member counts
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalEntitySummaryPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+    post:
+      tags: [politics]
+      operationId: createPoliticalEntity
+      summary: Create a political entity
+      description: >
+        The caller becomes the head and holds the head office. Default offices are seeded
+        according to the level. A profile may belong to several political entities.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePoliticalEntity' }
+      responses:
+        '201':
+          description: Political entity created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [politics]
+      operationId: getPoliticalEntity
+      summary: Public political entity page
+      responses:
+        '200':
+          description: Entity with offices, members, parent and children
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntityPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [politics]
+      operationId: updatePoliticalEntity
+      summary: Edit a political entity
+      description: Requires the `manage_entity` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalEntityPatch' }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [politics]
+      operationId: disbandPoliticalEntity
+      summary: Disband a political entity (head only)
+      responses:
+        '204': { description: Entity disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/children:
+    get:
+      tags: [politics]
+      operationId: listPoliticalChildren
+      summary: Direct lower-level entities
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Child summaries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalEntitySummaryPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/parent:
+    put:
+      tags: [politics]
+      operationId: setPoliticalEntityParent
+      summary: Attach to a higher-level entity, or detach (manage_hierarchy)
+      description: >
+        The parent must be of a strictly higher level (a country may stay independent with
+        `parentId: null`). Refuses cycles (`409 POLITICAL_CYCLE`) and invalid levels
+        (`400 INVALID_PARENT_LEVEL`).
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parentId]
+              properties:
+                parentId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}/transfer:
+    post:
+      tags: [politics]
+      operationId: transferPoliticalHead
+      summary: Transfer the head office to another member (head only)
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/activity:
+    get:
+      tags: [politics]
+      operationId: listPoliticalActivity
+      summary: Internal journal (members only)
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Journal entries, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalActivityPage'}
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/politics/{entityId}/members:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [politics]
+      operationId: listPoliticalMembers
+      summary: Members with office and presence
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PoliticalMemberPage'}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [politics]
+      operationId: appointPoliticalMember
+      summary: Appoint a member (manage_members)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalMemberBody' }
+      responses:
+        '201':
+          description: Membership created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+      - $ref: '#/components/parameters/playerId'
+    patch:
+      tags: [politics]
+      operationId: setPoliticalMemberOffice
+      summary: Change a member's office (manage_members)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalMemberOfficeBody' }
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [politics]
+      operationId: removePoliticalMember
+      summary: Leave (self) or remove a member (manage_members)
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/politics/{entityId}/offices:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [politics]
+      operationId: listPoliticalOffices
+      summary: Offices, highest priority first
+      responses:
+        '200':
+          description: Offices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalOffice' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [politics]
+      operationId: createPoliticalOffice
+      summary: Create an office (manage_offices)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalOfficeInput' }
+      responses:
+        '201':
+          description: Office created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalOffice' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/politics/{entityId}/offices/{officeId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+      - $ref: '#/components/parameters/officeId'
+    patch:
+      tags: [politics]
+      operationId: updatePoliticalOffice
+      summary: Edit an office (manage_offices)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalOfficePatch' }
+      responses:
+        '200':
+          description: Updated office
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalOffice' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [politics]
+      operationId: deletePoliticalOffice
+      summary: Delete an office (manage_offices)
+      responses:
+        '204': { description: Office deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Internal: corporations & politics (game server) ─────────────────────────
+  /api/internal/corporations:
+    post:
+      tags: [internal]
+      operationId: internalCreateCorporation
+      summary: Create a corporation with an explicit CEO (player or NPC)
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InternalCreateCorporation' }
+      responses:
+        '201':
+          description: Corporation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/corporations/{corporationId}:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+    patch:
+      tags: [internal]
+      operationId: internalUpdateCorporation
+      summary: Edit a corporation, acting as its current CEO
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CorporationPatch' }
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [internal]
+      operationId: internalDisbandCorporation
+      summary: Disband a corporation, acting as its current CEO
+      security: [{ serviceAuth: [] }]
+      responses:
+        '204': { description: Corporation disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/corporations/{corporationId}/transfer:
+    post:
+      tags: [internal]
+      operationId: internalTransferCorporationCeo
+      summary: Transfer the CEO, acting as the current CEO
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated corporation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Corporation' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/corporations/{corporationId}/members/{playerId}:
+    parameters:
+      - $ref: '#/components/parameters/corporationId'
+      - $ref: '#/components/parameters/playerId'
+    patch:
+      tags: [internal]
+      operationId: internalSetCorporationMemberRank
+      summary: Assign a member's rank, acting as the current CEO
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rankId]
+              properties:
+                rankId: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Updated membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CorporationMember' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [internal]
+      operationId: internalRemoveCorporationMember
+      summary: Remove a member, acting as the current CEO
+      security: [{ serviceAuth: [] }]
+      responses:
+        '204': { description: Member removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/corporations/{corporationId}/politics:
+    get:
+      tags: [internal]
+      operationId: internalGetCorporationPolitics
+      summary: Corporation's political (fiscal) attachment, for mirroring into economie
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/corporationId'
+      responses:
+        '200':
+          description: The corporation's fiscal home
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corporationId, politicalEntityId]
+                properties:
+                  corporationId: { type: string, format: uuid }
+                  politicalEntityId: { type: [string, 'null'], format: uuid }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/politics:
+    post:
+      tags: [internal]
+      operationId: internalCreatePoliticalEntity
+      summary: Create a political entity with an explicit head (player or NPC)
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InternalCreatePoliticalEntity' }
+      responses:
+        '201':
+          description: Political entity created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/politics/{entityId}:
+    parameters:
+      - $ref: '#/components/parameters/politicalEntityId'
+    patch:
+      tags: [internal]
+      operationId: internalUpdatePoliticalEntity
+      summary: Edit a political entity, acting as its current head
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PoliticalEntityPatch' }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [internal]
+      operationId: internalDisbandPoliticalEntity
+      summary: Disband a political entity, acting as its current head
+      security: [{ serviceAuth: [] }]
+      responses:
+        '204': { description: Entity disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/politics/{entityId}/transfer:
+    post:
+      tags: [internal]
+      operationId: internalTransferPoliticalHead
+      summary: Transfer the head office, acting as the current head
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId]
+              properties:
+                playerId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/players/{playerId}/politics:
+    parameters:
+      - $ref: '#/components/parameters/playerId'
+    put:
+      tags: [internal]
+      operationId: internalAddNpcToPolitics
+      summary: Add an NPC to a political entity
+      description: NPC-only. Uses `officeId` when given, otherwise the entity's default office.
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NpcPoliticalBody' }
+      responses:
+        '200':
+          description: Membership created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalMembership' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [internal]
+      operationId: internalRemoveNpcFromPolitics
+      summary: Remove an NPC from a political entity
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: entityId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: NPC removed }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [internal]
+      operationId: internalGetPlayerPolitics
+      summary: Political membership(s) and office of a profile
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: entityId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: A membership, `null`, or the list of memberships
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - allOf:
+                  - $ref: '#/components/schemas/PoliticalEntity'
+                  - properties:
+                      office:
+                        $ref: '#/components/schemas/PoliticalOffice'
+                    required:
+                    - office
+                    type: object
+                - type: 'null'
+                - $ref: '#/components/schemas/PoliticalMembershipPage'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak access token (RS256, validated against the realm JWKS). Moderation
+        routes read the realm roles `moderator`, `admin`, `supervisor`.
+        Dev only (`AUTH_DEV_BYPASS=true`): `X-Player-Id`, `X-Player-Name`,
+        `X-Player-Roles` headers may replace the token.
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak service-account access token (client_credentials, RS256, validated
+        against the realm JWKS). `azp` must be an allowed client
+        (`INTERNAL_SERVICE_CLIENTS`) and `aud` must contain `social-api`; each route
+        then needs its capability role. Dev only (`INTERNAL_DEV_BYPASS=true`): the
+        legacy `X-Internal-Key` header is accepted instead.
+
+  parameters:
+    playerId:
+      name: playerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    corporationId:
+      name: corporationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    groupId:
+      name: groupId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    politicalEntityId:
+      name: entityId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    officeId:
+      name: officeId
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    requestId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    reportId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    search:
+      name: search
+      in: query
+      description: Case-insensitive substring; empty lists everything
+      schema: { type: string, maxLength: 64, default: '' }
+
+    offset:
+      in: query
+      name: offset
+      schema:
+        default: 0
+        minimum: 0
+        type: integer
+  responses:
+    ValidationError:
+      description: Invalid body, query or path parameters (`VALIDATION_ERROR`) or malformed JSON (`INVALID_JSON`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid player token / service token (`UNAUTHORIZED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Missing role or corporation permission (`FORBIDDEN`), or caller is suspended/banned (`SANCTIONED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Sanctioned:
+      description: Caller is under an active suspension or ban (`SANCTIONED`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict (`CONFLICT`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServiceForbidden:
+      description: >
+        The service token is not from an allowed client (`SERVICE_FORBIDDEN`) or the
+        service account lacks the route's capability role (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message, status]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, SANCTIONED, NOT_FOUND, CONFLICT, BLOCKED, INVALID_TARGET, INTERNAL_ERROR]
+        message: { type: string }
+        status: { type: integer }
+
+    ProfileIdentity:
+      type: object
+      description: Minimal profile identity returned to trusted services for name resolution
+      required: [playerId, displayName, entityType]
+      properties:
+        playerId: { type: string, format: uuid }
+        displayName: { type: string }
+        entityType: { $ref: '#/components/schemas/ProfileKind' }
+
+    # ── ACL (central authorization) ──
+    Action:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)*$'
+      description: >
+        Organisation action. Catalogued actions (`mission:treasury:commit`,
+        `economie:treasury:manage`, `market:trade`, `inventory:poi:manage`, legacy
+        `manage_*` names) carry evaluation rules; any other string is a *free* action and
+        only ever matches an exact permission stored on the rank/office.
+    AuthorizeCheck:
+      type: object
+      required: [holderType, holderId, playerId, action]
+      properties:
+        holderType: { type: string, enum: [corporation, political] }
+        holderId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        action: { $ref: '#/components/schemas/Action' }
+    AuthorizeResult:
+      type: object
+      required: [holderType, holderId, playerId, action, allowed, reason, role, leader, permissions]
+      properties:
+        holderType: { type: string, enum: [corporation, political] }
+        holderId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        action: { $ref: '#/components/schemas/Action' }
+        allowed: { type: boolean }
+        reason:
+          type: string
+          enum: [allowed, not_member, missing_permission]
+          description: Callers map it onto their own error codes (`not_member` → 403 membership, `missing_permission` → 403 permission).
+        role: { type: [string, 'null'], description: 'Rank/office name held, null for a non-member' }
+        leader: { type: boolean, description: CEO rank / head office — implicitly holds every action }
+        permissions:
+          type: array
+          items: { type: string }
+          description: Permissions actually held by the rank/office
+    PermissionCatalogRow:
+      type: object
+      required: [action, holder, legacy, description]
+      properties:
+        action: { $ref: '#/components/schemas/Action' }
+        holder: { type: string, enum: [corporation, political] }
+        legacy: { type: boolean, description: Stored as-is on ranks/offices (pre-ACL permission) }
+        defaultMember: { type: boolean, description: Granted to every member without any permission }
+        satisfiedBy:
+          type: array
+          items: { type: string }
+          description: Legacy permissions that satisfy this action
+        description: { type: string, description: Localized through Accept-Language }
+
+    # ── Enums ──
+    PresenceStatus:
+      type: string
+      enum: [online, mission, offline]
+    CorporationRecruitmentMode:
+      type: string
+      enum: [open, apply, closed]
+    CorporationPermission:
+      description: Legacy corporation permissions (kept for reference; ranks accept any `Action`).
+      enum: [manage_corporation, manage_ranks, manage_members, invite, recruit]
+    CorporationRequestKind:
+      type: string
+      enum: [invitation, application]
+    ReputationSource:
+      type: string
+      enum: [game, block, report, sanction, moderation, rehabilitation]
+    ReportTargetType:
+      type: string
+      enum: [player, corporation]
+    ReportReason:
+      type: string
+      enum: [harassment, cheating, griefing, offensive_name, scam, other]
+    ReportStatus:
+      type: string
+      enum: [open, reviewing, resolved, dismissed]
+    EscalationLevel:
+      type: string
+      enum: [moderator, admin, supervisor]
+    SanctionType:
+      type: string
+      enum: [warning, mute, suspension, ban]
+
+    # ── Profiles & presence ──
+    RpSheet:
+      type: object
+      properties:
+        characterName: { type: string, maxLength: 64 }
+        story: { type: string, maxLength: 4000 }
+        alignment: { type: string, maxLength: 32 }
+
+    ProfileKind:
+      type: string
+      enum: [player, npc]
+      description: '`player` = Keycloak-authenticated; `npc` = server-managed, excluded from reputation, sanctions and reports'
+
+    PlayerProfile:
+      type: object
+      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
+      properties:
+        playerId: { type: string, format: uuid, description: Keycloak subject (players) or server-assigned id (NPCs) }
+        entityType: { $ref: '#/components/schemas/ProfileKind' }
+        displayName: { type: string }
+        avatarUrl: { type: [string, 'null'], format: uri }
+        faction: { type: [string, 'null'] }
+        biography: { type: [string, 'null'] }
+        role: { type: [string, 'null'], description: In-game role reported by the game server }
+        reputation: { type: integer }
+        playtimeSeconds: { type: integer }
+        rpSheet:
+          oneOf:
+            - $ref: '#/components/schemas/RpSheet'
+            - type: 'null'
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ProfilePatch:
+      type: object
+      minProperties: 1
+      properties:
+        displayName: { type: string, minLength: 2, maxLength: 32 }
+        avatarUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+        faction: { type: [string, 'null'], maxLength: 64 }
+        biography: { type: [string, 'null'], maxLength: 2000 }
+        rpSheet:
+          oneOf:
+            - $ref: '#/components/schemas/RpSheet'
+            - type: 'null'
+
+    Location:
+      type: object
+      properties:
+        system: { type: string, maxLength: 64 }
+        scene: { type: string, maxLength: 128 }
+        position:
+          type: object
+          required: [x, y, z]
+          properties:
+            x: { type: number }
+            y: { type: number }
+            z: { type: number }
+
+    Presence:
+      type: object
+      required: [status, location, updatedAt]
+      properties:
+        status: { $ref: '#/components/schemas/PresenceStatus' }
+        location:
+          oneOf:
+            - $ref: '#/components/schemas/Location'
+            - type: 'null'
+        updatedAt: { type: string, format: date-time }
+
+    ActivityEntry:
+      type: object
+      required: [id, playerId, type, details, createdAt]
+      properties:
+        id: { type: integer }
+        playerId: { type: string, format: uuid }
+        type:
+          type: string
+          examples: [profile_created, profile_updated, friend_request_sent, friend_added, player_blocked, corporation_application_sent]
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    TargetPlayer:
+      type: object
+      required: [playerId]
+      properties:
+        playerId: { type: string, format: uuid }
+
+    # ── Friends ──
+    Friendship:
+      type: object
+      required: [id, requesterId, addresseeId, status, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        requesterId: { type: string, format: uuid }
+        addresseeId: { type: string, format: uuid }
+        status: { type: string, enum: [pending, accepted] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Friend:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [friendsSince, status, location]
+          properties:
+            friendsSince: { type: string, format: date-time }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    FriendRequest:
+      type: object
+      required: [id, createdAt, player]
+      properties:
+        id: { type: integer }
+        createdAt: { type: string, format: date-time }
+        player: { $ref: '#/components/schemas/PlayerProfile', description: The other party }
+
+    FriendSuggestion:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [lastMetAt, encounters]
+          properties:
+            lastMetAt: { type: string, format: date-time }
+            encounters: { type: integer }
+
+    # ── Corporations ──
+    CorporationRef:
+      type: object
+      required: [id, name, ticker]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        ticker: { type: string }
+
+    Corporation:
+      type: object
+      required: [id, name, ticker, logoUrl, description, recruitment, parentId, politicalEntityId, ceoId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        ticker: { type: string, description: "Uppercase alphanumeric, 2–5 chars" }
+        logoUrl: { type: [string, 'null'], format: uri }
+        description: { type: [string, 'null'] }
+        recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode' }
+        parentId: { type: [string, 'null'], format: uuid, description: "Holding company this corporation is a subsidiary of" }
+        politicalEntityId: { type: [string, 'null'], format: uuid, description: "Political entity (fiscal home) this corporation is attached to" }
+        ceoId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CorporationSummary:
+      allOf:
+        - $ref: '#/components/schemas/Corporation'
+        - type: object
+          required: [memberCount]
+          properties:
+            memberCount: { type: integer }
+
+    CreateCorporation:
+      type: object
+      required: [name, ticker]
+      properties:
+        name: { type: string, minLength: 3, maxLength: 48 }
+        ticker: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$', description: Stored uppercased }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        logoUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+        recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode', default: apply }
+
+    CorporationPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 3, maxLength: 48 }
+        ticker: { type: string, minLength: 2, maxLength: 5, pattern: '^[A-Za-z0-9]+$' }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        logoUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+        recruitment: { $ref: '#/components/schemas/CorporationRecruitmentMode' }
+
+    CorporationRank:
+      type: object
+      required: [id, corporationId, name, priority, permissions, isCeo, isDefault]
+      properties:
+        id: { type: integer }
+        corporationId: { type: string, format: uuid }
+        name: { type: string }
+        priority: { type: integer, description: Higher wins; a member may only act on ranks strictly below their own }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/Action' }
+        isCeo: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
+        isDefault: { type: boolean, description: Rank given to new members }
+
+    CreateRank:
+      type: object
+      required: [name, priority]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 32 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          default: []
+          items: { $ref: '#/components/schemas/Action' }
+        isDefault: { type: boolean }
+
+    RankPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 32 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/Action' }
+        isDefault: { type: boolean }
+
+    CorporationMembership:
+      type: object
+      required: [corporationId, playerId, rankId, joinedAt]
+      properties:
+        corporationId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        rankId: { type: integer }
+        joinedAt: { type: string, format: date-time }
+
+    CorporationMember:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [joinedAt, rank, status, location]
+          properties:
+            joinedAt: { type: string, format: date-time }
+            rank: { $ref: '#/components/schemas/CorporationRank' }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    CorporationJoinRequest:
+      type: object
+      required: [id, corporationId, playerId, kind, message, createdBy, createdAt]
+      properties:
+        id: { type: integer }
+        corporationId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/CorporationRequestKind' }
+        message: { type: [string, 'null'] }
+        createdBy: { type: [string, 'null'], format: uuid, description: Inviting member for invitations; null for applications }
+        createdAt: { type: string, format: date-time }
+
+    CorporationRequest:
+      description: A corporation-side view of a request, with the player's profile
+      allOf:
+        - $ref: '#/components/schemas/CorporationJoinRequest'
+        - type: object
+          required: [player]
+          properties:
+            player: { $ref: '#/components/schemas/PlayerProfile' }
+
+    PlayerCorporationRequest:
+      description: A player-side view of a request, with the corporation reference
+      allOf:
+        - $ref: '#/components/schemas/CorporationJoinRequest'
+        - type: object
+          required: [corporation]
+          properties:
+            corporation:
+              type: object
+              required: [id, name, ticker, logoUrl]
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+                ticker: { type: string }
+                logoUrl: { type: [string, 'null'], format: uri }
+
+    JoinedResult:
+      type: object
+      required: [joined]
+      properties:
+        joined: { type: boolean, const: true }
+
+    PendingRequestResult:
+      type: object
+      required: [joined, request]
+      properties:
+        joined: { type: boolean, const: false }
+        request: { $ref: '#/components/schemas/CorporationJoinRequest' }
+
+    CorporationActivityEntry:
+      type: object
+      required: [id, corporationId, actorId, type, details, createdAt]
+      properties:
+        id: { type: integer }
+        corporationId: { type: string, format: uuid }
+        actorId: { type: [string, 'null'], format: uuid }
+        type:
+          type: string
+          examples: [corporation_created, member_joined, member_left, member_kicked, rank_changed, player_invited, ceo_transferred]
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    # ── Groups ──
+    Group:
+      type: object
+      required: [id, name, description, ownerId, maxMembers, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        ownerId: { type: string, format: uuid, description: Owner (passes to the oldest member when they leave) }
+        maxMembers: { type: integer, minimum: 2, maximum: 100, default: 10 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    GroupSummary:
+      allOf:
+        - $ref: '#/components/schemas/Group'
+        - type: object
+          required: [memberCount]
+          properties:
+            memberCount: { type: integer }
+
+    GroupMember:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [joinedAt, isOwner, status, location]
+          properties:
+            joinedAt: { type: string, format: date-time }
+            isOwner: { type: boolean }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    GroupMembership:
+      type: object
+      required: [group, member]
+      properties:
+        group: { $ref: '#/components/schemas/Group' }
+        member:
+          type: object
+          required: [groupId, playerId, joinedAt]
+          properties:
+            groupId: { type: string, format: uuid }
+            playerId: { type: string, format: uuid }
+            joinedAt: { type: string, format: date-time }
+
+    GroupInvitation:
+      type: object
+      required: [id, groupId, playerId, invitedBy, createdAt]
+      properties:
+        id: { type: integer }
+        groupId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        invitedBy: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    PlayerGroupInvitation:
+      allOf:
+        - $ref: '#/components/schemas/GroupInvitation'
+        - type: object
+          required: [group]
+          properties:
+            group:
+              type: object
+              required: [id, name]
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+                description: { type: [string, 'null'] }
+                maxMembers: { type: integer }
+
+    CreateGroup:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        maxMembers: { type: integer, minimum: 2, maximum: 100, default: 10 }
+
+    GroupPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        maxMembers: { type: integer, minimum: 2, maximum: 100 }
+
+    # ── Politics ──
+    PoliticalEntityType:
+      type: string
+      enum: [commune, agglomeration, department, region, country, federation]
+      description: '`commune` covers villages and towns; `federation` is the highest, optional level (a country may stay independent)'
+
+    PoliticalPermission:
+      description: Legacy political permissions (kept for reference; offices accept any `Action`).
+      enum: [manage_entity, manage_offices, manage_members, manage_hierarchy, manage_treasury, issue_currency]
+
+    PoliticalEntityRef:
+      type: object
+      required: [id, type, name]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/PoliticalEntityType' }
+        name: { type: string }
+
+    PoliticalEntity:
+      type: object
+      required: [id, type, name, description, bannerUrl, parentId, headId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/PoliticalEntityType' }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        bannerUrl: { type: [string, 'null'], format: uri }
+        parentId: { type: [string, 'null'], format: uuid, description: Higher-level entity, or null when independent }
+        headId: { type: [string, 'null'], format: uuid, description: Profile (player or NPC) holding the head office }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PoliticalEntitySummary:
+      allOf:
+        - $ref: '#/components/schemas/PoliticalEntity'
+        - type: object
+          required: [memberCount]
+          properties:
+            memberCount: { type: integer }
+
+    CreatePoliticalEntity:
+      type: object
+      required: [type, name]
+      properties:
+        type: { $ref: '#/components/schemas/PoliticalEntityType' }
+        name: { type: string, minLength: 3, maxLength: 64 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        bannerUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+
+    PoliticalEntityPatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 3, maxLength: 64 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        bannerUrl: { type: [string, 'null'], format: uri, maxLength: 512 }
+
+    PoliticalOffice:
+      type: object
+      required: [id, entityId, name, priority, permissions, isHead, isDefault]
+      properties:
+        id: { type: integer }
+        entityId: { type: string, format: uuid }
+        name: { type: string }
+        priority: { type: integer, description: Higher wins; a member may only act on offices strictly below their own }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/Action' }
+        isHead: { type: boolean, description: "Unique, undeletable, implicitly has all permissions" }
+        isDefault: { type: boolean, description: Office given to newly appointed members }
+
+    PoliticalOfficeInput:
+      type: object
+      required: [name, priority]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 48 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          default: []
+          items: { $ref: '#/components/schemas/Action' }
+        isDefault: { type: boolean }
+
+    PoliticalOfficePatch:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 48 }
+        priority: { type: integer, minimum: 0, maximum: 99 }
+        permissions:
+          type: array
+          items: { $ref: '#/components/schemas/Action' }
+        isDefault: { type: boolean }
+
+    PoliticalMemberBody:
+      type: object
+      required: [playerId]
+      properties:
+        playerId: { type: string, format: uuid }
+        officeId: { type: integer, minimum: 1 }
+
+    PoliticalMemberOfficeBody:
+      type: object
+      required: [officeId]
+      properties:
+        officeId: { type: integer, minimum: 1 }
+
+    NpcPoliticalBody:
+      type: object
+      required: [entityId]
+      properties:
+        entityId: { type: string, format: uuid }
+        officeId: { type: integer, minimum: 1 }
+
+    PoliticalMembership:
+      type: object
+      required: [entityId, playerId, officeId, joinedAt]
+      properties:
+        entityId: { type: string, format: uuid }
+        playerId: { type: string, format: uuid }
+        officeId: { type: integer }
+        joinedAt: { type: string, format: date-time }
+
+    PoliticalMember:
+      allOf:
+        - $ref: '#/components/schemas/PlayerProfile'
+        - type: object
+          required: [joinedAt, office, status, location]
+          properties:
+            joinedAt: { type: string, format: date-time }
+            office: { $ref: '#/components/schemas/PoliticalOffice' }
+            status: { $ref: '#/components/schemas/PresenceStatus' }
+            location:
+              oneOf:
+                - $ref: '#/components/schemas/Location'
+                - type: 'null'
+
+    PoliticalActivityEntry:
+      type: object
+      required: [id, entityId, actorId, type, details, createdAt]
+      properties:
+        id: { type: integer }
+        entityId: { type: string, format: uuid }
+        actorId: { type: [string, 'null'], format: uuid }
+        type:
+          type: string
+          examples: [entity_created, entity_updated, member_appointed, office_changed, parent_set, head_transferred]
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    InternalCreateCorporation:
+      allOf:
+        - $ref: '#/components/schemas/CreateCorporation'
+        - type: object
+          required: [ceoId]
+          properties:
+            ceoId: { type: string, format: uuid, description: Profile (player or NPC) to make CEO }
+
+    InternalCreatePoliticalEntity:
+      allOf:
+        - $ref: '#/components/schemas/CreatePoliticalEntity'
+        - type: object
+          required: [headId]
+          properties:
+            headId: { type: string, format: uuid, description: Profile (player or NPC) to make head }
+
+    # ── Reputation & moderation ──
+    ReputationEvent:
+      type: object
+      required: [id, playerId, delta, balance, source, reason, actorId, details, createdAt]
+      properties:
+        id: { type: integer }
+        playerId: { type: string, format: uuid }
+        delta: { type: integer }
+        balance: { type: integer, description: Score after applying the delta }
+        source: { $ref: '#/components/schemas/ReputationSource' }
+        reason: { type: string }
+        actorId: { type: [string, 'null'], format: uuid }
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    CreateReport:
+      type: object
+      required: [targetType, targetId, reason]
+      properties:
+        targetType: { $ref: '#/components/schemas/ReportTargetType' }
+        targetId: { type: string, format: uuid, description: Player id or corporation id depending on `targetType` }
+        reason: { $ref: '#/components/schemas/ReportReason' }
+        message: { type: string, maxLength: 1000 }
+
+    Report:
+      type: object
+      required: [id, reporterId, targetType, targetPlayerId, targetCorporationId, reason, message, status, escalation, resolvedBy, resolutionNote, resolvedAt, createdAt]
+      properties:
+        id: { type: integer }
+        reporterId: { type: [string, 'null'], format: uuid, description: Null for reports raised automatically by the system }
+        targetType: { $ref: '#/components/schemas/ReportTargetType' }
+        targetPlayerId: { type: [string, 'null'], format: uuid }
+        targetCorporationId: { type: [string, 'null'], format: uuid }
+        reason:
+          type: string
+          enum: [harassment, cheating, griefing, offensive_name, scam, other, reputation_threshold]
+          description: '`reputation_threshold` is set on system-raised reports'
+        message: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/ReportStatus' }
+        escalation: { $ref: '#/components/schemas/EscalationLevel' }
+        resolvedBy: { type: [string, 'null'], format: uuid }
+        resolutionNote: { type: [string, 'null'] }
+        resolvedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    ReportView:
+      allOf:
+        - $ref: '#/components/schemas/Report'
+        - type: object
+          required: [reporterName, targetName]
+          properties:
+            reporterName: { type: [string, 'null'] }
+            targetName: { type: [string, 'null'] }
+
+    Sanction:
+      type: object
+      required: [id, playerId, type, reason, automatic, issuedBy, expiresAt, revokedAt, revokedBy, createdAt]
+      properties:
+        id: { type: integer }
+        playerId: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/SanctionType' }
+        reason: { type: string }
+        automatic: { type: boolean, description: Issued by the reputation thresholds rather than a moderator }
+        issuedBy: { type: [string, 'null'], format: uuid }
+        expiresAt: { type: [string, 'null'], format: date-time, description: Null = permanent (or instantaneous for warnings) }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        revokedBy: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    ModerationLogEntry:
+      type: object
+      required: [id, actorId, action, targetPlayerId, details, createdAt]
+      properties:
+        id: { type: integer }
+        actorId: { type: [string, 'null'], format: uuid }
+        action: { type: string }
+        targetPlayerId: { type: [string, 'null'], format: uuid }
+        details: { type: [object, 'null'], additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+
+    CommunityStats:
+      type: object
+      required: [players, corporations, reports, sanctions, activityLast24h, mostReported, lowestReputation]
+      properties:
+        players:
+          type: object
+          required: [total, online]
+          properties:
+            total: { type: integer }
+            online: { type: integer }
+        corporations:
+          type: object
+          required: [total, top]
+          properties:
+            total: { type: integer }
+            top:
+              type: array
+              description: Top 5 by member count
+              items:
+                type: object
+                required: [id, name, ticker, members]
+                properties:
+                  id: { type: string, format: uuid }
+                  name: { type: string }
+                  ticker: { type: string }
+                  members: { type: integer }
+        reports:
+          type: object
+          description: Count per status (missing key = 0)
+          additionalProperties: { type: integer }
+          propertyNames: { $ref: '#/components/schemas/ReportStatus' }
+        sanctions:
+          type: object
+          required: [active]
+          properties:
+            active: { type: integer }
+        activityLast24h: { type: integer }
+        mostReported:
+          type: array
+          description: Top 5 players by open/reviewing reports
+          items:
+            type: object
+            required: [playerId, reports]
+            properties:
+              playerId: { type: string, format: uuid }
+              reports: { type: integer }
+        lowestReputation:
+          type: array
+          description: 5 lowest scores
+          items:
+            type: object
+            required: [playerId, displayName, reputation]
+            properties:
+              playerId: { type: string, format: uuid }
+              displayName: { type: string }
+              reputation: { type: integer }
+
+    PoliticalEntityPage:
+      allOf:
+      - $ref: '#/components/schemas/PoliticalEntitySummary'
+      - properties:
+          childCount:
+            minimum: 0
+            type: integer
+          children:
+            items:
+              $ref: '#/components/schemas/PoliticalEntitySummary'
+            type: array
+          memberCount:
+            minimum: 0
+            type: integer
+          members:
+            items:
+              $ref: '#/components/schemas/PoliticalMember'
+            type: array
+          offices:
+            items:
+              $ref: '#/components/schemas/PoliticalOffice'
+            type: array
+          parent:
+            oneOf:
+            - $ref: '#/components/schemas/PoliticalEntityRef'
+            - type: 'null'
+        required:
+        - offices
+        - members
+        - parent
+        - children
+        - memberCount
+        - childCount
+        type: object
+    ActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationMembershipPage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/Corporation'
+            - properties:
+                joinedAt:
+                  format: date-time
+                  type: string
+                rank:
+                  $ref: '#/components/schemas/CorporationRank'
+              required:
+              - joinedAt
+              - rank
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalMembershipPage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/PoliticalEntity'
+            - properties:
+                joinedAt:
+                  format: date-time
+                  type: string
+                office:
+                  $ref: '#/components/schemas/PoliticalOffice'
+              required:
+              - joinedAt
+              - office
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PlayerCorporationRequestPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PlayerCorporationRequest'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PlayerGroupInvitationPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PlayerGroupInvitation'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PlayerProfilePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PlayerProfile'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    FriendPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Friend'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    FriendSuggestionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/FriendSuggestion'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    BlockedProfilePage:
+      properties:
+        items:
+          items:
+            allOf:
+            - $ref: '#/components/schemas/PlayerProfile'
+            - properties:
+                blockedAt:
+                  format: date-time
+                  type: string
+              required:
+              - blockedAt
+              type: object
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationSummaryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationSummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationRequestPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationRequest'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    CorporationActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CorporationActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    GroupMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/GroupMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ReportPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Report'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ModerationLogEntryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ModerationLogEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ReportViewPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ReportView'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    SanctionPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Sanction'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalEntitySummaryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalEntitySummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalMemberPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalMember'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalActivityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalActivityEntry'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    ProfileIdentityPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ProfileIdentity'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object

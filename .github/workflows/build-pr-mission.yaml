@@ -1,0 +1,18 @@
+name: "PR Build Check: mission"
+
+on:
+  pull_request:
+    paths:
+      - "mission/**"
+
+jobs:
+  build:
+    name: Build mission (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: mission
+      context_path: mission
+      dockerfile_path: mission/docker/Dockerfile
+      image_name: local/mission
+      image_tag: pr-check
+      push: false
