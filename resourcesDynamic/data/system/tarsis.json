@@ -266,7 +266,7 @@
           "Uranium": 0.000447265538863685,
           "Zinc": 0.25288628278883
         },
-        "density_kg_m3": 4.43725127672497,
+        "density_kg_m3": 4437.25127672497,
         "eccentricity": 0.04,
         "inclination_deg": 0.43879826599353,
         "mass_Me": 0.318718034317024,
@@ -412,7 +412,7 @@
           "Uranium": 0.00134506697433013,
           "Zinc": 0.293155198072273
         },
-        "density_kg_m3": 3.33846575046029,
+        "density_kg_m3": 3338.46575046029,
         "eccentricity": 0.04,
         "inclination_deg": 0.140645831363347,
         "mass_Me": 0.0712940836580695,
@@ -560,7 +560,7 @@
           "Uranium": null,
           "Zinc": null
         },
-        "density_kg_m3": 5200,
+        "density_kg_m3": 4375,
         "eccentricity": 0.03,
         "inclination_deg": 1.5,
         "mass_Me": 0.788,
@@ -799,7 +799,7 @@
         "orbit_center": "primary",
         "periapsis_AU": 0.5335,
         "period_days": 171.05,
-        "radius_Re": 0.941,
+        "radius_Re": 0.998,
         "radius_km": 6356,
         "resources": {
           "Aluminium": null,
@@ -1208,7 +1208,7 @@
           "Potassium": 0.0439572625376306,
           "Sodium": 0.0339914184711943
         },
-        "density_kg_m3": 0.573381195681506,
+        "density_kg_m3": 573.381195681506,
         "eccentricity": 0.0181904813514532,
         "inclination_deg": 1.60820212716501,
         "mass_Me": 133.781995370392,
@@ -1478,7 +1478,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2520,
+            "density_kg_m3": 3511,
             "eccentricity": 0.0,
             "inclination_deg": 2.73,
             "index": 3,
@@ -1600,7 +1600,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 1930,
+            "density_kg_m3": 1170,
             "eccentricity": 0.0,
             "inclination_deg": 3.7,
             "index": 4,
@@ -1719,7 +1719,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2200,
+            "density_kg_m3": 2693,
             "eccentricity": 0.0,
             "inclination_deg": 1.7,
             "index": 5,
@@ -1841,7 +1841,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2550,
+            "density_kg_m3": 1900,
             "eccentricity": 0.0,
             "inclination_deg": 1.92,
             "index": 6,
@@ -2028,7 +2028,7 @@
           "Potassium": 0.121710899814986,
           "Sodium": 0.0902074014197805
         },
-        "density_kg_m3": 2.84626480587013,
+        "density_kg_m3": 2846.26480587013,
         "eccentricity": 0.00310099191404056,
         "inclination_deg": 12.2611749264568,
         "mass_Me": 38.4506521934531,
@@ -2052,7 +2052,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2630,
+            "density_kg_m3": 1902,
             "eccentricity": 0.0,
             "inclination_deg": -3.03,
             "index": 1,
@@ -2174,7 +2174,7 @@
               }
             },
             "composition_bulk_pct": {},
-            "density_kg_m3": 2930,
+            "density_kg_m3": 3484,
             "eccentricity": 0.0,
             "inclination_deg": 2.77,
             "index": 2,
@@ -2338,7 +2338,7 @@
           "Uranium": 0.00135688343568742,
           "Zinc": 0.183096025130839
         },
-        "density_kg_m3": 3.62844868206298,
+        "density_kg_m3": 3628.44868206298,
         "eccentricity": 0.00270584736538126,
         "inclination_deg": 10.6017736042081,
         "mass_Me": 0.110520611941392,
@@ -2486,7 +2486,7 @@
           "Uranium": 0.00149664870140536,
           "Zinc": 0.181785303188553
         },
-        "density_kg_m3": 3.59380148503448,
+        "density_kg_m3": 3593.80148503448,
         "eccentricity": 0.00123331579996434,
         "inclination_deg": 12.1941770407002,
         "mass_Me": 0.105078102394599,
