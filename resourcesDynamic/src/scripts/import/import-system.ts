@@ -1,6 +1,6 @@
-import { createPlanet, createSystem } from "@db/queries";
-import { createMoon } from "@db/queries/moons";
-import { createStar } from "@db/queries/stars";
+import { upsertPlanet, upsertSystem } from "@db/queries";
+import { upsertMoon } from "@db/queries/moons";
+import { upsertStar } from "@db/queries/stars";
 import type {
   Moon,
   NewMoon,
@@ -109,7 +109,7 @@ const importSystemDb = async (system: SystemType) => {
     name: system.name,
     internalName: system.name.toLowerCase(),
   };
-  return await createSystem(newSystem);
+  return await upsertSystem(newSystem);
 };
 
 const importStarDb = async (star: StarType, system: System) => {
@@ -119,7 +119,7 @@ const importStarDb = async (star: StarType, system: System) => {
     massKg: star.mass_Sun * MASS_SUN,
     systemId: system.id,
   };
-  return await createStar(newStar);
+  return await upsertStar(newStar);
 };
 
 const getFlatInfo = (planetNumber: number, flatName: string) => {
@@ -157,7 +157,7 @@ const importPlanetDb = async (
     tidalLocked: planet.tidal_locked,
     tiltRad: convertDegToRad(planet.tilt_deg),
   };
-  return await createPlanet(newPlanet);
+  return await upsertPlanet(newPlanet);
 };
 
 const importMoonDb = async (
@@ -183,7 +183,7 @@ const importMoonDb = async (
     tidalLocked: moon.spin_locked,
     tiltRad: 0, // TODO: Missing data
   };
-  return await createMoon(newMoon);
+  return await upsertMoon(newMoon);
 };
 
 const convertDegToRad = (degree: number): number => {

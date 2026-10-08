@@ -18,3 +18,16 @@ export const createMoon = async (moon: NewMoon): Promise<Moon> => {
   const result = await db.insert(moons).values(moon).returning();
   return result[0];
 };
+
+/**
+ * Insert or update a moon identified by its internal name (keeps id and uuid)
+ */
+export const upsertMoon = async (moon: NewMoon): Promise<Moon> => {
+  const { uuid: _uuid, ...data } = moon;
+  const result = await db
+    .insert(moons)
+    .values(moon)
+    .onConflictDoUpdate({ target: moons.internalName, set: data })
+    .returning();
+  return result[0];
+};

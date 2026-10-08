@@ -59,6 +59,19 @@ export const createSystem = async (system: NewSystem): Promise<System> => {
   return result[0];
 };
 
+/**
+ * Insert or update a system identified by its internal name (keeps id and uuid)
+ */
+export const upsertSystem = async (system: NewSystem): Promise<System> => {
+  const { uuid: _uuid, ...data } = system;
+  const result = await db
+    .insert(systems)
+    .values(system)
+    .onConflictDoUpdate({ target: systems.internalName, set: data })
+    .returning();
+  return result[0];
+};
+
 export const updateSystem = async (
   systemId: number,
   data: UpdateSystem,

@@ -46,6 +46,19 @@ export const createPlanet = async (planet: NewPlanet): Promise<Planet> => {
   return result[0];
 };
 
+/**
+ * Insert or update a planet identified by its internal name (keeps id and uuid)
+ */
+export const upsertPlanet = async (planet: NewPlanet): Promise<Planet> => {
+  const { uuid: _uuid, ...data } = planet;
+  const result = await db
+    .insert(planets)
+    .values(planet)
+    .onConflictDoUpdate({ target: planets.internalName, set: data })
+    .returning();
+  return result[0];
+};
+
 export const updatePlanet = async (
   uuid: string,
   data: UpdatePlanet,
