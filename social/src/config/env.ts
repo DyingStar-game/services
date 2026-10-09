@@ -40,6 +40,16 @@ export const env = {
       .map((client) => client.trim())
       .filter(Boolean),
   },
+  /** Valkey cache: live presence (TTL) and playtime accumulator. Empty URL disables it. */
+  valkey: {
+    url: process.env.VALKEY_URL ?? '',
+    /** Presence TTL: a player without a heartbeat for this long reads back as offline. */
+    presenceTtlSeconds: int('PRESENCE_TTL_SECONDS', 90),
+    /** How often cached playtime deltas are flushed to PostgreSQL. */
+    playtimeFlushIntervalMinutes: int('PLAYTIME_FLUSH_INTERVAL_MINUTES', 5),
+    /** Maximum players accepted by one `PUT /players/presence/batch` heartbeat. */
+    presenceBatchMax: int('PRESENCE_BATCH_MAX', 5000),
+  },
   /** Reputation deltas and automatic sanction thresholds (all thresholds are negative scores). */
   reputation: {
     blockPenalty: int('REPUTATION_BLOCK_PENALTY', 1),

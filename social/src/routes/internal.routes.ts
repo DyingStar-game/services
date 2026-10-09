@@ -37,7 +37,7 @@ import {
   transferPoliticalHead,
   updatePoliticalEntity,
 } from '../services/politics.service.js';
-import { getPresence, setPresence } from '../services/presence.service.js';
+import { getPresence, setPresence, setPresenceBatch } from '../services/presence.service.js';
 import {
   applyStats,
   ensureNpcProfile,
@@ -46,6 +46,7 @@ import {
   getProfilesByIds,
   searchProfiles,
 } from '../services/profiles.service.js';
+import { withLivePlaytime } from '../services/playtime.service.js';
 import { adjustReputation, rehabilitate } from '../services/reputation.service.js';
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
@@ -71,6 +72,7 @@ import {
   politicalEntityPatchBody,
   politicalQueryOptional,
   politicalQueryRequired,
+  presenceBatchBody,
   presenceBody,
   statsBody,
   targetPlayerBody,
@@ -97,7 +99,8 @@ internalRoutes.get(
   requireServiceRole(SERVICE_ROLES.profileRead),
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
-    res.json((await getProfile(req.params.playerId)) ?? null);
+    const profile = await getProfile(req.params.playerId);
+    res.json(profile ? await withLivePlaytime(profile) : null);
   }),
 );
 
@@ -119,6 +122,20 @@ internalRoutes.get(
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json({ playerId: req.params.playerId, ...(await getPresence(req.params.playerId)) });
+  }),
+);
+
+/**
+ * PUT /players/presence/batch — Batch heartbeat: refresh the TTL of every active player
+ * of a game server (one call per minute instead of one per player). Players absent from
+ * the call expire back to `offline` on TTL. Omitted `status` keeps a live one.
+ */
+internalRoutes.put(
+  '/players/presence/batch',
+  requireServiceRole(SERVICE_ROLES.profileWrite),
+  validate(presenceBatchBody),
+  asyncHandler(async (req, res) => {
+    res.json(await setPresenceBatch(req.body.players));
   }),
 );
 

@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 
+import { env } from '../config/env.js';
 import {
   CORPORATION_RECRUITMENT_MODES,
   ENTITY_TYPES,
@@ -113,6 +114,18 @@ export const locationSchema = z.object({
 export const presenceBody = z.object({
   status: z.enum(PRESENCE_STATUSES),
   location: locationSchema.nullable().optional(),
+});
+
+/** One player of a batch heartbeat; omitted `status` keeps a live one (default `online`). */
+const presenceBatchEntry = z.object({
+  playerId: uuidSchema,
+  status: z.enum(PRESENCE_STATUSES).optional(),
+  location: locationSchema.nullable().optional(),
+});
+
+/** `PUT /api/internal/players/presence/batch`: the game server's active roster. */
+export const presenceBatchBody = z.object({
+  players: z.array(presenceBatchEntry).min(1).max(env.valkey.presenceBatchMax),
 });
 
 export const statsBody = z

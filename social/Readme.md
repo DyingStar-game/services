@@ -1,13 +1,13 @@
 # Service social
 
 API sociale de DyingStar : profils joueurs, amis, présence, corporations, politique, réputation et modération.
-Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak validé via JWKS (`jose`).
+Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak validé via JWKS (`jose`), cache Valkey (présence en ligne avec TTL + accumulateur de temps de jeu, optionnel).
 
 ## Lancer en local
 
 ```bash
 cp .env.example .env          # ajuster DATABASE_URL, OIDC_ISSUER, INTERNAL_SERVICE_CLIENTS
-docker compose -f docker/docker-compose.yml --env-file .env up   # API (watch) + postgres
+docker compose -f docker/docker-compose.yml --env-file .env up   # API (watch) + postgres + valkey
 ```
 
 Ou avec un Postgres déjà disponible :
@@ -40,6 +40,18 @@ Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en 
 | `INTERNAL_DEV_BYPASS` | Accepter `X-Internal-Key` sur `/api/internal/*` (ignoré en production) |
 | `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` (+ `X-Player-Name`, `X-Player-Roles`) sans JWT (dev uniquement) |
 | `REPUTATION_*` | Pénalités (blocage, signalement, signalement confirmé), seuils de sanctions automatiques (`WARN_AT`, `MUTE_AT`, `SUSPEND_AT`, `ESCALATE_AT`), durées, réhabilitation (`REHAB_AFTER_DAYS`, `REHAB_STEP`, `REHAB_INTERVAL_MINUTES`) — voir `.env.example` |
+| `VALKEY_URL` | URL du cache Valkey ; **vide = cache désactivé** (la base seule fait foi, comportement historique) |
+| `PRESENCE_TTL_SECONDS` | TTL de présence en cache (défaut `90`) : sans heartbeat pendant ce délai, un joueur repasse `offline` |
+| `PLAYTIME_FLUSH_INTERVAL_MINUTES` | Intervalle de flush du temps de jeu accumulé vers PostgreSQL (défaut `5`, `0` désactive le scheduler) |
+| `PRESENCE_BATCH_MAX` | Joueurs max par heartbeat batch (défaut `5000`) |
+
+## Cache Valkey (présence + temps de jeu)
+
+Valkey est **dédié à ce service**, tourne **sans persistance** (`--save "" --appendonly no`) et n'est jamais contacté directement par les autres services : ils passent par l'API interne comme avant.
+
+- **Présence** : les heartbeats (`PUT /players/presence/batch`, ~1 req/min par serveur de jeu, ou la route par joueur pour les transitions) font un `SET presence:{id} … EX 90` — **zéro écriture DB par heartbeat**. La base n'est écrite qu'aux changements de statut (`online`/`mission`/`offline`). Absent du heartbeat → expiration TTL → `offline` automatique (pas besoin d'événement de déconnexion). Une ligne DB plus vieille que le TTL est lue `offline` (règle anti-stale après un redémarrage du cache).
+- **Temps de jeu** : `POST /players/:id/stats` fait un `INCRBY playtime:{id}` ; toutes les `PLAYTIME_FLUSH_INTERVAL_MINUTES` un job `GETDEL` + UPDATE batchée écrit les deltas en base. Perte maximale en cas de redémarrage de Valkey : un intervalle de flush. Les lectures (`/api/me`, profil interne/admin) combinent la base + le delta en attente.
+- **Dégradation** : si Valkey est injoignable, chaque opération retombe sur la base (écritures DB reprises à l'ancien rythme), sans erreur côté appelant. `GET /api/health?deep=1` affiche `valkey: ok|down|disabled` (un cache down ne fait jamais échouer le probe).
 
 ## Pagination (rupture de contrat)
 
@@ -211,9 +223,10 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | PUT | `/api/internal/players/:playerId` `{displayName}` | `social:profile:write` | Créer le profil au login (nom existant conservé) |
 | GET | `/api/internal/players/:playerId` | `social:profile:read` | Profil complet (**réputation** inclus) ou `null` — utilisé par Mission pour les prérequis `min_reputation` |
 | PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?}` | `social:profile:write` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
-| PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
-| GET | `/api/internal/players/:playerId/presence` | `social:profile:read` | Statut + localisation (défaut hors ligne / `location: null`) — lu par Mission pour filtrer les missions zonées |
-| POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
+| PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | Transition (login/mission/logout) : `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` — écrit dans le cache (TTL) ; la base ne suit qu'aux changements de statut |
+| GET | `/api/internal/players/:playerId/presence` | `social:profile:read` | Statut + localisation (défaut hors ligne / `location: null`) — lu par Mission pour filtrer les missions zonées ; cache d'abord, base en repli |
+| PUT | `/api/internal/players/presence/batch` `{players:[{playerId, status?, location?}]}` | `social:profile:write` | **Heartbeat groupé** (≤ 5000 joueurs, ~1 req/min par serveur de jeu) : rafraîchit le TTL de tous les joueurs actifs ; absents du appel → expiration automatique en `offline` ; `status` omis = keep du statut live (défaut `online`) — répond `{refreshed, unknown}` |
+| POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements ; le playtime est accumulé dans le cache puis flushé en base périodiquement) |
 | GET | `/api/internal/players/:playerId/sanctions` | `social:sanctions:read` | Sanctions actives (pour appliquer mute/ban côté jeu) |
 | POST | `/api/internal/reputation/rehabilitate` | `social:reputation:write` | Lancer une passe de réhabilitation |
 | POST | `/api/internal/players/:playerId/activity` `{type, details?}` | `social:player:write` | Ajouter une entrée d'activité |
@@ -304,8 +317,9 @@ Social lui-même ne passe pas par l'endpoint : `requireCorporationPermission` /
 
 ```
 src/
-  index.ts          bootstrap Express, migrations, listen
+  index.ts          bootstrap Express, cache, migrations, listen
   config/env.ts     variables d'environnement
+  cache/valkey.ts   client Valkey (optionnel, repli base gracieux)
   db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, groups, politics, moderation)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle (migration unique `0000_init`) et refuse de démarrer si le schéma manque
   middleware/       auth (JWT joueur / service-account + rôles de capacité), sanctions, validate (zod), errorHandler
