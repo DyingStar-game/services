@@ -22,11 +22,15 @@ publish/subscribe, go-auth calls this service with the client's Keycloak access 
 | `chat/dm/{fromId}/{toId}` | `fromId` (the verified JWT `sub`), if the pair is friends and neither is muted | the recipient only: `toId` = own id (canonical filter `chat/dm/+/{myId}`) |
 | `chat/group/{groupId}` | members of the group | members of the group |
 | `chat/corporation/{corporationId}` | corporation members | corporation members |
+| `notify/{playerId}` | trusted service clients only (`azp` ∈ `CHAT_SERVICE_CLIENTS`) | the player: own id only (concrete topic, no wildcards) |
 
 Notes:
 
 - The client should subscribe to **all** its DMs with one filter: `chat/dm/+/{myId}`,
   then publish to `chat/dm/{me}/{recipientId}`.
+- Notifications (`notify/{playerId}`) are ephemeral pushes relayed by Social (QoS 0,
+  not retained, nothing stored): the player subscribes while its session lasts, and
+  services publish through `POST /api/internal/players/{id}/notifications`.
 - Wildcards (`+`/`#`) are rejected outside that canonical DM filter; group and
   corporation topics are concrete UUIDs only.
 - Scoped channels are decided by their own rules: widening `CHAT_ALLOWED_TOPICS`
@@ -69,7 +73,9 @@ corporation channels are refused.
 | `OIDC_JWKS_URL` | `${OIDC_ISSUER}/protocol/openid-connect/certs` | Keycloak public keys |
 | `OIDC_TOKEN_URL` | `${OIDC_ISSUER}/protocol/openid-connect/token` | for Social client_credentials |
 | `CHAT_TOPIC_ROOT` | `chat` | first topic segment |
+| `CHAT_NOTIFY_ROOT` | `notify` | notification topic root |
 | `CHAT_ALLOWED_TOPICS` | `chat/global,chat/general` | legacy allowlist for non-scoped topics |
+| `CHAT_SERVICE_CLIENTS` | `svc-social` | comma-separated `azp` values allowed to publish notifications |
 | `CHAT_SOCIAL_API_URL` | *(empty = off)* | Social base URL, e.g. `http://social:3000` |
 | `CHAT_SOCIAL_SERVICE_CLIENT_ID` | `svc-chat` | Keycloak service client |
 | `CHAT_SOCIAL_SERVICE_CLIENT_SECRET` | *(empty)* | its secret |

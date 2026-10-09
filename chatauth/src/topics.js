@@ -1,10 +1,14 @@
 // Topic grammar and ACL decisions for the text-chat broker.
 //
-// Topic layout (root configurable, default "chat"):
+// Chat layout (root configurable, default "chat"):
 //   {root}/global                       — any authenticated player
 //   {root}/dm/{fromId}/{toId}           — direct message; only the pair may touch it
 //   {root}/group/{groupId}              — group chat; members only
 //   {root}/corporation/{corporationId}  — corporation chat; members only
+//
+// Notification layout (separate root configurable, default "notify"):
+//   {notifyRoot}/{playerId}             — players subscribe to their own channel only;
+//                                          service clients publish to any player's
 //
 // The scoped rules (dm/group/corporation) always win over the legacy allowlist, so
 // widening CHAT_ALLOWED_TOPICS can never re-open private channels.
@@ -70,7 +74,11 @@ export function topicMatches(filter, topic) {
  * @param input.topic        MQTT topic or topic filter.
  * @param input.access       "write" | "subscribe" | "read".
  * @param input.sub          Verified player id (JWT `sub`).
- * @param input.root         Topic root, default "chat".
+ * @param input.isService    True when the token belongs to a trusted service client
+ *                           (`azp` in CHAT_SERVICE_CLIENTS): publish-only on the
+ *                           notification root, no access to player channels.
+ * @param input.root         Chat topic root, default "chat".
+ * @param input.notifyRoot   Notification topic root, default "notify".
  * @param input.allowedTopics Legacy allowlist filters (global chat).
  * @param input.checks       Async membership probes, see `social.js`:
  *                           isFriend(a,b), inGroup(id,groupId), inCorp(id,corpId),
@@ -82,12 +90,34 @@ export async function decideAcl({
   topic,
   access,
   sub,
+  isService = false,
   root = "chat",
+  notifyRoot = "notify",
   allowedTopics = [],
   checks,
 }) {
   if (!sub || !UUID_RE.test(sub)) return { ok: false, reason: "no player id" };
   if (!topic) return { ok: false, reason: "empty topic" };
+
+  // Trusted services: publish notifications to a concrete player's channel, nothing else.
+  if (isService) {
+    if (access === "write" && topic.startsWith(`${notifyRoot}/`)) {
+      const target = topic.slice(notifyRoot.length + 1);
+      if (UUID_RE.test(target)) return { ok: true, reason: "service notify" };
+    }
+    return { ok: false, reason: "service may only publish notifications" };
+  }
+
+  // Notification channel: players listen on their own concrete topic only.
+  if (topic === notifyRoot || topic.startsWith(`${notifyRoot}/`)) {
+    if (access === "write") return { ok: false, reason: "players cannot publish notifications" };
+    const parts = topic.split("/");
+    if (parts.length !== 2) return { ok: false, reason: "invalid notify topic" };
+    if (!UUID_RE.test(parts[1]) || parts[1] !== sub) {
+      return { ok: false, reason: "not your channel" };
+    }
+    return { ok: true, reason: "notify subscribe" };
+  }
 
   const channel = parseChannel(topic, root);
 

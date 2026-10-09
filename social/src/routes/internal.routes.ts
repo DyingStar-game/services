@@ -39,6 +39,7 @@ import {
   updatePoliticalEntity,
 } from '../services/politics.service.js';
 import { getPresence, setPresence, setPresenceBatch } from '../services/presence.service.js';
+import { notifyPlayer } from '../services/notifications.service.js';
 import {
   applyStats,
   ensureNpcProfile,
@@ -69,6 +70,7 @@ import {
   npcCorporationBody,
   npcPoliticalBody,
   npcProfileBody,
+  notificationBody,
   playerIdParams,
   politicalEntityIdParams,
   politicalEntityPatchBody,
@@ -419,6 +421,21 @@ internalRoutes.post(
   asyncHandler(async (req, res) => {
     await recordActivity(req.params.playerId, req.body.type, req.body.details);
     res.status(204).send();
+  }),
+);
+
+/**
+ * POST /players/:playerId/notifications — Ephemeral push to the player's MQTT channel
+ * (`notify/{playerId}`): only when the player is online, best-effort, nothing stored.
+ * Returns `{ delivered, reason? }` — an offline player is not an error.
+ */
+internalRoutes.post(
+  '/players/:playerId/notifications',
+  requireServiceRole(SERVICE_ROLES.notifyWrite),
+  validate(playerIdParams, 'params'),
+  validate(notificationBody),
+  asyncHandler(async (req, res) => {
+    res.json(await notifyPlayer(req.params.playerId, req.body));
   }),
 );
 

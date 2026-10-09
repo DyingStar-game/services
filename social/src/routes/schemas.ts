@@ -144,6 +144,13 @@ export const activityBody = z.object({
   details: z.record(z.string(), z.unknown()).optional(),
 });
 
+export const notificationBody = z.object({
+  type: z.string().trim().min(1).max(64),
+  title: z.string().trim().max(120).optional(),
+  body: z.string().trim().max(500).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
+});
+
 export const encounterBody = z
   .object({ playerId: uuidSchema, otherPlayerId: uuidSchema })
   .refine((v) => v.playerId !== v.otherPlayerId, { message: 'playerId and otherPlayerId must differ' });

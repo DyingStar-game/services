@@ -177,3 +177,71 @@ test("missing player id is denied", async () => {
   assert.equal((await decide({ sub: null })).ok, false);
   assert.equal((await decide({ sub: "not-a-uuid" })).ok, false);
 });
+
+// ── Notification channel ────────────────────────────────────────────────────
+
+test("notify: a player subscribes to their own channel only", async () => {
+  assert.equal(
+    (await decide({ topic: `notify/${ME}`, access: "subscribe" })).ok,
+    true,
+  );
+  assert.equal(
+    (await decide({ topic: `notify/${ME}`, access: "read" })).ok,
+    true,
+  );
+  assert.equal(
+    (await decide({ topic: `notify/${FRIEND}`, access: "subscribe" })).ok,
+    false,
+  );
+  assert.equal(
+    (await decide({ topic: "notify/+", access: "subscribe" })).ok,
+    false,
+  );
+  assert.equal(
+    (await decide({ topic: "notify/#", access: "subscribe" })).ok,
+    false,
+  );
+});
+
+test("notify: a player cannot publish notifications", async () => {
+  assert.equal(
+    (await decide({ topic: `notify/${ME}`, access: "write" })).ok,
+    false,
+  );
+});
+
+test("notify: service clients publish to any player, never subscribe", async () => {
+  const service = { sub: ME, isService: true };
+  assert.equal(
+    (await decide({ ...service, topic: `notify/${FRIEND}`, access: "write" })).ok,
+    true,
+  );
+  assert.equal(
+    (await decide({ ...service, topic: `notify/${STRANGER}`, access: "write" })).ok,
+    true,
+  );
+  assert.equal(
+    (await decide({ ...service, topic: "notify/not-a-uuid", access: "write" })).ok,
+    false,
+  );
+  assert.equal(
+    (await decide({ ...service, topic: "notify/#", access: "subscribe" })).ok,
+    false,
+  );
+});
+
+test("service clients get no access to player channels", async () => {
+  const service = { sub: ME, isService: true };
+  assert.equal(
+    (await decide({ ...service, topic: "chat/global", access: "write" })).ok,
+    false,
+  );
+  assert.equal(
+    (await decide({ ...service, topic: `chat/dm/${ME}/${FRIEND}`, access: "write" })).ok,
+    false,
+  );
+  assert.equal(
+    (await decide({ ...service, topic: `chat/group/${GROUP}`, access: "subscribe" })).ok,
+    false,
+  );
+});

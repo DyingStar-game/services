@@ -24,11 +24,17 @@ const ISSUER = process.env.OIDC_ISSUER || "http://keycloak:8080/realms/dyingstar
 const JWKS_URL =
   process.env.OIDC_JWKS_URL || `${ISSUER}/protocol/openid-connect/certs`;
 const TOPIC_ROOT = process.env.CHAT_TOPIC_ROOT || "chat";
+const NOTIFY_ROOT = process.env.CHAT_NOTIFY_ROOT || "notify";
 // Legacy allowlist for non-scoped topics; scoped channels (dm/group/corporation)
 // are decided by their own rules and can never be re-opened by this list.
 const ALLOWED_TOPICS = (
   process.env.CHAT_ALLOWED_TOPICS || `${TOPIC_ROOT}/global,${TOPIC_ROOT}/general`
 )
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+// Service clients (`azp` claim) allowed to publish notifications on {notifyRoot}/#.
+const SERVICE_CLIENTS = (process.env.CHAT_SERVICE_CLIENTS || "svc-social")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -60,6 +66,12 @@ async function verifyToken(req) {
   }
 }
 
+// Whether the token was minted for one of our trusted service clients (client_credentials).
+function isServiceToken(payload) {
+  const azp = payload.azp || payload.client_id;
+  return typeof azp === "string" && SERVICE_CLIENTS.includes(azp);
+}
+
 const app = express();
 // go-auth posts the credential params as the body, but for the user/superuser
 // checks it sends a literal `null` (the token travels in the Authorization header,
@@ -78,10 +90,11 @@ app.get("/health", (_req, res) =>
   res.json({ Ok: true, social: isSocialConfigured() }),
 );
 
-// User check: the token must be valid, and the player must not be suspended/banned.
+// User check: the token must be valid, and a player must not be suspended/banned.
 app.post("/user", async (req, res) => {
   const payload = await verifyToken(req);
   if (!payload) return res.json({ Ok: false, Error: "invalid token" });
+  if (isServiceToken(payload)) return res.json({ Ok: true, Error: "" });
   if (isSocialConfigured()) {
     try {
       if (await checks.isBlocking(payload.sub)) {
@@ -111,7 +124,9 @@ app.post("/acl", async (req, res) => {
       topic,
       access,
       sub: payload.sub,
+      isService: isServiceToken(payload),
       root: TOPIC_ROOT,
+      notifyRoot: NOTIFY_ROOT,
       allowedTopics: ALLOWED_TOPICS,
       checks,
     });
@@ -129,6 +144,7 @@ app.post("/acl", async (req, res) => {
 app.listen(PORT, () => {
   console.log(
     `[chat-auth] listening on :${PORT} | issuer=${ISSUER} | root=${TOPIC_ROOT} | ` +
+      `notify=${NOTIFY_ROOT} | services=${SERVICE_CLIENTS.join(",")} | ` +
       `allowed=${ALLOWED_TOPICS.join(",")} | social=${isSocialConfigured() ? "on" : "OFF"}`
   );
   if (!isSocialConfigured()) {

@@ -50,6 +50,18 @@ export const env = {
     /** Maximum players accepted by one `PUT /players/presence/batch` heartbeat. */
     presenceBatchMax: int('PRESENCE_BATCH_MAX', 5000),
   },
+  /** MQTT broker for ephemeral player notifications; empty URL disables the publisher. */
+  mqtt: {
+    url: process.env.MOSQUITTO_URL ?? '',
+    /** Service client authenticating on the broker (its token is the MQTT password). */
+    clientId: process.env.MQTT_CLIENT_ID ?? 'svc-social',
+    /** Empty secret connects anonymously (dev broker without the go-auth plugin only). */
+    clientSecret: process.env.MQTT_CLIENT_SECRET ?? '',
+    /** Defaults to `${OIDC_ISSUER}/protocol/openid-connect/token` (client_credentials). */
+    tokenUrl: process.env.MQTT_TOKEN_URL || `${issuer}/protocol/openid-connect/token`,
+    /** Notifications are published to `{topicRoot}/{playerId}`. */
+    topicRoot: process.env.MQTT_TOPIC_ROOT || 'notify',
+  },
   /** Reputation deltas and automatic sanction thresholds (all thresholds are negative scores). */
   reputation: {
     blockPenalty: int('REPUTATION_BLOCK_PENALTY', 1),
