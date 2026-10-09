@@ -50,6 +50,8 @@ export const authorizeBody = z.union([
 
 export const playerIdParams = z.object({ playerId: uuidSchema });
 
+export const friendshipParams = playerIdParams.extend({ otherPlayerId: uuidSchema });
+
 export const requestIdParams = z.object({ id: z.coerce.number().int().positive() });
 
 export const targetPlayerBody = z.object({ playerId: uuidSchema });

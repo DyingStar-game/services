@@ -25,6 +25,7 @@ import {
   transferCorporationCeo,
   updateCorporation,
 } from '../services/corporations.service.js';
+import { findRelation } from '../services/friends.service.js';
 import { getGroupMembership, getGroupSummary, getPlayerGroup } from '../services/groups.service.js';
 import {
   addNpcPoliticalMember,
@@ -58,6 +59,7 @@ import {
   corporationQueryOptional,
   corporationQueryRequired,
   encounterBody,
+  friendshipParams,
   groupIdParams,
   groupQueryOptional,
   internalCreateCorporationBody,
@@ -122,6 +124,20 @@ internalRoutes.get(
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json({ playerId: req.params.playerId, ...(await getPresence(req.params.playerId)) });
+  }),
+);
+
+/**
+ * GET /players/:playerId/friendship/:otherPlayerId — Whether the pair has an accepted
+ * friendship (either direction). Used by the chat auth service for DM topic ACLs.
+ */
+internalRoutes.get(
+  '/players/:playerId/friendship/:otherPlayerId',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(friendshipParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const relation = await findRelation(req.params.playerId, req.params.otherPlayerId);
+    res.json({ friends: relation?.status === 'accepted' });
   }),
 );
 
