@@ -14,6 +14,7 @@ import { getPlayerGroup, listPlayerGroupInvitations, resolveGroupInvitation } fr
 import { getPoliticalRefMap, listPoliticalMemberships } from '../services/politics.service.js';
 import { getPresence } from '../services/presence.service.js';
 import { ensureProfile, updateProfile } from '../services/profiles.service.js';
+import { withLivePlaytime } from '../services/playtime.service.js';
 import { listReputationEvents } from '../services/reputation.service.js';
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import { limitQuery, profilePatchBody, requestIdParams } from './schemas.js';
@@ -26,7 +27,7 @@ meRoutes.get(
   '/',
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    const profile = await ensureProfile(player.id, player.username);
+    const profile = await withLivePlaytime(await ensureProfile(player.id, player.username));
     const [presence, corporationRefs, politicsRefs, groupMembership] = await Promise.all([
       getPresence(player.id),
       getCorporationRefMap([player.id]),

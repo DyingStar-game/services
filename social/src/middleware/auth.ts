@@ -40,6 +40,7 @@ export const SERVICE_ROLES = {
   politicsRead: 'social:politics:read',
   politicsWrite: 'social:politics:write',
   sanctionsRead: 'social:sanctions:read',
+  notifyWrite: 'social:notify:write',
   reputationWrite: 'social:reputation:write',
   authorize: 'social:authorize',
 } as const;

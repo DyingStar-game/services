@@ -3,6 +3,7 @@
  */
 import { Router, type IRouter } from 'express';
 
+import { cacheConfigured, pingCache } from '../cache/valkey.js';
 import { schemaReady } from '../db/migrate.js';
 import { serveOpenapi } from '../lib/openapi.js';
 
@@ -11,8 +12,10 @@ export const publicRoutes: IRouter = Router();
 
 /**
  * GET /health — API liveness check.
- * `?deep=1` also verifies the database schema: a probe configured with it restarts a pod
- * whose tables have disappeared (migrations never applied, database wiped under a running pod).
+ * `?deep=1` also verifies the database schema (a probe configured with it restarts a pod
+ * whose tables have disappeared: migrations never applied, database wiped under a running
+ * pod) and reports the cache. A down cache never fails the probe: the API degrades to
+ * database-only mode on purpose.
  */
 publicRoutes.get('/health', async (req, res) => {
   const payload: Record<string, unknown> = {
@@ -24,6 +27,7 @@ publicRoutes.get('/health', async (req, res) => {
   if (req.query.deep === '1') {
     const ready = await schemaReady();
     payload.database = ready ? 'ok' : 'missing';
+    payload.valkey = !cacheConfigured() ? 'disabled' : (await pingCache() ? 'ok' : 'down');
     if (!ready) {
       payload.status = 'unavailable';
       res.status(503).json(payload);
