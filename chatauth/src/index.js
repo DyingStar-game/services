@@ -43,6 +43,30 @@ const CACHE_MAX = Number(process.env.CHAT_ACL_CACHE_MAX || 10000);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Bodies are logged for diagnostics but can carry credentials in form mode, and
+// a rogue plugin could send something huge; redact secrets and cap the length.
+const BODY_LOG_LIMIT = 400;
+const SECRET_KEYS = new Set(["password", "token", "authorization"]);
+function redact(value, depth = 0) {
+  if (value === null || typeof value !== "object" || depth > 3) return value;
+  if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = SECRET_KEYS.has(k.toLowerCase()) ? "<redacted>" : redact(v, depth + 1);
+  }
+  return out;
+}
+function describeBody(req) {
+  if (req.body === undefined) return "<unparsed>";
+  let text;
+  try {
+    text = JSON.stringify(redact(req.body));
+  } catch {
+    return "<unserialisable>";
+  }
+  return text.length > BODY_LOG_LIMIT ? `${text.slice(0, BODY_LOG_LIMIT)}…` : text;
+}
+
 const jwks = createRemoteJWKSet(new URL(JWKS_URL));
 const cache = createCache({ ttlMs: CACHE_TTL_MS, max: CACHE_MAX });
 const checks = createSocialChecks(cache);
@@ -73,6 +97,28 @@ function isServiceToken(payload) {
 }
 
 const app = express();
+
+// go-auth logs its own denials but nothing about the calls it makes, so the
+// adapter is a black box whenever a check misbehaves ("api error: " with no
+// detail is the classic symptom). Log one line per request, whatever it is:
+// mounted before the body parsers so requests that never reach a route are
+// still visible, and hooked on `finish` so the status is the one actually sent.
+app.use((req, res, next) => {
+  const startedAt = process.hrtime.bigint();
+  res.on("finish", () => {
+    const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const auth = req.headers.authorization || "";
+    console.log(
+      `[chat-auth] ${req.method} ${req.originalUrl} ip=${req.socket.remoteAddress} ` +
+        `ct=${req.headers["content-type"] || "-"} clen=${req.headers["content-length"] ?? "-"} ` +
+        `auth=${auth ? `present(${auth.length}B)` : "absent"} body=${describeBody(req)} ` +
+        `-> ${res.statusCode}${res.locals.bodyParseFailed ? " (body parse failed)" : ""} ` +
+        `in ${ms.toFixed(1)}ms`,
+    );
+  });
+  next();
+});
+
 // go-auth posts the credential params as the body, but for the user/superuser
 // checks it sends a literal `null` (the token travels in the Authorization header,
 // not the body). Parse leniently and never fail auth on a malformed body.
@@ -107,8 +153,11 @@ app.post("/user", async (req, res) => {
   res.json({ Ok: true, Error: "" });
 });
 
-// No superusers.
-app.post("/superuser", (_req, res) => res.json({ Ok: false, Error: "" }));
+// No superusers. go-auth calls this before *every* acl check, so the refusal is
+// normal traffic, not a failure — but it must carry a reason: go-auth logs a
+// denial as `api error: <Error>`, and an empty Error is unreadable in the broker
+// log. Set auth_opt_disable_superuser true to stop the calls entirely.
+app.post("/superuser", (_req, res) => res.json({ Ok: false, Error: "no superusers" }));
 
 // ACL check: valid token AND the topic is allowed for this player.
 app.post("/acl", async (req, res) => {
@@ -140,6 +189,14 @@ app.post("/acl", async (req, res) => {
     res.json({ Ok: false, Error: "check failed" });
   }
 });
+
+// An async handler that rejects outside its own try/catch would otherwise take
+// the whole adapter down silently, which reads as "the broker stopped asking".
+for (const event of ["uncaughtException", "unhandledRejection"]) {
+  process.on(event, (err) => {
+    console.error(`[chat-auth] ${event}:`, err);
+  });
+}
 
 app.listen(PORT, () => {
   console.log(

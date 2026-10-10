@@ -53,6 +53,8 @@ Valkey est **dédié à ce service**, tourne **sans persistance** (`--save "" --
 - **Temps de jeu** : `POST /players/:id/stats` fait un `INCRBY playtime:{id}` ; toutes les `PLAYTIME_FLUSH_INTERVAL_MINUTES` un job `GETDEL` + UPDATE batchée écrit les deltas en base. Perte maximale en cas de redémarrage de Valkey : un intervalle de flush. Les lectures (`/api/me`, profil interne/admin) combinent la base + le delta en attente.
 - **Dégradation** : si Valkey est injoignable, chaque opération retombe sur la base (écritures DB reprises à l'ancien rythme), sans erreur côté appelant. `GET /api/health?deep=1` affiche `valkey: ok|down|disabled` (un cache down ne fait jamais échouer le probe).
 
+> **Note d'archi (rien n'est fait)** : la position du joueur est aussi stockée dans Persistence (objet joueur, écriture temps réel) — l'idée de ne garder ici que le `status` et de **lire la position depuis Persistence** est étudiée dans [`docs/position-depuis-persistence.md`](docs/position-depuis-persistence.md) (3 blocages : `system`/`scene` absents de Persistence, API sans auth ni endpoint batch, cache frais non exposé en REST).
+
 ## Pagination (rupture de contrat)
 
 Toutes les listes acceptent désormais `?limit=&offset=` et répondent par l'enveloppe
