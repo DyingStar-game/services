@@ -110,6 +110,20 @@ mining, `F` → factory). The import report lists the depots without `poi_uuid`.
 kept and replayed by the tick (every 15 min and on each forced tick): a village newly linked
 to a cargo_depot appears without a new import.
 
+## Operator commands
+
+Inside the pod, cluster access replaces the admin token of the HTTP routes (useful with an
+SSO-only account):
+
+```bash
+kubectl -n <namespace> exec deploy/service-universesimulator -- ./universesimulator import seeds/tarsis_3-ares.json
+kubectl -n <namespace> exec deploy/service-universesimulator -- ./universesimulator tick
+```
+
+`import` imports the world file, keeps it for the tick replay and prints the import report;
+`tick` runs a forced tick and prints its report. Both use the pod's configuration (database,
+service account) and exit.
+
 ## Tests
 
 ```bash
