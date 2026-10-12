@@ -307,8 +307,20 @@ export const politicalOfficePatchBody = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
-/** Internal: create a political entity with an explicit head (player or NPC). */
-export const internalCreatePoliticalEntityBody = createPoliticalEntityBody.extend({ headId: uuidSchema });
+/**
+ * Internal: create a political entity with an explicit head (player or NPC), or without one
+ * (system/NPC-governed entity, head office left vacant) when `headId` is omitted or null.
+ */
+export const internalCreatePoliticalEntityBody = createPoliticalEntityBody.extend({
+  headId: uuidSchema.nullable().optional(),
+});
+
+/** Internal: exact-match political entity lookup (level, direct parent, exact name). */
+export const internalPoliticsListQuery = limitQuery.extend({
+  type: z.enum(POLITICAL_ENTITY_TYPES).optional(),
+  parentId: uuidSchema.optional(),
+  name: z.string().trim().min(1).max(64).optional(),
+});
 
 export const npcPoliticalBody = z.object({
   entityId: uuidSchema,

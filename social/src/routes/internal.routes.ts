@@ -5,6 +5,7 @@
  */
 import { Router, type IRouter } from 'express';
 
+import type { PoliticalEntityType } from '../db/schema/index.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { HttpError } from '../lib/httpError.js';
 import { requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
@@ -30,10 +31,14 @@ import {
   addNpcPoliticalMember,
   createPoliticalEntity,
   disbandPoliticalEntity,
+  findPoliticalEntities,
   getPoliticalMembership,
+  listPoliticalAncestors,
+  listPoliticalChildren,
   listPoliticalMemberships,
   removeNpcPoliticalMember,
   requirePoliticalEntity,
+  setPoliticalEntityParentAsSystem,
   transferPoliticalHead,
   updatePoliticalEntity,
 } from '../services/politics.service.js';
@@ -61,7 +66,9 @@ import {
   groupQueryOptional,
   internalCreateCorporationBody,
   internalCreatePoliticalEntityBody,
+  internalPoliticsListQuery,
   internalProfileQuery,
+  limitQuery,
   memberRankBody,
   npcCorporationBody,
   npcPoliticalBody,
@@ -69,6 +76,7 @@ import {
   playerIdParams,
   politicalEntityIdParams,
   politicalEntityPatchBody,
+  politicalParentBody,
   politicalQueryOptional,
   politicalQueryRequired,
   presenceBody,
@@ -256,14 +264,86 @@ internalRoutes.get(
 
 // ── Politics (game server) ──────────────────────────────────────────────────
 
-/** POST /politics — Create a political entity with an explicit head (player or NPC). */
+/**
+ * POST /politics — Create a political entity with an explicit head (player or NPC), or without
+ * one (`headId` omitted/null: system-governed, head office vacant).
+ */
 internalRoutes.post(
   '/politics',
   requireServiceRole(SERVICE_ROLES.politicsWrite),
   validate(internalCreatePoliticalEntityBody),
   asyncHandler(async (req, res) => {
     const { headId, ...data } = req.body;
-    res.status(201).json(await createPoliticalEntity(headId, data));
+    res.status(201).json(await createPoliticalEntity(headId ?? null, data));
+  }),
+);
+
+/**
+ * GET /politics?type=&parentId=&name=&limit=&offset= — Exact-match lookup (`name` is exact,
+ * for idempotent bootstrap), `{ items, total, limit, offset }` ordered by name.
+ */
+internalRoutes.get(
+  '/politics',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(internalPoliticsListQuery, 'query'),
+  asyncHandler(async (req, res) => {
+    res.json(
+      await findPoliticalEntities(
+        {
+          type: req.query.type as PoliticalEntityType | undefined,
+          parentId: req.query.parentId as string | undefined,
+          name: req.query.name as string | undefined,
+        },
+        Number(req.query.limit),
+        Number(req.query.offset),
+      ),
+    );
+  }),
+);
+
+/** GET /politics/:entityId — Political entity (no members/offices), 404 when it does not exist. */
+internalRoutes.get(
+  '/politics/:entityId',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(politicalEntityIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await requirePoliticalEntity(req.params.entityId));
+  }),
+);
+
+/** GET /politics/:entityId/children — Direct lower-level entities (paginated, with member counts). */
+internalRoutes.get(
+  '/politics/:entityId/children',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(politicalEntityIdParams, 'params'),
+  validate(limitQuery, 'query'),
+  asyncHandler(async (req, res) => {
+    await requirePoliticalEntity(req.params.entityId);
+    res.json(await listPoliticalChildren(req.params.entityId, Number(req.query.limit), Number(req.query.offset)));
+  }),
+);
+
+/** GET /politics/:entityId/ancestors — Ancestors from the direct parent up to the root (nearest first). */
+internalRoutes.get(
+  '/politics/:entityId/ancestors',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(politicalEntityIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await listPoliticalAncestors(req.params.entityId));
+  }),
+);
+
+/**
+ * PUT /politics/:entityId/parent — Attach to a higher-level entity, or detach (`null`). Same
+ * level/cycle rules as the player route, without any member permission (system actor).
+ */
+internalRoutes.put(
+  '/politics/:entityId/parent',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(politicalEntityIdParams, 'params'),
+  validate(politicalParentBody),
+  asyncHandler(async (req, res) => {
+    res.json(await setPoliticalEntityParentAsSystem(req.params.entityId, req.body.parentId ?? null));
   }),
 );
 
