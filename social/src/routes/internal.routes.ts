@@ -25,6 +25,7 @@ import {
   transferCorporationCeo,
   updateCorporation,
 } from '../services/corporations.service.js';
+import { findRelation } from '../services/friends.service.js';
 import { getGroupMembership, getGroupSummary, getPlayerGroup } from '../services/groups.service.js';
 import {
   addNpcPoliticalMember,
@@ -37,7 +38,8 @@ import {
   transferPoliticalHead,
   updatePoliticalEntity,
 } from '../services/politics.service.js';
-import { getPresence, setPresence } from '../services/presence.service.js';
+import { getPresence, setPresence, setPresenceBatch } from '../services/presence.service.js';
+import { notifyPlayer } from '../services/notifications.service.js';
 import {
   applyStats,
   ensureNpcProfile,
@@ -46,6 +48,7 @@ import {
   getProfilesByIds,
   searchProfiles,
 } from '../services/profiles.service.js';
+import { withLivePlaytime } from '../services/playtime.service.js';
 import { adjustReputation, rehabilitate } from '../services/reputation.service.js';
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
@@ -57,6 +60,7 @@ import {
   corporationQueryOptional,
   corporationQueryRequired,
   encounterBody,
+  friendshipParams,
   groupIdParams,
   groupQueryOptional,
   internalCreateCorporationBody,
@@ -66,11 +70,13 @@ import {
   npcCorporationBody,
   npcPoliticalBody,
   npcProfileBody,
+  notificationBody,
   playerIdParams,
   politicalEntityIdParams,
   politicalEntityPatchBody,
   politicalQueryOptional,
   politicalQueryRequired,
+  presenceBatchBody,
   presenceBody,
   statsBody,
   targetPlayerBody,
@@ -97,7 +103,8 @@ internalRoutes.get(
   requireServiceRole(SERVICE_ROLES.profileRead),
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
-    res.json((await getProfile(req.params.playerId)) ?? null);
+    const profile = await getProfile(req.params.playerId);
+    res.json(profile ? await withLivePlaytime(profile) : null);
   }),
 );
 
@@ -119,6 +126,34 @@ internalRoutes.get(
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json({ playerId: req.params.playerId, ...(await getPresence(req.params.playerId)) });
+  }),
+);
+
+/**
+ * GET /players/:playerId/friendship/:otherPlayerId — Whether the pair has an accepted
+ * friendship (either direction). Used by the chat auth service for DM topic ACLs.
+ */
+internalRoutes.get(
+  '/players/:playerId/friendship/:otherPlayerId',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(friendshipParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const relation = await findRelation(req.params.playerId, req.params.otherPlayerId);
+    res.json({ friends: relation?.status === 'accepted' });
+  }),
+);
+
+/**
+ * PUT /players/presence/batch — Batch heartbeat: refresh the TTL of every active player
+ * of a game server (one call per minute instead of one per player). Players absent from
+ * the call expire back to `offline` on TTL. Omitted `status` keeps a live one.
+ */
+internalRoutes.put(
+  '/players/presence/batch',
+  requireServiceRole(SERVICE_ROLES.profileWrite),
+  validate(presenceBatchBody),
+  asyncHandler(async (req, res) => {
+    res.json(await setPresenceBatch(req.body.players));
   }),
 );
 
@@ -386,6 +421,21 @@ internalRoutes.post(
   asyncHandler(async (req, res) => {
     await recordActivity(req.params.playerId, req.body.type, req.body.details);
     res.status(204).send();
+  }),
+);
+
+/**
+ * POST /players/:playerId/notifications — Ephemeral push to the player's MQTT channel
+ * (`notify/{playerId}`): only when the player is online, best-effort, nothing stored.
+ * Returns `{ delivered, reason? }` — an offline player is not an error.
+ */
+internalRoutes.post(
+  '/players/:playerId/notifications',
+  requireServiceRole(SERVICE_ROLES.notifyWrite),
+  validate(playerIdParams, 'params'),
+  validate(notificationBody),
+  asyncHandler(async (req, res) => {
+    res.json(await notifyPlayer(req.params.playerId, req.body));
   }),
 );
 

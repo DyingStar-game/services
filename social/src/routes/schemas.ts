@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 
+import { env } from '../config/env.js';
 import {
   CORPORATION_RECRUITMENT_MODES,
   ENTITY_TYPES,
@@ -48,6 +49,8 @@ export const authorizeBody = z.union([
 
 
 export const playerIdParams = z.object({ playerId: uuidSchema });
+
+export const friendshipParams = playerIdParams.extend({ otherPlayerId: uuidSchema });
 
 export const requestIdParams = z.object({ id: z.coerce.number().int().positive() });
 
@@ -115,6 +118,18 @@ export const presenceBody = z.object({
   location: locationSchema.nullable().optional(),
 });
 
+/** One player of a batch heartbeat; omitted `status` keeps a live one (default `online`). */
+const presenceBatchEntry = z.object({
+  playerId: uuidSchema,
+  status: z.enum(PRESENCE_STATUSES).optional(),
+  location: locationSchema.nullable().optional(),
+});
+
+/** `PUT /api/internal/players/presence/batch`: the game server's active roster. */
+export const presenceBatchBody = z.object({
+  players: z.array(presenceBatchEntry).min(1).max(env.valkey.presenceBatchMax),
+});
+
 export const statsBody = z
   .object({
     playtimeSecondsDelta: z.number().int().min(0).optional(),
@@ -127,6 +142,13 @@ export const statsBody = z
 export const activityBody = z.object({
   type: z.string().trim().min(1).max(64),
   details: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const notificationBody = z.object({
+  type: z.string().trim().min(1).max(64),
+  title: z.string().trim().max(120).optional(),
+  body: z.string().trim().max(500).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const encounterBody = z

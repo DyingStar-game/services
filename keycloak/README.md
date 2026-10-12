@@ -68,7 +68,9 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 | `social:politics:read` | Political membership reads |
 | `social:politics:write` | NPC political membership + internal political entity management |
 | `social:sanctions:read` | Active sanctions (mute/ban enforcement) |
+| `social:notify:write` | Ephemeral push to a player's MQTT channel (`POST /internal/players/:playerId/notifications`) |
 | `social:reputation:write` | Reputation adjustments and rehabilitation passes |
+| `social:authorize` | Policy decision point: `POST /internal/authorize` (single or batched) and `GET /internal/permissions/catalog` |
 
 ### economie (`economie-api`)
 | Role | Grants |
@@ -88,6 +90,7 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 | `inventory:transfer` | Transfers (stacks, instances, hold consumption) |
 | `inventory:hold` | Reserve (hold) and release items |
 | `inventory:corporation:manage` | *(declared, not yet wired to a route)* |
+| `inventory:poi:manage` | POI lifecycle on behalf of any holder (create / patch / delete `/internal/pois`) |
 
 ### mission (`mission-api`)
 | Role | Grants |
@@ -115,6 +118,11 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 > (prereq `has_credits` + political treasury escrow), and `inventory:read` on
 > `inventory-api` (objectives `owns_items` / `deliver_items`). The corporation treasury
 > escrow only needs the wallet roles it already has.
+> The chat auth adapter (`svc-chat`, chart `textchat`) is read-only on `social-api` and needs
+> exactly four roles: `social:profile:read` (friendship probe for DM topics),
+> `social:group:read`, `social:corporation:read` and `social:sanctions:read` (mutes/bans).
+> Add `social:notify:write` only if a future service starts publishing to `notify/#`
+> instead of going through `service-social`.
 
 ## Required GitHub Secrets
 

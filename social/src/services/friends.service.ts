@@ -18,6 +18,7 @@ import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { blockedIdsFor, isBlockedEitherWay } from './blocks.service.js';
 import { listRecentEncounters } from './encounters.service.js';
+import { notifyPlayer } from './notifications.service.js';
 import { getPresenceMap } from './presence.service.js';
 import { requireProfile } from './profiles.service.js';
 
@@ -220,6 +221,10 @@ export async function sendRequest(requesterId: string, addresseeId: string): Pro
   const [created] = await db.insert(friendships).values({ requesterId, addresseeId }).returning();
   await recordActivity(requesterId, 'friend_request_sent', { playerId: addresseeId });
   await recordActivity(addresseeId, 'friend_request_received', { playerId: requesterId });
+  void notifyPlayer(addresseeId, {
+    type: 'friend_request_received',
+    data: { fromPlayerId: requesterId },
+  }).catch((err: Error) => console.warn(`[friends] notify failed: ${err.message}`));
   return created;
 }
 
@@ -246,6 +251,10 @@ export async function acceptRequest(id: number, playerId: string): Promise<Frien
     .returning();
   await recordActivity(playerId, 'friend_added', { playerId: request.requesterId });
   await recordActivity(request.requesterId, 'friend_added', { playerId });
+  void notifyPlayer(request.requesterId, {
+    type: 'friend_request_accepted',
+    data: { playerId },
+  }).catch((err: Error) => console.warn(`[friends] notify failed: ${err.message}`));
   return accepted;
 }
 
