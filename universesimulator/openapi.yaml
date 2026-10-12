@@ -1,0 +1,2601 @@
+openapi: 3.1.0
+info:
+  title: DyingStar universesimulator API
+  version: 0.1.0
+  description: "Simulates the physical economy (stocks, flows, supply missions, prices) of a federation by\norchestrating\
+    \ social, inventory, persistence, mission and economie. See `docs/adr`.\n\nAuthentication (Keycloak):\n- `/api/*`: player\
+    \ bearer token (dev: `X-Player-Id`, optional `X-Player-Roles`).\n- `/api/admin/*`: player token with a moderation role\
+    \ (`moderator`, `admin`, `supervisor`);\n  writes need `admin` or `supervisor`.\n- `/api/internal/*`: service-account\
+    \ token with `aud=universesimulator-api`, `azp` in\n  `INTERNAL_SERVICE_CLIENTS`; `GET` needs `usim:read`, `POST /orders`\
+    \ `usim:write`,\n  `POST /warehouse-deliveries` `usim:deliver` (dev: `X-Internal-Key`).\n\nErrors: `{ \"error\": \"<CODE>\"\
+    , \"message\": \"<text>\" }`.\n\nIdentifiers are hex UUIDs (8-4-4-4-12) without RFC version/variant constraints: warehouse\n\
+    ids are persistence POI UUIDs, which do not carry RFC version bits.\n\nVillages (persistence `poi_village`) are the nodes\
+    \ of the simulation: their stock is the sum of\ntheir warehouses (`cargo_depot` objects attached through the `poi_uuid`\
+    \ field of their\nobject_data). Thresholds, flows, routes and mineral sources are per village; capacities per\nwarehouse\
+    \ (ADR 0013).\n"
+servers:
+- url: http://localhost:9600
+tags:
+- name: Public
+- name: Read
+  description: Available under `/api`, `/api/internal` and `/api/admin`.
+- name: Internal
+- name: Admin views
+- name: Admin
+security:
+- bearer: []
+paths:
+  /healthz:
+    get:
+      tags:
+      - Public
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+  /api/federations:
+    get:
+      tags:
+      - Read
+      operationId: listFederations
+      responses:
+        '200':
+          description: Federations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FederationList'
+  /api/entities:
+    get:
+      tags:
+      - Read
+      operationId: listEntities
+      summary: Political entities mirrored from social
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      responses:
+        '200':
+          description: Entities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityList'
+  /api/resources:
+    get:
+      tags:
+      - Read
+      operationId: listResources
+      responses:
+        '200':
+          description: Resources
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceList'
+  /api/prices:
+    get:
+      tags:
+      - Read
+      operationId: listPrices
+      summary: Federation price indices
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      responses:
+        '200':
+          description: Price indices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceIndexList'
+  /api/warehouses:
+    get:
+      tags:
+      - Read
+      operationId: listWarehouses
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: village
+        in: query
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: Warehouses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseList'
+  /api/warehouses/{id}:
+    get:
+      tags:
+      - Read
+      operationId: getWarehouse
+      summary: Warehouse with its live stocks and capacities
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Warehouse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/entities/{id}/stock:
+    get:
+      tags:
+      - Read
+      operationId: getEntityStock
+      summary: 'Stock of a political entity: villages whose commune is it or one of its descendants'
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Aggregated stock
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityStock'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/paths:
+    get:
+      tags:
+      - Read
+      operationId: getPath
+      summary: Shortest route between two villages
+      parameters:
+      - name: from
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+      - name: to
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+      responses:
+        '200':
+          description: Path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Path'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/orders:
+    get:
+      tags:
+      - Read
+      operationId: listOrders
+      summary: Supply orders (meta-missions) with their legs
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/OrderStatus'
+      - name: kind
+        in: query
+        schema:
+          type: string
+          enum:
+          - transport
+          - mining
+      - name: resource
+        in: query
+        schema:
+          type: string
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+      - name: village
+        in: query
+        description: Orders whose path goes through this village
+        schema:
+          type: string
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      responses:
+        '200':
+          description: Orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPage'
+  /api/orders/{id}:
+    get:
+      tags:
+      - Read
+      operationId: getOrder
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/internal/warehouses/by-poi/{id}:
+    get:
+      tags:
+      - Internal
+      operationId: getWarehouseByPoi
+      summary: Warehouse by persistence POI UUID (same as its id)
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Warehouse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/internal/warehouse-deliveries:
+    post:
+      tags:
+      - Internal
+      operationId: createWarehouseDelivery
+      summary: Off-mission delivery to a warehouse (game server, role usim:deliver)
+      description: 'Moves the accepted quantity from the deliverer to the warehouse in inventory (capped by the
+
+        warehouse capacity). Idempotent on `idempotencyKey`: a replay returns 200 with the same
+
+        answer; the same key with another content returns 409 `IDEMPOTENCY_CONFLICT`.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeliveryInput'
+      responses:
+        '201':
+          description: Delivered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryResult'
+        '200':
+          description: Replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: IDEMPOTENCY_CONFLICT, DELIVERY_IN_PROGRESS or INSUFFICIENT_STOCK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/internal/orders:
+    post:
+      tags:
+      - Internal
+      operationId: createOrderInternal
+      summary: Manual transport order (role usim:write)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/admin/dashboard:
+    get:
+      tags:
+      - Admin views
+      operationId: getDashboard
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      responses:
+        '200':
+          description: Dashboard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+  /api/admin/network:
+    get:
+      tags:
+      - Admin views
+      operationId: getNetwork
+      summary: Warehouses with positions and stocks, routes and active legs
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      responses:
+        '200':
+          description: Network
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Network'
+  /api/admin/stock-history:
+    get:
+      tags:
+      - Admin views
+      operationId: getStockHistory
+      parameters:
+      - name: village
+        in: query
+        description: 'Village: sum of its warehouses'
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      - name: warehouse
+        in: query
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      - name: resource
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      - $ref: '#/components/parameters/from'
+      responses:
+        '200':
+          description: History
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockHistory'
+      description: '`village` or `warehouse` is required.'
+  /api/admin/price-history:
+    get:
+      tags:
+      - Admin views
+      operationId: getPriceHistory
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: resource
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+      - $ref: '#/components/parameters/from'
+      responses:
+        '200':
+          description: History
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceHistory'
+  /api/admin/local-prices:
+    get:
+      tags:
+      - Admin views
+      operationId: getLocalPrices
+      summary: Buy and sell prices per village, largest spread first
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: resource
+        in: query
+        schema:
+          type: string
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+      responses:
+        '200':
+          description: Local prices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalPriceList'
+  /api/admin/incoming:
+    get:
+      tags:
+      - Admin views
+      operationId: getIncoming
+      summary: Active legs heading to a village
+      parameters:
+      - name: village
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: Incoming legs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActiveLegList'
+  /api/admin/mint-events:
+    get:
+      tags:
+      - Admin views
+      operationId: listMintEvents
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 100
+      responses:
+        '200':
+          description: Mint events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MintEventList'
+  /api/admin/federations:
+    post:
+      tags:
+      - Admin
+      operationId: createFederation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FederationInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Federation'
+  /api/admin/federations/{id}:
+    put:
+      tags:
+      - Admin
+      operationId: updateFederation
+      parameters:
+      - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FederationInput'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Federation'
+  /api/admin/resources:
+    post:
+      tags:
+      - Admin
+      operationId: upsertResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceInput'
+      responses:
+        '201':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Resource'
+  /api/admin/resources/{id}:
+    delete:
+      tags:
+      - Admin
+      operationId: deleteResource
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '204':
+          description: Deleted
+  /api/admin/warehouses/{id}:
+    delete:
+      tags:
+      - Admin
+      operationId: deactivateWarehouse
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '204':
+          description: Deactivated
+  /api/admin/warehouses/{id}/refresh-poi:
+    post:
+      tags:
+      - Admin
+      operationId: refreshWarehousePoi
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Warehouse'
+  /api/admin/travel-routes:
+    get:
+      tags:
+      - Admin
+      operationId: listTravelRoutes
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      responses:
+        '200':
+          description: Routes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TravelRouteList'
+    post:
+      tags:
+      - Admin
+      operationId: upsertTravelRoute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TravelRouteInput'
+      responses:
+        '201':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TravelRoute'
+  /api/admin/travel-routes/{id}:
+    delete:
+      tags:
+      - Admin
+      operationId: deleteTravelRoute
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '204':
+          description: Deleted
+  /api/admin/flows:
+    get:
+      tags:
+      - Admin
+      operationId: listFlows
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: village
+        in: query
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: Flows
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlowList'
+    post:
+      tags:
+      - Admin
+      operationId: createFlow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlowInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+  /api/admin/flows/{id}:
+    put:
+      tags:
+      - Admin
+      operationId: updateFlow
+      parameters:
+      - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                ratePerHour:
+                  type: number
+                label:
+                  type:
+                  - string
+                  - 'null'
+                  description: 'Absent: unchanged; null or empty: cleared'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+    delete:
+      tags:
+      - Admin
+      operationId: deleteFlow
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '204':
+          description: Deleted
+  /api/admin/mineral-sources:
+    get:
+      tags:
+      - Admin
+      operationId: listMineralSources
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: village
+        in: query
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: Mineral sources
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MineralSourceList'
+    put:
+      tags:
+      - Admin
+      operationId: upsertMineralSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MineralSourceInput'
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MineralSource'
+  /api/admin/mineral-sources/{id}:
+    delete:
+      tags:
+      - Admin
+      operationId: deleteMineralSource
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '204':
+          description: Deleted
+  /api/admin/orders:
+    post:
+      tags:
+      - Admin
+      operationId: createOrderAdmin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/admin/orders/{id}/cancel:
+    post:
+      tags:
+      - Admin
+      operationId: cancelOrder
+      summary: Cancels the published mission, releases the hold and closes the order
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '204':
+          description: Cancelled
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/admin/simulation:
+    get:
+      tags:
+      - Admin
+      operationId: getSimulation
+      responses:
+        '200':
+          description: Simulation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Simulation'
+  /api/admin/simulation/tick:
+    post:
+      tags:
+      - Admin
+      operationId: forceTick
+      summary: Runs a tick now (even when paused)
+      responses:
+        '200':
+          description: Tick report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TickReport'
+        '409':
+          description: TICK_RUNNING
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/admin/simulation/pause:
+    post:
+      tags:
+      - Admin
+      operationId: pauseSimulation
+      responses:
+        '200':
+          description: State
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationState'
+  /api/admin/simulation/resume:
+    post:
+      tags:
+      - Admin
+      operationId: resumeSimulation
+      responses:
+        '200':
+          description: State
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationState'
+  /api/admin/import:
+    post:
+      tags:
+      - Admin
+      operationId: importWorld
+      summary: Idempotent bootstrap of a federation's world from persistence (see seeds/)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: World file (see seeds/tarsis_3-ares.json)
+      responses:
+        '200':
+          description: Import report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportReport'
+      description: The world file is kept and replayed by the tick (periodically and on each forced tick), so new villages
+        and depots linked in persistence are simulated without a new import.
+  /api/villages:
+    get:
+      tags:
+      - Read
+      operationId: listVillages
+      summary: Villages with their aggregated stocks
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: entity
+        in: query
+        description: Commune (political entity) of the village
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: Villages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VillageList'
+  /api/villages/{id}:
+    get:
+      tags:
+      - Read
+      operationId: getVillage
+      summary: 'Village: aggregated stocks (read live from inventory), warehouses, policies, flows, capacities, mineral sources,
+        local prices, incoming legs'
+      parameters:
+      - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Village
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VillageDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/admin/villages/{id}:
+    put:
+      tags:
+      - Admin
+      operationId: updateVillage
+      parameters:
+      - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VillageUpdate'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Village'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/admin/village-policies:
+    get:
+      tags:
+      - Admin
+      operationId: listVillagePolicies
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: village
+        in: query
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: Policies
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VillagePolicyList'
+    put:
+      tags:
+      - Admin
+      operationId: upsertVillagePolicy
+      description: Creates or replaces a village policy; 400 unless 0 <= minThreshold <= targetLevel.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VillagePolicy'
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VillagePolicy'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/admin/village-policies/{village}/{resource}:
+    delete:
+      tags:
+      - Admin
+      operationId: deleteVillagePolicy
+      parameters:
+      - name: village
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      - name: resource
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '204':
+          description: Deleted
+  /api/admin/warehouse-capacities:
+    get:
+      tags:
+      - Admin
+      operationId: listWarehouseCapacities
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      - name: village
+        in: query
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      - name: warehouse
+        in: query
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: Capacities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseCapacityList'
+    put:
+      tags:
+      - Admin
+      operationId: upsertWarehouseCapacity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WarehouseCapacityInput'
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseCapacity'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/admin/warehouse-capacities/{warehouse}/{resource}:
+    delete:
+      tags:
+      - Admin
+      operationId: deleteWarehouseCapacity
+      parameters:
+      - name: warehouse
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      - name: resource
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/Uuid'
+      responses:
+        '204':
+          description: Deleted
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    federation:
+      name: federation
+      in: query
+      description: Federation id (default the first one)
+      schema:
+        type: string
+        pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    from:
+      name: from
+      in: query
+      description: RFC 3339 start (default 24 h ago)
+      schema:
+        type: string
+        format: date-time
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required:
+      - error
+      - message
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    Uuid:
+      type: string
+      pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    Timestamp:
+      type: string
+      format: date-time
+    ResourceCategory:
+      type: string
+      enum:
+      - ore
+      - food
+      - water
+      - fuel
+      - material
+    OrderStatus:
+      type: string
+      enum:
+      - planned
+      - in_progress
+      - completed
+      - failed
+      - cancelled
+    LegStatus:
+      type: string
+      enum:
+      - waiting
+      - pending
+      - held
+      - published
+      - completed
+      - failed
+      - cancelled
+    Federation:
+      type: object
+      required:
+      - id
+      - code
+      - name
+      - politicalEntityId
+      - planetInternalName
+      - currency
+      - managedCategories
+      - treasuryFloor
+      - mintBatch
+      - elasticity
+      - priceMinFactor
+      - priceMaxFactor
+      - spread
+      - freightRatePerTkm
+      - urgencyMax
+      - minerShare
+      - legBaseReward
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        code:
+          type: string
+        name:
+          type: string
+        politicalEntityId:
+          $ref: '#/components/schemas/Uuid'
+        planetInternalName:
+          type: string
+        currency:
+          type: string
+        managedCategories:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceCategory'
+        treasuryFloor:
+          type: integer
+        mintBatch:
+          type: integer
+        mintCeiling:
+          type:
+          - integer
+          - 'null'
+        elasticity:
+          type: number
+        priceMinFactor:
+          type: number
+        priceMaxFactor:
+          type: number
+        spread:
+          type: number
+        freightRatePerTkm:
+          type: number
+        urgencyMax:
+          type: number
+        minerShare:
+          type: number
+        legBaseReward:
+          type: integer
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        planetPoiUuid:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    FederationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        politicalEntityId:
+          $ref: '#/components/schemas/Uuid'
+        planetInternalName:
+          type: string
+        currency:
+          type: string
+        managedCategories:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceCategory'
+        treasuryFloor:
+          type: integer
+        mintBatch:
+          type: integer
+        mintCeiling:
+          type: integer
+        elasticity:
+          type: number
+        priceMinFactor:
+          type: number
+        priceMaxFactor:
+          type: number
+        spread:
+          type: number
+        freightRatePerTkm:
+          type: number
+        urgencyMax:
+          type: number
+        minerShare:
+          type: number
+        legBaseReward:
+          type: integer
+        planetPoiUuid:
+          $ref: '#/components/schemas/Uuid'
+    FederationList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Federation'
+    Entity:
+      type: object
+      required:
+      - id
+      - type
+      - name
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        type:
+          type: string
+        name:
+          type: string
+        parentId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+        federationId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    EntityList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entity'
+    Resource:
+      type: object
+      required:
+      - id
+      - code
+      - name
+      - category
+      - unit
+      - inventoryGoodType
+      - massPerUnitKg
+      - basePrice
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        code:
+          type: string
+        name:
+          type: string
+        category:
+          $ref: '#/components/schemas/ResourceCategory'
+        unit:
+          type: string
+        inventoryGoodType:
+          type: string
+        massPerUnitKg:
+          type: number
+        basePrice:
+          type: number
+    ResourceInput:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - name
+      - category
+      - inventoryGoodType
+      - basePrice
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        category:
+          $ref: '#/components/schemas/ResourceCategory'
+        unit:
+          type: string
+          default: unit
+        inventoryGoodType:
+          type: string
+        massPerUnitKg:
+          type: number
+          default: 1
+        basePrice:
+          type: number
+    ResourceList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Resource'
+    Warehouse:
+      type: object
+      required:
+      - id
+      - villageId
+      - code
+      - name
+      - active
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: Persistence cargo_depot UUID = inventory holder id (holderType warehouse)
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        code:
+          type: string
+        name:
+          type: string
+        scenename:
+          type:
+          - string
+          - 'null'
+        x:
+          type:
+          - number
+          - 'null'
+        y:
+          type:
+          - number
+          - 'null'
+        z:
+          type:
+          - number
+          - 'null'
+        active:
+          type: boolean
+    WarehouseList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warehouse'
+    WarehouseDetail:
+      type: object
+      required:
+      - warehouse
+      - stocks
+      - capacities
+      properties:
+        warehouse:
+          $ref: '#/components/schemas/Warehouse'
+        village:
+          oneOf:
+          - $ref: '#/components/schemas/Village'
+          - type: 'null'
+        stocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/WarehouseStock'
+        capacities:
+          type: array
+          items:
+            $ref: '#/components/schemas/WarehouseCapacity'
+    EntityStock:
+      type: object
+      required:
+      - entityId
+      - entities
+      - villages
+      - stocks
+      properties:
+        entityId:
+          $ref: '#/components/schemas/Uuid'
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Uuid'
+        villages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Village'
+        stocks:
+          type: array
+          items:
+            type: object
+            required:
+            - resourceId
+            - quantity
+            - held
+            - available
+            - minThreshold
+            - targetLevel
+            properties:
+              resourceId:
+                $ref: '#/components/schemas/Uuid'
+              quantity:
+                type: integer
+              held:
+                type: integer
+              available:
+                type: integer
+              minThreshold:
+                type: integer
+              targetLevel:
+                type: integer
+    TravelRoute:
+      type: object
+      required:
+      - id
+      - fromVillageId
+      - toVillageId
+      - distanceM
+      - cost
+      - bidirectional
+      - active
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        fromVillageId:
+          $ref: '#/components/schemas/Uuid'
+        toVillageId:
+          $ref: '#/components/schemas/Uuid'
+        distanceM:
+          type: number
+        cost:
+          type: number
+        bidirectional:
+          type: boolean
+        active:
+          type: boolean
+        auto:
+          type: boolean
+          description: Created by the import and recomputed by it (nearest neighbours); false for an admin route, never removed
+            by the import
+    TravelRouteInput:
+      type: object
+      additionalProperties: false
+      required:
+      - fromVillageId
+      - toVillageId
+      - distanceM
+      properties:
+        fromVillageId:
+          $ref: '#/components/schemas/Uuid'
+        toVillageId:
+          $ref: '#/components/schemas/Uuid'
+        distanceM:
+          type: number
+          exclusiveMinimum: 0
+        cost:
+          type: number
+          description: Dijkstra weight (default distance in km)
+        bidirectional:
+          type: boolean
+          default: true
+        active:
+          type: boolean
+          default: true
+    TravelRouteList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TravelRoute'
+    Hop:
+      type: object
+      required:
+      - from
+      - to
+      - cost
+      - distanceM
+      properties:
+        from:
+          $ref: '#/components/schemas/Uuid'
+        fromName:
+          type:
+          - string
+          - 'null'
+        to:
+          $ref: '#/components/schemas/Uuid'
+        toName:
+          type:
+          - string
+          - 'null'
+        cost:
+          type: number
+        distanceM:
+          type: number
+    Path:
+      type: object
+      required:
+      - hops
+      - totalCost
+      - totalDistanceM
+      properties:
+        hops:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hop'
+        totalCost:
+          type: number
+        totalDistanceM:
+          type: number
+    Flow:
+      type: object
+      required:
+      - id
+      - villageId
+      - resourceId
+      - ratePerHour
+      - carry
+      - source
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        ratePerHour:
+          type: number
+          description: 'Positive: production; negative: consumption (units per game hour)'
+        carry:
+          type: number
+        source:
+          type: string
+          enum:
+          - population
+          - industry
+          - manual
+        label:
+          type:
+          - string
+          - 'null'
+    FlowInput:
+      type: object
+      additionalProperties: false
+      required:
+      - villageId
+      - resourceId
+      - ratePerHour
+      properties:
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        ratePerHour:
+          type: number
+        source:
+          type: string
+          enum:
+          - population
+          - industry
+          - manual
+          default: manual
+        label:
+          type: string
+    FlowList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Flow'
+    MineralSource:
+      type: object
+      required:
+      - id
+      - villageId
+      - resourceId
+      - maxUnitsPerMission
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        remainingUnits:
+          type:
+          - integer
+          - 'null'
+          description: null = inexhaustible
+        maxUnitsPerMission:
+          type: integer
+    MineralSourceInput:
+      type: object
+      additionalProperties: false
+      required:
+      - villageId
+      - resourceId
+      - maxUnitsPerMission
+      properties:
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        remainingUnits:
+          type: integer
+        maxUnitsPerMission:
+          type: integer
+          minimum: 1
+    MineralSourceList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MineralSource'
+    Leg:
+      type: object
+      required:
+      - id
+      - orderId
+      - seq
+      - toVillageId
+      - quantity
+      - distanceM
+      - status
+      - attempts
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        orderId:
+          $ref: '#/components/schemas/Uuid'
+        seq:
+          type: integer
+        fromVillageId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+          description: null for a mining leg
+        toVillageId:
+          $ref: '#/components/schemas/Uuid'
+        fromWarehouseId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+          description: Where the goods are held (chosen at publication)
+        toWarehouseId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+          description: Delivery warehouse (main warehouse of the destination village)
+        quantity:
+          type: integer
+        distanceM:
+          type: number
+        rewardAmount:
+          type:
+          - integer
+          - 'null'
+        status:
+          $ref: '#/components/schemas/LegStatus'
+        holdId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+        missionId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+        attempts:
+          type: integer
+        lastError:
+          type:
+          - string
+          - 'null'
+        publishedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        completedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    Order:
+      type: object
+      required:
+      - id
+      - kind
+      - federationId
+      - resourceId
+      - quantity
+      - destinationVillageId
+      - path
+      - status
+      - trigger
+      - totalReward
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        kind:
+          type: string
+          enum:
+          - transport
+          - mining
+        federationId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        quantity:
+          type: integer
+        originVillageId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+        destinationVillageId:
+          $ref: '#/components/schemas/Uuid'
+        path:
+          type: array
+          items:
+            $ref: '#/components/schemas/Uuid'
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        trigger:
+          type: string
+          enum:
+          - auto_shortage
+          - auto_mining
+          - manual
+        totalReward:
+          type: integer
+        createdBy:
+          type:
+          - string
+          - 'null'
+        lastError:
+          type:
+          - string
+          - 'null'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        legs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Leg'
+    OrderPage:
+      type: object
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    OrderInput:
+      type: object
+      additionalProperties: false
+      required:
+      - resourceId
+      - quantity
+      - destinationVillageId
+      properties:
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        quantity:
+          type: integer
+          minimum: 1
+        destinationVillageId:
+          $ref: '#/components/schemas/Uuid'
+        originVillageId:
+          $ref: '#/components/schemas/Uuid'
+          description: Default the nearest village with a surplus
+    ActiveLeg:
+      type: object
+      required:
+      - legId
+      - orderId
+      - kind
+      - resourceId
+      - toVillageId
+      - quantity
+      - status
+      properties:
+        legId:
+          $ref: '#/components/schemas/Uuid'
+        orderId:
+          $ref: '#/components/schemas/Uuid'
+        kind:
+          type: string
+          enum:
+          - transport
+          - mining
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        fromVillageId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+        toVillageId:
+          $ref: '#/components/schemas/Uuid'
+        fromWarehouseId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+        toWarehouseId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+        quantity:
+          type: integer
+        status:
+          $ref: '#/components/schemas/LegStatus'
+        rewardAmount:
+          type:
+          - integer
+          - 'null'
+        missionId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    ActiveLegList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActiveLeg'
+    DeliveryInput:
+      type: object
+      additionalProperties: false
+      required:
+      - idempotencyKey
+      - warehouse
+      - resource
+      - quantity
+      - deliverer
+      properties:
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+        warehouse:
+          type: object
+          additionalProperties: false
+          description: id or poiUuid (the same value)
+          properties:
+            id:
+              $ref: '#/components/schemas/Uuid'
+            poiUuid:
+              $ref: '#/components/schemas/Uuid'
+        resource:
+          type: object
+          additionalProperties: false
+          description: code or inventory goodType
+          properties:
+            code:
+              type: string
+            goodType:
+              type: string
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 10000000000000
+        deliverer:
+          type: object
+          additionalProperties: false
+          required:
+          - type
+          - id
+          properties:
+            type:
+              type: string
+              enum:
+              - player
+              - npc
+            id:
+              $ref: '#/components/schemas/Uuid'
+        metadata:
+          type: object
+    DeliveryResult:
+      type: object
+      required:
+      - delivery
+      - acceptedQuantity
+      - rejectedQuantity
+      properties:
+        delivery:
+          type: object
+        acceptedQuantity:
+          type: integer
+        rejectedQuantity:
+          type: integer
+          description: To give back to the deliverer (capacity reached)
+        stock:
+          type:
+          - integer
+          - 'null'
+          description: Warehouse quantity after the delivery
+    PriceIndex:
+      type: object
+      required:
+      - federationId
+      - resourceId
+      - supply
+      - demand
+      - unitPrice
+      - computedAt
+      properties:
+        federationId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        supply:
+          type: integer
+        demand:
+          type: integer
+        unitPrice:
+          type: number
+        computedAt:
+          $ref: '#/components/schemas/Timestamp'
+    PriceIndexList:
+      type: object
+      required:
+      - federationId
+      - items
+      properties:
+        federationId:
+          $ref: '#/components/schemas/Uuid'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PriceIndex'
+    PriceHistory:
+      type: object
+      required:
+      - points
+      properties:
+        points:
+          type: array
+          items:
+            type: object
+            required:
+            - supply
+            - demand
+            - unitPrice
+            - computedAt
+            properties:
+              supply:
+                type: integer
+              demand:
+                type: integer
+              unitPrice:
+                type: number
+              computedAt:
+                $ref: '#/components/schemas/Timestamp'
+    LocalPrice:
+      type: object
+      required:
+      - villageId
+      - resourceId
+      - localFactor
+      - buyPrice
+      - sellPrice
+      - computedAt
+      properties:
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        localFactor:
+          type: number
+        buyPrice:
+          type: number
+        sellPrice:
+          type: number
+        computedAt:
+          $ref: '#/components/schemas/Timestamp'
+    LocalPriceList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalPrice'
+    StockHistory:
+      type: object
+      required:
+      - points
+      properties:
+        minThreshold:
+          type:
+          - integer
+          - 'null'
+        targetLevel:
+          type:
+          - integer
+          - 'null'
+        points:
+          type: array
+          items:
+            type: object
+            required:
+            - quantity
+            - held
+            - tickAt
+            properties:
+              quantity:
+                type: integer
+              held:
+                type: integer
+              tickAt:
+                $ref: '#/components/schemas/Timestamp'
+    MintEvent:
+      type: object
+      required:
+      - id
+      - federationId
+      - amount
+      - reason
+      - createdAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        federationId:
+          $ref: '#/components/schemas/Uuid'
+        amount:
+          type: integer
+        reason:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    MintEventList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MintEvent'
+    SimulationState:
+      type: object
+      required:
+      - paused
+      - tickCount
+      properties:
+        paused:
+          type: boolean
+        lastTickAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        tickCount:
+          type: integer
+        lastTickDurationMs:
+          type:
+          - integer
+          - 'null'
+        lastError:
+          type:
+          - string
+          - 'null'
+        lastPoliticalRefresh:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    Simulation:
+      type: object
+      required:
+      - state
+      - enabled
+      - tickSeconds
+      - timeScale
+      - externalMode
+      properties:
+        state:
+          $ref: '#/components/schemas/SimulationState'
+        enabled:
+          type: boolean
+        tickSeconds:
+          type: integer
+        timeScale:
+          type: number
+        externalMode:
+          type: string
+          enum:
+          - live
+          - dryrun
+    TickReport:
+      type: object
+      required:
+      - federations
+      - elapsedGameHours
+      - flowsApplied
+      - shortages
+      - legsCompleted
+      - legsRetried
+      - ordersFailed
+      - ordersCreated
+      - legsPublished
+      - minted
+      - errors
+      properties:
+        skipped:
+          type:
+          - string
+          - 'null'
+        federations:
+          type: integer
+        elapsedGameHours:
+          type: number
+        flowsApplied:
+          type: integer
+        shortages:
+          type: integer
+        legsCompleted:
+          type: integer
+        legsRetried:
+          type: integer
+        ordersFailed:
+          type: integer
+        ordersCreated:
+          type: integer
+        legsPublished:
+          type: integer
+        minted:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: string
+    Alert:
+      type: object
+      required:
+      - villageId
+      - resourceId
+      - available
+      - minThreshold
+      - netFlowPerHour
+      properties:
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        available:
+          type: integer
+        minThreshold:
+          type: integer
+        targetLevel:
+          type:
+          - integer
+          - 'null'
+        netFlowPerHour:
+          type: number
+        autonomyHours:
+          type:
+          - number
+          - 'null'
+    Dashboard:
+      type: object
+      required:
+      - simulation
+      - federation
+      - treasury
+      - openOrders
+      - activeMissions
+      - alerts
+      properties:
+        simulation:
+          $ref: '#/components/schemas/SimulationState'
+        federation:
+          $ref: '#/components/schemas/Federation'
+        treasury:
+          type: object
+          required:
+          - currency
+          - floor
+          - minted24h
+          - escrowed
+          properties:
+            balance:
+              type:
+              - integer
+              - 'null'
+              description: null when economie is unreachable
+            currency:
+              type: string
+            floor:
+              type: integer
+            minted24h:
+              type: integer
+            escrowed:
+              type: integer
+        openOrders:
+          type: integer
+        activeMissions:
+          type: integer
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+    Network:
+      type: object
+      required:
+      - federationId
+      - villages
+      - routes
+      - activeLegs
+      properties:
+        federationId:
+          $ref: '#/components/schemas/Uuid'
+        villages:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetworkVillage'
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/TravelRoute'
+        activeLegs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActiveLeg'
+    ImportReport:
+      type: object
+      required:
+      - federationId
+      - politicalEntityId
+      - entitiesCreated
+      - entitiesFound
+      - resources
+      - villages
+      - warehouses
+      - villagesWithoutWarehouse
+      - unattachedWarehouses
+      - policiesCreated
+      - flowsCreated
+      - capacities
+      - mineralSources
+      - routesCreated
+      - initialStocksApplied
+      - minted
+      properties:
+        federationId:
+          $ref: '#/components/schemas/Uuid'
+        politicalEntityId:
+          $ref: '#/components/schemas/Uuid'
+        entitiesCreated:
+          type: integer
+        entitiesFound:
+          type: integer
+        resources:
+          type: integer
+        villages:
+          type: integer
+        warehouses:
+          type: integer
+        villagesWithoutWarehouse:
+          type: integer
+          description: Villages of the planet without an attached cargo_depot (not simulated)
+        unattachedWarehouses:
+          type: array
+          items:
+            $ref: '#/components/schemas/Uuid'
+          description: cargo_depots without a valid poi_uuid (not simulated)
+        policiesCreated:
+          type: integer
+        flowsCreated:
+          type: integer
+        capacities:
+          type: integer
+        mineralSources:
+          type: integer
+        routesCreated:
+          type: integer
+        initialStocksApplied:
+          type: integer
+        minted:
+          type: integer
+        routesRemoved:
+          type: integer
+          description: Automatic routes no longer wanted (e.g. replaced by a village in between)
+    Village:
+      type: object
+      required:
+      - id
+      - code
+      - name
+      - federationId
+      - politicalEntityId
+      - population
+      - active
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: Persistence poi_village UUID
+        code:
+          type: string
+        name:
+          type: string
+        federationId:
+          $ref: '#/components/schemas/Uuid'
+        politicalEntityId:
+          $ref: '#/components/schemas/Uuid'
+          description: Commune in social
+        villageType:
+          type:
+          - string
+          - 'null'
+        population:
+          type: integer
+        radiusM:
+          type:
+          - number
+          - 'null'
+        x:
+          type:
+          - number
+          - 'null'
+        y:
+          type:
+          - number
+          - 'null'
+        z:
+          type:
+          - number
+          - 'null'
+        mainWarehouseId:
+          type:
+          - string
+          - 'null'
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+          description: Where deliveries and production go
+        active:
+          type: boolean
+    VillageUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        active:
+          type: boolean
+        mainWarehouseId:
+          $ref: '#/components/schemas/Uuid'
+          description: One of the village warehouses
+    VillageStock:
+      type: object
+      required:
+      - resourceId
+      - quantity
+      - held
+      - available
+      - netFlowPerHour
+      properties:
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        quantity:
+          type: integer
+        held:
+          type: integer
+        available:
+          type: integer
+        minThreshold:
+          type:
+          - integer
+          - 'null'
+        targetLevel:
+          type:
+          - integer
+          - 'null'
+        netFlowPerHour:
+          type: number
+        autonomyHours:
+          type:
+          - number
+          - 'null'
+    VillageSummary:
+      allOf:
+      - $ref: '#/components/schemas/Village'
+      - type: object
+        required:
+        - warehouseCount
+        - stocks
+        properties:
+          warehouseCount:
+            type: integer
+          stocks:
+            type: array
+            items:
+              $ref: '#/components/schemas/VillageStock'
+    VillageList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/VillageSummary'
+    WarehouseStock:
+      type: object
+      required:
+      - resourceId
+      - quantity
+      - held
+      - available
+      properties:
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        code:
+          type: string
+        quantity:
+          type: integer
+        held:
+          type: integer
+        available:
+          type: integer
+        capacity:
+          type:
+          - integer
+          - 'null'
+    VillageWarehouse:
+      type: object
+      required:
+      - warehouse
+      - main
+      - stocks
+      properties:
+        warehouse:
+          $ref: '#/components/schemas/Warehouse'
+        main:
+          type: boolean
+        stocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/WarehouseStock'
+    VillageDetail:
+      type: object
+      required:
+      - village
+      - stocks
+      - warehouses
+      - policies
+      - flows
+      - capacities
+      - mineralSources
+      - localPrices
+      - incoming
+      properties:
+        village:
+          $ref: '#/components/schemas/Village'
+        stocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/VillageStock'
+        warehouses:
+          type: array
+          items:
+            $ref: '#/components/schemas/VillageWarehouse'
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/VillagePolicy'
+        flows:
+          type: array
+          items:
+            $ref: '#/components/schemas/Flow'
+        capacities:
+          type: array
+          items:
+            $ref: '#/components/schemas/WarehouseCapacity'
+        mineralSources:
+          type: array
+          items:
+            $ref: '#/components/schemas/MineralSource'
+        localPrices:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalPrice'
+        incoming:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActiveLeg'
+    VillagePolicy:
+      type: object
+      additionalProperties: false
+      required:
+      - villageId
+      - resourceId
+      - minThreshold
+      - targetLevel
+      properties:
+        villageId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        minThreshold:
+          type: integer
+          minimum: 0
+        targetLevel:
+          type: integer
+          minimum: 0
+    VillagePolicyList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/VillagePolicy'
+    WarehouseCapacity:
+      type: object
+      required:
+      - warehouseId
+      - resourceId
+      - initialStock
+      - initialStockApplied
+      properties:
+        warehouseId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        capacity:
+          type:
+          - integer
+          - 'null'
+          description: 'null: unlimited'
+        initialStock:
+          type: integer
+        initialStockApplied:
+          type: boolean
+    WarehouseCapacityInput:
+      type: object
+      additionalProperties: false
+      required:
+      - warehouseId
+      - resourceId
+      properties:
+        warehouseId:
+          $ref: '#/components/schemas/Uuid'
+        resourceId:
+          $ref: '#/components/schemas/Uuid'
+        capacity:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+    WarehouseCapacityList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WarehouseCapacity'
+    NetworkVillage:
+      allOf:
+      - $ref: '#/components/schemas/Village'
+      - type: object
+        required:
+        - stocks
+        - warehouses
+        properties:
+          stocks:
+            type: array
+            items:
+              $ref: '#/components/schemas/VillageStock'
+          warehouses:
+            type: array
+            items:
+              $ref: '#/components/schemas/Warehouse'

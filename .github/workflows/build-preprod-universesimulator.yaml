@@ -1,0 +1,36 @@
+name: "Build & Deploy to Preprod: universesimulator"
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "universesimulator/**"
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Disable Docker layer cache (force full rebuild)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  build:
+    name: Build universesimulator (preprod)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: universesimulator
+      context_path: universesimulator
+      dockerfile_path: universesimulator/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/universesimulator
+      image_tag: develop
+      chart_name: service-universesimulator
+      trigger_preprod_deploy: true
+      no_cache: ${{ github.event_name == 'workflow_dispatch' && inputs.no_cache == 'true' }}
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      KUBERNETES_REPO_TOKEN: ${{ secrets.KUBERNETES_REPO_TOKEN }}

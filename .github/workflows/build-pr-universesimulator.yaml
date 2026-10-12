@@ -1,0 +1,48 @@
+name: "PR Build Check: universesimulator"
+
+on:
+  pull_request:
+    paths:
+      - "universesimulator/**"
+
+jobs:
+  build:
+    name: Build universesimulator (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: universesimulator
+      context_path: universesimulator
+      dockerfile_path: universesimulator/docker/Dockerfile
+      image_name: local/universesimulator
+      image_tag: pr-check
+      push: false
+
+  test:
+    name: Test universesimulator
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: universesimulator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: universesimulator
+      - name: cargo test
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/postgres
+        run: cargo test --locked
