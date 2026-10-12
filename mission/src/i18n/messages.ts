@@ -177,6 +177,9 @@ export const frCodeMessages: Record<string, string> = {
   ITEM_REWARD_NOT_SPLITABLE: 'Récompense item non partageable entre plusieurs assignés (instance unique ou séquestrée)',
   EVENT_CAPACITY_REQUIRES_FLAG: 'Ramenez maxAssignees à 100 ou moins avant de retirer le flag event',
   ESCROW_SOURCE_INVALID: 'escrowSource "issuer" nécessite un émetteur corporation ou politique',
+  ESCROW_ITEM_REWARD_UNSUPPORTED:
+    'Les récompenses item ne peuvent pas être séquestrées sur un trésor : seul le composant crédits est financé',
+  ESCROW_CREDITS_REQUIRED: 'Une mission séquestrée nécessite un composant de récompense crédits',
   // ── HTTP plumbing ──
   INVALID_JSON: 'Corps JSON malformé',
   INTERNAL_ERROR: 'Erreur interne du serveur',

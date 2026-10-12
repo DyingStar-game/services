@@ -73,7 +73,11 @@ missionsRoutes.post(
         rewards: mission.rewards,
         maxAssignees: mission.maxAssignees,
       },
-      { escrowed: mode === 'player', requireReward: mode === 'player' },
+      {
+        escrowed: mode === 'player',
+        requireReward: mode === 'player',
+        treasuryEscrow: mode === 'internal' && Boolean(mission.escrow),
+      },
     );
     res.json({ valid: true, spec });
   }),

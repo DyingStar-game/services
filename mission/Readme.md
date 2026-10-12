@@ -83,7 +83,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 
 **Kinds d'objectifs** (registre `src/kinds/objectives/`) — 3 modes d'évaluation :
 - **`game`** — le serveur de jeu soumet la quantité (`reportProgress`) : `deliver_material`, `transport`, `visit` ;
-- **`service`** — le service mesure contre l'état des services via **`POST /:missionId/verify`** : `owns_items` (instantané inventaire, peut régresser), `has_credits` (instantané solde), `deliver_items` (transfère les biens disponibles vers `to` **au moment du verify** — livraison terminale, irréversible) ;
+- **`service`** — le service mesure contre l'état des services via **`POST /:missionId/verify`** : `owns_items` (instantané inventaire, peut régresser), `has_credits` (instantané solde), `deliver_items` (transfère les biens disponibles vers `to` **au moment du verify** — livraison terminale, irréversible ; `to.holderType` : `player|npc|corporation|system|warehouse`, l'id d'un `warehouse` étant l'uuid du POI persistence) ;
 - **`issuer`** — le créateur confirme : `manual` (`POST /:missionId/objectives/:objectiveId/confirm`, réservé au créateur ; le jeu confirme via l'API interne).
 
 Un push `reportProgress` sur un kind non-`game` → `409 OBJECTIVE_NOT_PUSHABLE`. Pour une mission `scenario`, un objectif reste verrouillé (`409 OBJECTIVE_LOCKED`) tant que les précédents ne sont pas faits.
@@ -112,6 +112,25 @@ Filtrée au **listing** (SQL, géométries POI injectées en jsonb ; joueur sans
 **Missions joueurs** (`POST /api/missions`) : `rewards[]` **séquestrés à la création** — le composant crédits est débité du portefeuille du créateur (`economie:wallet:debit`, `externalId = mission-escrow:<missionId>`), **chaque** composant item est réservé en hold (`escrowItemHoldIds[]`, un par item). Remboursé si annulation/expiration (`mission-refund:<missionId>`). `visibility: corporation` vérifiée via social.
 
 **Financement par un trésor d'organisation** (`escrowSource`) : une mission émise par une **corporation** (`corporationId`) ou une **entité politique** (`politicalEntityId`, commune → fédération ; `issuerType: politics`) peut être prélevée sur **le compte bancaire de l'organisation** plutôt que sur le portefeuille du créateur : `escrowSource: 'issuer'` (défaut `'creator'` = comportement classuel, le joueur paie de sa poche). Garde-fous : le créateur doit être **membre de l'émetteur** et détenir l'action **`mission:treasury:commit`** — accordée par Social au CEO (ou à un grade portant `manage_corporation`) pour une corporation, au chef (ou à un office portant `manage_treasury`) pour une entité politique (`403 TREASURY_FORBIDDEN`, `400 ESCROW_SOURCE_INVALID` si émetteur absent). La décision passe par `POST /api/internal/authorize` (`social:authorize`) : mission n'interprète plus les permissions lui-même. Le remboursement (annulation/expiration) revient sur le même compte (`escrowPayerType` : `player|corporation|politics`, clés `mission-refund:<id>` identiques).
+
+**Séquestre d'une mission interne sur un trésor politique** (`escrow`, `POST /api/internal/missions`) : un service de confiance (ex. `svc-universesimulator` pour la fédération ARES) finance le composant **crédits** depuis le trésor d'une entité politique au lieu du faucet. Exige le rôle **`mission:escrow:politics`** en plus de `mission:write` (`403 FORBIDDEN` sinon) ; pas de contrôle `mission:treasury:commit` (l'appelant est un service). Même cycle de vie que les missions joueurs : débit `mission-escrow:<missionId>` à la création (`escrowStatus: held`, `escrowPayerType: politics`), remboursement `mission-refund:<missionId>` sur le trésor à l'annulation/expiration, `claimed` après règlement. La mission est insérée avant le débit (un `scriptId` dupliqué est refusé sans mouvement d'argent — conseillé pour rendre la création rejouable) puis **supprimée** si le débit échoue. Erreurs : `409 INSUFFICIENT_FUNDS` (trésor insuffisant, rien n'est persisté), `400 ESCROW_ITEM_REWARD_UNSUPPORTED` (récompense item avec `escrow`), `400 ESCROW_CREDITS_REQUIRED` (`escrow` sans composant crédits).
+
+```jsonc
+POST /api/internal/missions
+{
+  "title": "Transport de minerai pour ARES",
+  "category": "delivery",               // deliver_items n'est pas autorisé en catégorie transport
+  "issuerType": "politics",
+  "issuerId": "33333333-3333-3333-3333-333333333333",
+  "scriptId": "unisim:transport:42",
+  "rewards": [{ "type": "credits", "amount": 4000 }],
+  "escrow": { "payerType": "politics", "payerId": "33333333-3333-3333-3333-333333333333" },
+  "objectives": [
+    { "type": "deliver_items", "title": "Livrer 50 minerais", "targetQuantity": 50,
+      "params": { "itemId": "iron_ore", "to": { "holderType": "warehouse", "holderId": "44444444-4444-4444-4444-444444444444" } } }
+  ]
+}
+```
 
 **Créer une mission au nom d'une corporation ou d'une entité politique** : pas d'endpoint dédié — c'est `POST /api/missions` (JWT joueur) qui porte l'émetteur ; `issuerType` est résolu automatiquement (`politics` > `corporation` > `player`, `missions.service.ts`). Le créateur est tracé dans `createdBy` et retrouve ses créations via `GET /api/me/missions-created`.
 
@@ -205,7 +224,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 ### Interne — serveur de jeu (token Keycloak de service + rôle de capacité)
 | Méthode | Route | Rôle requis | Description |
 |---|---|---|---|
-| POST | `/api/internal/missions` | `mission:write` | Créer une mission (`rewards[]`, `prerequisites[]`, `zones[]`, kinds, `groupClaimable`, `isEvent`) |
+| POST | `/api/internal/missions` | `mission:write` (+ `mission:escrow:politics` si `escrow`) | Créer une mission (`rewards[]`, `prerequisites[]`, `zones[]`, kinds, `groupClaimable`, `isEvent`, `escrow?`) |
 | GET | `/api/internal/missions?status=&kind=&category=&issuerType=&issuerId=&groupClaimable=&isEvent=&limit=&offset=` | `mission:read` | Catalogue complet (tous statuts, sans filtre zone) |
 | PATCH | `/api/internal/missions/:missionId` | `mission:write` | Modifier **titre, description, expiration, `isEvent`, `zones`** seulement (spec immuable ; zones sans impact séquestre) |
 | POST | `/api/internal/missions/:missionId/share` `{groupId}` | `mission:write` | Partager la mission à un groupe (canal de confiance) |
@@ -225,6 +244,15 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 
 ### Configuration Keycloak requise
 - Client de service `svc-game` (serveur de jeu) autorisé dans `INTERNAL_SERVICE_CLIENTS`, avec les rôles `mission:read`, `mission:write`, `mission:progress`, `mission:complete`.
+- Client de service `svc-universesimulator` (simulateur d'univers, missions de transport/minage au nom d'une fédération) autorisé dans `INTERNAL_SERVICE_CLIENTS`, avec `mission:read`, `mission:write` **et `mission:escrow:politics`**.
+
+| Rôle de service | Accorde |
+|---|---|
+| `mission:read` | Lecture du catalogue et des assignations (`GET /api/internal/...`) |
+| `mission:write` | Création/modification/annulation/partage/assignation de missions |
+| `mission:progress` | Progression, confirmation et re-mesure des objectifs |
+| `mission:complete` | Complétion et règlement des récompenses |
+| `mission:escrow:politics` | Financer la récompense crédits d'une mission interne sur un **trésor politique** (`escrow` à la création, en plus de `mission:write`) |
 - Compte de service **`svc-mission`** (celui de ce service) — rôles à accorder sur les clients cibles :
   - **economie** (`INTERNAL_SERVICE_CLIENTS`) : `economie:wallet:credit`, `economie:wallet:debit` (séquestre) **et `economie:wallet:read`** (prérequis/objet `has_credits`) ;
   - **inventory** : **`inventory:read`** (mesure `owns_items`/`deliver_items` + prérequis) — les rôles de hold/transfer/credit utilisés par le règlement doivent aussi être accordés ;

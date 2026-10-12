@@ -61,6 +61,11 @@ export interface ValidateSpecOptions {
   escrowed: boolean;
   /** True for player missions: at least one reward component is required. */
   requireReward?: boolean;
+  /**
+   * True for service missions funded by a treasury (`escrow` on the internal API): only a
+   * credits component can be escrowed there, and it is required.
+   */
+  treasuryEscrow?: boolean;
 }
 
 /** Renders zod issues as `path: message` lines. */
@@ -95,7 +100,8 @@ function assertKindCategory(
 /**
  * Validates a mission spec against the kind registry and reward rules.
  * @param input - Spec fields (objectives, prerequisites, rewards, capacity).
- * @param opts - Creation path options (`escrowed`/`requireReward` for player missions).
+ * @param opts - Creation path options (`escrowed`/`requireReward` for player missions,
+ *   `treasuryEscrow` for treasury-funded service missions).
  * @returns The normalized spec to persist.
  * @throws 400 for unknown kinds, invalid params or reward rule violations, 503 when item
  *   rewards are required but Inventory is not configured.
@@ -108,6 +114,19 @@ export function validateMissionSpec(input: MissionSpecInput, opts: ValidateSpecO
   const rewards = input.rewards ?? [];
   if (opts.requireReward && rewards.length === 0) {
     throw new HttpError(400, 'REWARD_REQUIRED', 'Player-created missions require at least one reward component');
+  }
+  if (opts.treasuryEscrow) {
+    // Item escrow holds goods from a player inventory; a treasury only funds credits.
+    if (rewards.some((component) => component.type === 'item')) {
+      throw new HttpError(
+        400,
+        'ESCROW_ITEM_REWARD_UNSUPPORTED',
+        'Item rewards cannot be escrowed from a treasury: only the credits component is funded',
+      );
+    }
+    if (!rewards.some((component) => component.type === 'credits')) {
+      throw new HttpError(400, 'ESCROW_CREDITS_REQUIRED', 'An escrowed mission requires a credits reward component');
+    }
   }
 
   for (const component of rewards) {

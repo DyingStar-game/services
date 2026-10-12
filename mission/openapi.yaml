@@ -661,7 +661,13 @@ paths:
     post:
       tags: [internal]
       summary: Create a mission (system, IA corporation/city or scenario)
-      description: Requires the `mission:write` service role.
+      description: >
+        Requires the `mission:write` service role. With `escrow`, the caller must also hold
+        `mission:escrow:politics`: the credits reward is debited from the political
+        entity's treasury at creation (`escrowStatus: held`, key
+        `mission-escrow:<missionId>`), refunded there on cancel/expire
+        (`mission-refund:<missionId>`) and marked `claimed` once settled. A refused debit
+        leaves no mission behind.
       requestBody:
         required: true
         content:
@@ -679,17 +685,43 @@ paths:
                   objectives:
                     type: array
                     items: { $ref: '#/components/schemas/Objective' }
-        '400': { $ref: '#/components/responses/ValidationError' }
+        '400':
+          description: >
+            Validation error, or an escrow spec the treasury cannot fund
+            (`ESCROW_ITEM_REWARD_UNSUPPORTED`: item rewards with `escrow`;
+            `ESCROW_CREDITS_REQUIRED`: `escrow` without a credits reward)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                items:
+                  value: { error: ESCROW_ITEM_REWARD_UNSUPPORTED, message: 'Item rewards cannot be escrowed from a treasury: only the credits component is funded', status: 400 }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: Missing `mission:write`, or `mission:escrow:politics` when `escrow` is set
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                escrowRole:
+                  value: { error: FORBIDDEN, message: 'Requires service role mission:escrow:politics', status: 403 }
         '409':
-          description: A mission with this `scriptId` already exists
+          description: >
+            A mission with this `scriptId` already exists, or the treasury cannot fund the
+            escrow (`INSUFFICIENT_FUNDS`, nothing persisted)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               examples:
                 duplicate:
                   value: { error: DUPLICATE_SCRIPT_ID, message: A mission with this scriptId already exists, status: 409 }
+                broke:
+                  value: { error: INSUFFICIENT_FUNDS, message: Insufficient balance for the mission escrow, status: 409 }
+        '502':
+          description: Economy is unreachable or refused the escrow debit (`ECONOMY_DEBIT_FAILED`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
     get:
       tags: [internal]
       summary: Full mission catalogue (all statuses)
@@ -1492,6 +1524,17 @@ components:
           minItems: 1
           maxItems: 100
           items: { $ref: '#/components/schemas/CreateObjective' }
+        escrow:
+          type: object
+          description: >
+            Internal API only. Funds the credits reward from a treasury instead of the
+            faucet (requires `mission:escrow:politics`). Requires a credits reward and no
+            item reward.
+          required: [payerType, payerId]
+          additionalProperties: false
+          properties:
+            payerType: { type: string, enum: [politics], description: Political entity (commune … federation, owned by Social) }
+            payerId: { type: string, format: uuid, description: Political entity id whose treasury is debited }
 
     CreateObjective:
       type: object
@@ -1511,7 +1554,11 @@ components:
         params:
           type: object
           additionalProperties: true
-          description: Kind-specific structured params (validated by the kind's params schema)
+          description: >
+            Kind-specific structured params (validated by the kind's params schema). For
+            `deliver_items`: `{ itemId, to: { holderType, holderId } }` with `holderType`
+            one of `player`, `npc`, `corporation`, `system`, `warehouse` (`holderId` of a
+            warehouse = persistence POI uuid).
         payload: { type: object, additionalProperties: true }
 
     UpdateMission:
