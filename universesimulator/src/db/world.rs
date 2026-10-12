@@ -361,6 +361,7 @@ pub async fn prune_auto_routes(pool: &PgPool, federation: Uuid, keep: &std::coll
 }
 
 /// Whether a route already links two villages, in either direction.
+#[cfg(test)]
 pub async fn route_exists(pool: &PgPool, a: Uuid, b: Uuid) -> Result<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM travel_routes WHERE (from_village_id = $1 AND to_village_id = $2)
