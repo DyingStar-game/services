@@ -1,6 +1,6 @@
 /**
- * Holds reserve owned goods for a pending operation (a market order or a mission item
- * escrow). A hold does not move ownership: the goods stay on the holder's stack/instance,
+ * Holds reserve owned goods for a pending operation (a market order, a mission item
+ * escrow or a warehouse supply order). A hold does not move ownership: the goods stay on the holder's stack/instance,
  * but their quantity is no longer *available* until the hold is consumed (transferred) or
  * released (cancelled). This is how the "no magic transfer" rule is enforced: the game
  * server confirms the physical exchange, then the hold is consumed into a real transfer.
@@ -19,8 +19,12 @@ import {
 
 import { type HolderType } from './holders.js';
 
-/** What a hold is attached to. `refId` is opaque (order id, escrow id, ...). */
-export const HOLD_REF_TYPES = ['market_order', 'mission_escrow', 'manual'] as const;
+/**
+ * What a hold is attached to. `refId` is opaque (order id, escrow id, supply order id, ...)
+ * and required for every type but `manual`. `supply_order` reserves warehouse stock for a
+ * universe-simulator supply order.
+ */
+export const HOLD_REF_TYPES = ['market_order', 'mission_escrow', 'supply_order', 'manual'] as const;
 export type HoldRefType = (typeof HOLD_REF_TYPES)[number];
 
 /** Whether the hold reserves quantity of a fungible stack or a unique instance. */

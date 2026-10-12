@@ -15,7 +15,11 @@ import {
 } from '../db/schema/index.js';
 import { pageQuery } from '../lib/pagination.js';
 
-export const uuidSchema = z.string().uuid();
+/**
+ * Any 8-4-4-4-12 hex UUID. Game objects (persistence POIs, used as `warehouse` holder ids)
+ * carry UUIDs without RFC version/variant bits, which `z.uuid()` refuses.
+ */
+export const uuidSchema = z.guid();
 
 export const holderParams = z.object({
   holderType: z.enum(HOLDER_TYPES),

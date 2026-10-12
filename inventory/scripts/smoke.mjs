@@ -2,8 +2,8 @@
  * End-to-end smoke test for the Inventory API.
  *
  * Exercises the ownership registry: fungible stacks (credit, hold, consume, transfer,
- * debit), unique instances (register, hold, consume), the hold availability invariant and
- * the access rules.
+ * debit), warehouse stocks (`supply_order` holds), unique instances (register, hold,
+ * consume), the hold availability invariant and the access rules.
  *
  *   node scripts/smoke.mjs
  *   BASE=http://host.docker.internal:3000 KEY=test-internal-key node scripts/smoke.mjs
@@ -17,6 +17,8 @@ const KEY = process.env.KEY ?? 'test-internal-key';
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 const INSTANCE = '99999999-9999-4999-8999-999999999999';
+/** Warehouse holder: UUID of a persistence game object (village/city POI). */
+const WAREHOUSE = '33333333-3333-4333-8333-333333333333';
 const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const GOOD = `ore-${runId}`;
 const TRUCK = `truck-${runId}`;
@@ -132,6 +134,57 @@ console.log('\n# direct transfer');
 
   const aStack = await req('GET', `${holder('player', A)}/stacks/${GOOD}`, undefined, internal);
   check('source reduced', aStack.json.quantity, 1000);
+}
+
+// ── Warehouse stocks (universe simulator): credit, supply order, transfer, debit ──
+console.log('\n# warehouse stocks');
+{
+  const wh = holder('warehouse', WAREHOUSE);
+  const credit = await req('POST', `${wh}/credit`, { goodType: GOOD, quantity: 300 }, internal);
+  check('credit a warehouse', [credit.status, credit.json.holderType, credit.json.quantity], [201, 'warehouse', 300]);
+
+  const noRef = await req('POST', `${wh}/holds`, { kind: 'stack', goodType: GOOD, quantity: 50, refType: 'supply_order' }, internal);
+  check('supply_order hold requires refId', [noRef.status, noRef.json.error], [400, 'REF_REQUIRED']);
+
+  const hold = await req(
+    'POST',
+    `${wh}/holds`,
+    { kind: 'stack', goodType: GOOD, quantity: 120, refType: 'supply_order', refId: `supply-${runId}` },
+    internal,
+  );
+  check('supply_order hold on a warehouse', [hold.status, hold.json.holderType, hold.json.refType], [201, 'warehouse', 'supply_order']);
+
+  const stack = await req('GET', `${wh}/stacks/${GOOD}`, undefined, internal);
+  check('warehouse held quantity is reserved', [stack.json.quantity, stack.json.held, stack.json.available], [300, 120, 180]);
+
+  const consumed = await req('POST', `/api/internal/holds/${hold.json.id}/consume`, { to: { holderType: 'player', holderId: B } }, internal);
+  check('supply_order hold consumed', [consumed.status, consumed.json.hold.status], [200, 'consumed']);
+
+  const released = await req(
+    'POST',
+    `${wh}/holds`,
+    { kind: 'stack', goodType: GOOD, quantity: 10, refType: 'supply_order', refId: `supply-cancel-${runId}` },
+    internal,
+  );
+  const release = await req('POST', `/api/internal/holds/${released.json.id}/release`, undefined, internal);
+  check('supply_order hold released', [release.status, release.json.status], [200, 'released']);
+
+  const toWarehouse = await req(
+    'POST',
+    '/api/internal/transfers',
+    { from: { holderType: 'player', holderId: A }, to: { holderType: 'warehouse', holderId: WAREHOUSE }, goodType: GOOD, quantity: 20 },
+    internal,
+  );
+  check('transfer into a warehouse', [toWarehouse.status, toWarehouse.json.holderType, toWarehouse.json.quantity], [201, 'warehouse', 200]);
+
+  const debit = await req('POST', `${wh}/debit`, { goodType: GOOD, quantity: 200 }, internal);
+  check('debit a warehouse', [debit.status, debit.json.quantity], [201, 0]);
+
+  const inv = await req('GET', wh, undefined, internal);
+  check('warehouse inventory readable internally', [inv.status, inv.json.stacks.find((s) => s.goodType === GOOD)?.quantity], [200, 0]);
+
+  // Give back the 20 units so the following sections keep their expected balances.
+  await req('POST', `${holder('player', A)}/credit`, { goodType: GOOD, quantity: 20 }, internal);
 }
 
 // ── Unique instances: register, hold, consume ─────────────────────────────────

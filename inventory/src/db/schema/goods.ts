@@ -53,7 +53,10 @@ export const inventoryStacks = pgTable(
     primaryKey({ columns: [t.holderType, t.holderId, t.goodType] }),
     check('inventory_stacks_quantity_positive', sql`${t.quantity} >= 0`),
     index('inventory_stacks_holder_idx').on(t.holderType, t.holderId),
-    check('inventory_stacks_holder_type_valid', sql`${t.holderType} in ('player','npc','corporation','system')`),
+    check(
+      'inventory_stacks_holder_type_valid',
+      sql`${t.holderType} in ('player','npc','corporation','system','warehouse')`,
+    ),
   ],
 );
 

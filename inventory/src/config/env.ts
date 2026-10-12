@@ -31,7 +31,7 @@ export const env = {
   authDevBypass: process.env.AUTH_DEV_BYPASS === 'true' && nodeEnv !== 'production',
   /** Trusted Keycloak service clients (`azp`) allowed on `/api/internal/*`. */
   internal: {
-    serviceClients: (process.env.INTERNAL_SERVICE_CLIENTS ?? 'svc-game,svc-market,svc-mission')
+    serviceClients: (process.env.INTERNAL_SERVICE_CLIENTS ?? 'svc-game,svc-market,svc-mission,svc-universesimulator')
       .split(',')
       .map((client) => client.trim())
       .filter(Boolean),
