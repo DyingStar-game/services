@@ -50,13 +50,17 @@ mettre `INTERNAL_DEV_BYPASS=true` et passer `X-Internal-Key: <INTERNAL_API_KEY>`
 
 ## Modèle
 
-- **Détenteur** (`holder`) : `player`, `npc`, `corporation`, `system`. Ids opaques (UUID) ;
-  les joueurs/PNJ et les corporations appartiennent au service `social`, il n'y a pas de
-  copie locale.
+- **Détenteur** (`holder`) : `player`, `npc`, `corporation`, `system`, `warehouse`. Ids
+  opaques (UUID) ; les joueurs/PNJ et les corporations appartiennent au service `social`, il
+  n'y a pas de copie locale. Un `warehouse` est le stock d'un village/d'une ville géré par
+  `universesimulator` (`svc-universesimulator`) ; son id est l'UUID de l'objet persistence
+  (POI). Il n'est accessible que via `/api/internal/*`.
 - **Nature du bien** : un `goodType` est **fongible** (pile) ou **unique** (instance). Sa
   nature est enregistrée à la première utilisation et ne peut plus changer.
 - **Réservation** (`hold`) : réserve des biens **disponibles** d'un détenteur pour une
-  opération en attente (commande de marché, escrow de mission). Un hold ne change pas la
+  opération en attente (commande de marché `market_order`, escrow de mission
+  `mission_escrow`, commande d'approvisionnement d'entrepôt `supply_order`, ou `manual` ;
+  `refId` obligatoire sauf pour `manual`). Un hold ne change pas la
   propriété : `available = quantity - held`. La consommation d'un hold (`consume`) transfère
   réellement la propriété ; sa libération (`release`) rend les biens disponibles.
 - **POI** (`inventory_pois`) : point GPS `{x, y, z}` éventuellement entouré d'une zone

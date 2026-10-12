@@ -8,9 +8,9 @@ import { env } from '../config/env.js';
 import { currentLang } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
-/** Inventory holder reference. */
+/** Inventory holder reference (`warehouse` id = persistence POI uuid). */
 export interface Holder {
-  holderType: 'player' | 'npc' | 'corporation' | 'system';
+  holderType: 'player' | 'npc' | 'corporation' | 'system' | 'warehouse';
   holderId: string;
 }
 

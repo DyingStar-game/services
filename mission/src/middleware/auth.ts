@@ -35,6 +35,8 @@ export const SERVICE_ROLES = {
   missionWrite: 'mission:write',
   missionProgress: 'mission:progress',
   missionComplete: 'mission:complete',
+  /** Fund an internal mission's reward from a political treasury (`escrow` on creation). */
+  missionEscrowPolitics: 'mission:escrow:politics',
 } as const;
 
 /** Moderation roles, lowest to highest; each level implies the ones below. */
@@ -220,6 +222,19 @@ export function requireServiceRole(role: string) {
     }
     next();
   };
+}
+
+/**
+ * Throws unless the calling service holds a capability role. Used when a role is only
+ * required by part of a request body (e.g. `escrow` on mission creation).
+ * @param service - Authenticated service.
+ * @param role - Role the calling service must hold.
+ * @throws 403 `FORBIDDEN` when the role is missing.
+ */
+export function assertServiceRole(service: AuthenticatedService, role: string): void {
+  if (!service.roles.includes(role)) {
+    throw new HttpError(403, 'FORBIDDEN', t('auth.requires_service_role', { role }));
+  }
 }
 
 /** Returns the service bound on the request; throws if `serviceAuth` did not run. */

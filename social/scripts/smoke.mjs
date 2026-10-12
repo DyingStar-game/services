@@ -2,6 +2,7 @@
  * End-to-end smoke test for the Social API — focused on the ACL (central permission PDP).
  *
  * Exercises `POST /api/internal/authorize` and `GET /api/internal/permissions/catalog`
+ * (plus the internal political hierarchy routes used by system-governed bootstraps)
  * against a running server: leader allowance, rank permissions, catalog `satisfiedBy`,
  * catalog `defaultMember`, free actions (exact match only), batch evaluation and the
  * validation/auth boundaries. Player-facing routes rely on `AUTH_DEV_BYPASS=true`
@@ -385,6 +386,139 @@ console.log('\n# permission catalog');
   );
   const anonymous = await req('GET', '/api/me/permissions/catalog');
   check('player catalog without credentials', [anonymous.status, anonymous.json.error], [401, 'UNAUTHORIZED']);
+}
+
+// ── Political hierarchy (internal, system-governed bootstrap) ────────────────
+
+console.log('\n# politics hierarchy (internal)');
+{
+  const fedName = `Ares ${suffix}`;
+  const fed = await req('POST', '/api/internal/politics', { type: 'federation', name: fedName }, internal);
+  check('headless federation created', [fed.status, fed.json.headId, fed.json.parentId], [201, null, null]);
+  const fedId = fed.json.id;
+
+  const nullHead = await req(
+    'POST',
+    '/api/internal/politics',
+    { headId: null, type: 'country', name: `Ares Prime ${suffix}` },
+    internal,
+  );
+  check('headless country created (headId: null)', [nullHead.status, nullHead.json.headId], [201, null]);
+  const countryId = nullHead.json.id;
+
+  const region = await req('POST', '/api/internal/politics', { type: 'region', name: `Ares North ${suffix}` }, internal);
+  check('headless region created', region.status, 201);
+  const regionId = region.json.id;
+
+  const fedOffices = await req('GET', `/api/politics/${fedId}/offices`, undefined, asPlayer(A, 'alice'));
+  check(
+    'headless entity still gets its default offices (head office vacant)',
+    [fedOffices.status, fedOffices.json.some((o) => o.isHead), fedOffices.json.some((o) => o.isDefault)],
+    [200, true, true],
+  );
+  const fedMembers = await req('GET', `/api/politics/${fedId}/members`, undefined, asPlayer(A, 'alice'));
+  check('headless entity has no member', [fedMembers.status, fedMembers.json.total], [200, 0]);
+  const fedPage = await req('GET', `/api/politics/${fedId}`, undefined, asPlayer(A, 'alice'));
+  check('player page tolerates a null head', [fedPage.status, fedPage.json.headId], [200, null]);
+
+  const got = await req('GET', `/api/internal/politics/${fedId}`, undefined, internal);
+  check(
+    'GET /internal/politics/:id returns the entity view',
+    [got.status, got.json.id, got.json.type, got.json.name, got.json.headId, 'memberCount' in got.json],
+    [200, fedId, 'federation', fedName, null, false],
+  );
+  const missing = await req('GET', `/api/internal/politics/${UNKNOWN_HOLDER}`, undefined, internal);
+  check('GET /internal/politics/:id 404 when missing', [missing.status, missing.json.error], [404, 'NOT_FOUND']);
+  const badId = await req('GET', '/api/internal/politics/not-a-uuid', undefined, internal);
+  check('GET /internal/politics/:id rejects a non-uuid', [badId.status, badId.json.error], [400, 'VALIDATION_ERROR']);
+
+  const byName = await req('GET', `/api/internal/politics?name=${encodeURIComponent(fedName)}`, undefined, internal);
+  check(
+    'lookup by exact name',
+    [byName.status, byName.json.total, byName.json.items[0]?.id, byName.json.limit, byName.json.offset],
+    [200, 1, fedId, 20, 0],
+  );
+  const partial = await req('GET', `/api/internal/politics?name=${encodeURIComponent(fedName.slice(0, -1))}`, undefined, internal);
+  check('lookup by name is exact (no substring match)', [partial.status, partial.json.total], [200, 0]);
+  const byType = await req('GET', `/api/internal/politics?type=federation&limit=100`, undefined, internal);
+  check(
+    'lookup by type filters the level',
+    [byType.status, byType.json.items.every((e) => e.type === 'federation'), byType.json.items.some((e) => e.id === fedId)],
+    [200, true, true],
+  );
+  const badType = await req('GET', '/api/internal/politics?type=empire', undefined, internal);
+  check('lookup rejects an unknown type', [badType.status, badType.json.error], [400, 'VALIDATION_ERROR']);
+
+  const linkCountry = await req('PUT', `/api/internal/politics/${countryId}/parent`, { parentId: fedId }, internal);
+  check('country attached to the federation (system)', [linkCountry.status, linkCountry.json.parentId], [200, fedId]);
+  const linkRegion = await req('PUT', `/api/internal/politics/${regionId}/parent`, { parentId: countryId }, internal);
+  check('region attached to the country (system)', [linkRegion.status, linkRegion.json.parentId], [200, countryId]);
+
+  const wrongLevel = await req('PUT', `/api/internal/politics/${fedId}/parent`, { parentId: regionId }, internal);
+  check('parent of a lower level refused', [wrongLevel.status, wrongLevel.json.error], [400, 'INVALID_PARENT_LEVEL']);
+  const self = await req('PUT', `/api/internal/politics/${fedId}/parent`, { parentId: fedId }, internal);
+  check('self parent refused', [self.status, self.json.error], [400, 'INVALID_PARENT']);
+  const unknownParent = await req('PUT', `/api/internal/politics/${regionId}/parent`, { parentId: UNKNOWN_HOLDER }, internal);
+  check('unknown parent refused', unknownParent.status, 404);
+  const noParentField = await req('PUT', `/api/internal/politics/${regionId}/parent`, {}, internal);
+  check('parentId is required', [noParentField.status, noParentField.json.error], [400, 'VALIDATION_ERROR']);
+
+  const byParent = await req('GET', `/api/internal/politics?parentId=${countryId}`, undefined, internal);
+  check('lookup by parent', [byParent.status, byParent.json.total, byParent.json.items[0]?.id], [200, 1, regionId]);
+
+  const children = await req('GET', `/api/internal/politics/${fedId}/children`, undefined, internal);
+  check(
+    'children of the federation',
+    [children.status, children.json.total, children.json.items.map((e) => e.id)],
+    [200, 1, [countryId]],
+  );
+  const noChildren = await req('GET', `/api/internal/politics/${UNKNOWN_HOLDER}/children`, undefined, internal);
+  check('children of an unknown entity 404', noChildren.status, 404);
+
+  const ancestors = await req('GET', `/api/internal/politics/${regionId}/ancestors`, undefined, internal);
+  check(
+    'ancestors from the direct parent up to the root',
+    [ancestors.status, ancestors.json.map((e) => e.id)],
+    [200, [countryId, fedId]],
+  );
+  const rootAncestors = await req('GET', `/api/internal/politics/${fedId}/ancestors`, undefined, internal);
+  check('root has no ancestor', [rootAncestors.status, rootAncestors.json], [200, []]);
+  const unknownAncestors = await req('GET', `/api/internal/politics/${UNKNOWN_HOLDER}/ancestors`, undefined, internal);
+  check('ancestors of an unknown entity 404', unknownAncestors.status, 404);
+
+  // The player path keeps its permission check: D is a plain citizen of the commune, A its head.
+  const playerDenied = await req('PUT', `/api/politics/${entityId}/parent`, { parentId: regionId }, asPlayer(D, 'dave'));
+  check('player without manage_hierarchy still refused', playerDenied.status, 403);
+  const playerOk = await req('PUT', `/api/politics/${entityId}/parent`, { parentId: regionId }, asPlayer(A, 'alice'));
+  check('head still attaches through the player route', [playerOk.status, playerOk.json.parentId], [200, regionId]);
+  const deep = await req('GET', `/api/internal/politics/${entityId}/ancestors`, undefined, internal);
+  check('commune ancestors span the whole chain', deep.json.map((e) => e.id), [regionId, countryId, fedId]);
+
+  const journal = await req('GET', `/api/politics/${entityId}/activity`, undefined, asPlayer(A, 'alice'));
+  check(
+    'player link journaled with the acting head',
+    [journal.status, journal.json.items[0]?.type, journal.json.items[0]?.actorId],
+    [200, 'parent_set', A],
+  );
+
+  const detach = await req('PUT', `/api/internal/politics/${entityId}/parent`, { parentId: null }, internal);
+  check('system detach', [detach.status, detach.json.parentId], [200, null]);
+  const journalAfter = await req('GET', `/api/politics/${entityId}/activity`, undefined, asPlayer(A, 'alice'));
+  check(
+    'system detach journaled with a null actor',
+    [journalAfter.json.items[0]?.type, journalAfter.json.items[0]?.actorId],
+    ['parent_cleared', null],
+  );
+
+  const patchHeadless = await req('PATCH', `/api/internal/politics/${fedId}`, { description: 'x' }, internal);
+  check('PATCH a headless entity answers NO_HEAD', [patchHeadless.status, patchHeadless.json.error], [409, 'NO_HEAD']);
+  const transferHeadless = await req('POST', `/api/internal/politics/${fedId}/transfer`, { playerId: A }, internal);
+  check('transfer on a headless entity answers NO_HEAD', [transferHeadless.status, transferHeadless.json.error], [409, 'NO_HEAD']);
+  const playerDisband = await req('DELETE', `/api/politics/${fedId}`, undefined, asPlayer(A, 'alice'));
+  check('a player cannot disband a headless entity', playerDisband.status, 403);
+
+  const duplicate = await req('POST', '/api/internal/politics', { type: 'federation', name: fedName }, internal);
+  check('duplicate name still conflicts', duplicate.status, 409);
 }
 
 // ── Validation and auth boundaries ───────────────────────────────────────────

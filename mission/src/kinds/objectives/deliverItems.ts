@@ -4,14 +4,18 @@ import { getStack, transferStack } from '../../services/inventory.client.js';
 import { HttpError } from '../../lib/httpError.js';
 import type { ObjectiveKind } from '../types.js';
 
+/** Inventory holders a delivery may target (`warehouse` id = persistence POI uuid). */
+const DELIVERY_HOLDER_TYPES = ['player', 'npc', 'corporation', 'system', 'warehouse'] as const;
+
 const paramsSchema = z
   .object({
     itemId: z.string().trim().min(1).max(128),
     /** Where the goods are delivered (issuer's warehouse, system, another holder). */
     to: z
       .object({
-        holderType: z.enum(['player', 'npc', 'corporation', 'system']),
-        holderId: z.string().uuid(),
+        holderType: z.enum(DELIVERY_HOLDER_TYPES),
+        // Any hex UUID: warehouse ids are persistence POI UUIDs without RFC version bits.
+        holderId: z.guid(),
       })
       .strict(),
   })
@@ -37,7 +41,7 @@ export const deliverItemsKind: ObjectiveKind = {
         type: 'object',
         required: ['holderType', 'holderId'],
         properties: {
-          holderType: { type: 'string', enum: ['player', 'npc', 'corporation', 'system'] },
+          holderType: { type: 'string', enum: [...DELIVERY_HOLDER_TYPES] },
           holderId: { type: 'string', format: 'uuid' },
         },
         additionalProperties: false,

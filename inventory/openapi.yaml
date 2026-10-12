@@ -13,7 +13,8 @@ info:
 
     * **Players** send a Keycloak JWT (`Authorization: Bearer`). With `AUTH_DEV_BYPASS=true`
       (never in production) the `X-Player-Id` / `X-Player-Name` headers are accepted instead.
-    * **The game server, the market and the mission service** authenticate with a Keycloak
+    * **The game server, the market, the mission service and the universe simulator**
+      authenticate with a Keycloak
       service-account token (`client_credentials`) whose `azp` is an allowed client and whose
       `aud` targets `inventory-api`. Each `/api/internal/*` route requires a capability role
       (e.g. `inventory:hold`). Dev only (`INTERNAL_DEV_BYPASS=true`): the legacy
@@ -953,7 +954,11 @@ components:
     # ── Enums ──
     HolderType:
       type: string
-      enum: [player, npc, corporation, system]
+      description: >
+        `warehouse` is a village/city stock managed by the universe simulator; its id is the
+        UUID of the persistence game object (POI). Warehouses are only reachable through
+        `/api/internal/*`.
+      enum: [player, npc, corporation, system, warehouse]
     GoodKind:
       type: string
       enum: [stack, instance]
@@ -968,7 +973,10 @@ components:
       enum: [active, consumed, released]
     HoldRefType:
       type: string
-      enum: [market_order, mission_escrow, manual]
+      description: >
+        `supply_order` reserves warehouse stock for a universe-simulator supply order.
+        `refId` is required for every type but `manual`.
+      enum: [market_order, mission_escrow, supply_order, manual]
     PoiOwnerType:
       type: string
       enum: [player, npc, corporation, political, system]
@@ -985,7 +993,7 @@ components:
       required: [holderType, holderId]
       properties:
         holderType: { $ref: '#/components/schemas/HolderType' }
-        holderId: { type: string, format: uuid, description: Player/NPC Keycloak subject, or corporation id (both owned by Social) }
+        holderId: { type: string, format: uuid, description: Player/NPC Keycloak subject, corporation id (both owned by Social), or warehouse POI game object UUID }
 
     Stack:
       type: object

@@ -1,0 +1,78 @@
+{
+  "federation": {
+    "code": "ARES",
+    "name": "ARES",
+    "planetInternalName": "tarsis_3",
+    "planetPoiUuid": "4a7e3ece-926a-4dc0-a85c-561cf522263e",
+    "currency": "credits",
+    "managedCategories": ["ore", "food", "water"],
+    "initialTreasury": 5000000,
+    "treasuryFloor": 200000,
+    "mintBatch": 1000000,
+    "mintCeiling": 1000000000,
+    "elasticity": 0.8,
+    "priceMinFactor": 0.25,
+    "priceMaxFactor": 4.0,
+    "spread": 0.1,
+    "freightRatePerTkm": 25.0,
+    "urgencyMax": 1.0,
+    "minerShare": 0.6,
+    "legBaseReward": 200
+  },
+  "resources": [
+    { "code": "water", "name": "Water", "category": "water", "unit": "l", "inventoryGoodType": "water", "massPerUnitKg": 1.0, "basePrice": 2.0 },
+    { "code": "food_ration", "name": "Food ration", "category": "food", "unit": "unit", "inventoryGoodType": "food_ration", "massPerUnitKg": 0.5, "basePrice": 8.0 },
+    { "code": "ore_fer", "name": "Iron ore", "category": "ore", "unit": "kg", "inventoryGoodType": "ore_fer", "massPerUnitKg": 1.0, "basePrice": 5.0 },
+    { "code": "ore_cuivre", "name": "Copper ore", "category": "ore", "unit": "kg", "inventoryGoodType": "ore_cuivre", "massPerUnitKg": 1.0, "basePrice": 9.0 },
+    { "code": "ore_titane", "name": "Titanium ore", "category": "ore", "unit": "kg", "inventoryGoodType": "ore_titane", "massPerUnitKg": 1.0, "basePrice": 25.0 }
+  ],
+  "villages": {
+    "defaults": {
+      "policies": [
+        { "resource": "water", "minThreshold": 400, "targetLevel": 1200, "perThousand": true },
+        { "resource": "food_ration", "minThreshold": 200, "targetLevel": 600, "perThousand": true }
+      ],
+      "flows": [
+        { "resource": "water", "ratePerHour": -40, "perThousand": true, "source": "population", "label": "Inhabitants" },
+        { "resource": "food_ration", "ratePerHour": -20, "perThousand": true, "source": "population", "label": "Inhabitants" }
+      ],
+      "capacities": [
+        { "resource": "water", "capacity": 20000, "initialStock": 800 },
+        { "resource": "food_ration", "capacity": 10000, "initialStock": 400 },
+        { "resource": "ore_fer", "capacity": 50000, "initialStock": 0 },
+        { "resource": "ore_cuivre", "capacity": 50000, "initialStock": 0 },
+        { "resource": "ore_titane", "capacity": 20000, "initialStock": 0 }
+      ]
+    },
+    "byType": {
+      "factory": {
+        "policies": [
+          { "resource": "ore_fer", "minThreshold": 500, "targetLevel": 2000, "perThousand": true },
+          { "resource": "ore_cuivre", "minThreshold": 200, "targetLevel": 800, "perThousand": true }
+        ],
+        "flows": [
+          { "resource": "water", "ratePerHour": 120, "perThousand": true, "source": "industry", "label": "Wells and recyclers" },
+          { "resource": "food_ration", "ratePerHour": 60, "perThousand": true, "source": "industry", "label": "Hydroponic farms" },
+          { "resource": "ore_fer", "ratePerHour": -40, "perThousand": true, "source": "industry", "label": "Foundries" },
+          { "resource": "ore_cuivre", "ratePerHour": -12, "perThousand": true, "source": "industry", "label": "Electronics" }
+        ],
+        "capacities": [
+          { "resource": "water", "capacity": 50000, "initialStock": 4000 },
+          { "resource": "food_ration", "capacity": 30000, "initialStock": 2000 },
+          { "resource": "ore_fer", "capacity": 50000, "initialStock": 1500 },
+          { "resource": "ore_cuivre", "capacity": 50000, "initialStock": 500 }
+        ]
+      },
+      "mining": {
+        "mineralSources": [
+          { "resource": "ore_fer", "remainingUnits": 2000000, "maxUnitsPerMission": 500 },
+          { "resource": "ore_cuivre", "remainingUnits": 500000, "maxUnitsPerMission": 300 },
+          { "resource": "ore_titane", "remainingUnits": 100000, "maxUnitsPerMission": 100 }
+        ]
+      }
+    },
+    "typeByNamePrefix": { "M": "mining", "F": "factory" },
+    "overrides": {}
+  },
+  "routes": { "nearestNeighbours": 3, "maxDistanceM": 60000, "extra": [] }
+}

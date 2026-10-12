@@ -148,6 +148,14 @@ export const objectiveInput = z.object({
   payload: jsonObject.optional(),
 });
 
+/** Treasury funding a service-created mission (only political entities for now). */
+export const missionEscrowSchema = z
+  .object({
+    payerType: z.literal('politics'),
+    payerId: uuidSchema,
+  })
+  .strict();
+
 export const createMissionBody = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(4000).optional(),
@@ -169,6 +177,11 @@ export const createMissionBody = z.object({
   scriptId: z.string().trim().min(1).max(128).nullish(),
   expiresAt: z.coerce.date().nullish(),
   objectives: z.array(objectiveInput).min(1).max(100),
+  /**
+   * Funds the credits reward from a treasury instead of the faucet: debited at creation,
+   * refunded on cancel/expire (requires the `mission:escrow:politics` service role).
+   */
+  escrow: missionEscrowSchema.optional(),
 });
 
 export const createPlayerMissionBody = z

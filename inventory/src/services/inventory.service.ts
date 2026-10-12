@@ -14,6 +14,7 @@ import {
   inventoryStacks,
   type GoodKind,
   type HolderType,
+  type HoldRefType,
   type InstanceStatus,
   type InventoryHold,
   type InventoryInstance,
@@ -335,7 +336,7 @@ export async function createHold(
     goodType: string;
     quantity?: number;
     instanceId?: string;
-    refType: 'market_order' | 'mission_escrow' | 'manual';
+    refType: HoldRefType;
     refId?: string;
     expiresAt?: Date;
     details?: Record<string, unknown>;

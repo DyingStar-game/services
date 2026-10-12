@@ -9,7 +9,7 @@ import { t } from '../i18n/index.js';
 
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { HttpError } from '../lib/httpError.js';
-import { requireService, requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
+import { assertServiceRole, requireService, requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
   acceptMission,
@@ -55,13 +55,18 @@ export const internalRoutes: IRouter = Router();
 
 // ── Mission catalogue ────────────────────────────────────────────────────────
 
-/** POST /missions — Create a mission (system, IA corporation/city or scenario). */
+/**
+ * POST /missions — Create a mission (system, IA corporation/city or scenario). With
+ * `escrow`, the credits reward is debited from that treasury (`mission:escrow:politics`).
+ */
 internalRoutes.post(
   '/missions',
   requireServiceRole(SERVICE_ROLES.missionWrite),
   validate(createMissionBody),
   asyncHandler(async (req, res) => {
-    const created = await createMission(req.body, requireService(req).clientId);
+    const service = requireService(req);
+    if (req.body.escrow) assertServiceRole(service, SERVICE_ROLES.missionEscrowPolitics);
+    const created = await createMission(req.body, service.clientId);
     res.status(201).json(created);
   }),
 );

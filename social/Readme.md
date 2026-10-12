@@ -245,7 +245,12 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | PATCH | `/api/internal/corporations/:corporationId/members/:playerId` `{rankId}` | `social:corporation:write` | Changer le grade d'un membre (agit comme le CEO) |
 | DELETE | `/api/internal/corporations/:corporationId/members/:playerId` | `social:corporation:write` | Retirer un membre (agit comme le CEO) |
 | GET | `/api/internal/corporations/:corporationId/politics` | `social:corporation:read` | Siège fiscal de la corporation (`politicalEntityId`) — pour le miroir vers economie |
-| POST | `/api/internal/politics` `{headId, type, name, description?, bannerUrl?}` | `social:politics:write` | Créer une entité politique avec un chef explicite (joueur ou **PNJ**) |
+| POST | `/api/internal/politics` `{headId?, type, name, description?, bannerUrl?}` | `social:politics:write` | Créer une entité politique avec un chef explicite (joueur ou **PNJ**), ou **sans chef** (`headId` omis/`null` : entité gouvernée par le système, office de tête vacant ; PATCH/DELETE/transfer internes → `409 NO_HEAD`) |
+| GET | `/api/internal/politics?type=&parentId=&name=&limit=&offset=` | `social:politics:read` | Recherche exacte (niveau, parent direct, **nom exact** pour un amorçage idempotent) — `{items, total, limit, offset}` |
+| GET | `/api/internal/politics/:entityId` | `social:politics:read` | Entité (`id, type, name, description, bannerUrl, parentId, headId, createdAt, updatedAt`) ou `404` |
+| GET | `/api/internal/politics/:entityId/children?limit=&offset=` | `social:politics:read` | Entités directement rattachées (paginé, `memberCount`) |
+| GET | `/api/internal/politics/:entityId/ancestors` | `social:politics:read` | Ancêtres du parent direct jusqu'à la racine (liste ordonnée, vide si indépendante) |
+| PUT | `/api/internal/politics/:entityId/parent` `{parentId: uuid\|null}` | `social:politics:write` | Rattacher/détacher sans permission de membre (mêmes règles : niveau strictement supérieur `400 INVALID_PARENT_LEVEL`, cycles `409 POLITICAL_CYCLE`) ; journalisé avec un acteur `null` |
 | PATCH | `/api/internal/politics/:entityId` | `social:politics:write` | Modifier (agit comme le chef courant) |
 | DELETE | `/api/internal/politics/:entityId` | `social:politics:write` | Dissoudre (agit comme le chef courant) |
 | POST | `/api/internal/politics/:entityId/transfer` `{playerId}` | `social:politics:write` | Transférer la tête (agit comme le chef courant) |

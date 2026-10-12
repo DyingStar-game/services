@@ -308,16 +308,17 @@ export async function listPoliticalEntities(
 }
 
 /**
- * Creates a political entity with its default offices and the creator (player or NPC) as head.
- * @param headId - Profile holding the head office.
+ * Creates a political entity with its default offices and, when given, the head (player or NPC).
+ * Without a head (system/NPC-governed entity, internal API only) the head office stays vacant.
+ * @param headId - Profile holding the head office, or null for a headless entity.
  * @param data - Entity fields.
  * @returns Created entity.
  */
 export async function createPoliticalEntity(
-  headId: string,
+  headId: string | null,
   data: { type: PoliticalEntityType; name: string; description?: string | null; bannerUrl?: string | null },
 ): Promise<PoliticalEntity> {
-  await requireProfile(headId);
+  if (headId) await requireProfile(headId);
   try {
     const entity = await db.transaction(async (tx) => {
       const [entity] = await tx
@@ -328,16 +329,78 @@ export async function createPoliticalEntity(
         .insert(politicalOffices)
         .values(defaultOfficesFor(data.type).map((o) => ({ entityId: entity.id, ...o })))
         .returning();
-      const headOffice = offices.find((o) => o.isHead)!;
-      await tx.insert(politicalMembers).values({ entityId: entity.id, playerId: headId, officeId: headOffice.id });
+      if (headId) {
+        const headOffice = offices.find((o) => o.isHead)!;
+        await tx.insert(politicalMembers).values({ entityId: entity.id, playerId: headId, officeId: headOffice.id });
+      }
       await recordPoliticalActivity(entity.id, headId, 'entity_created', undefined, tx);
       return entity;
     });
-    await recordActivity(headId, 'political_entity_created', { entityId: entity.id, name: entity.name, type: entity.type });
+    if (headId) {
+      await recordActivity(headId, 'political_entity_created', { entityId: entity.id, name: entity.name, type: entity.type });
+    }
     return entity;
   } catch (err) {
     rethrowUnique(err, data);
   }
+}
+
+/** Exact-match filters of the internal political entity lookup. */
+export interface PoliticalEntityFilter {
+  type?: PoliticalEntityType;
+  parentId?: string;
+  name?: string;
+}
+
+/**
+ * Political entities matching exact filters (internal lookup, e.g. idempotent bootstrap by name).
+ * @param filter - Optional level, parent and exact name.
+ * @param limit - Page size.
+ * @param offset - Rows to skip.
+ * @returns Page of entities, ordered by name.
+ */
+export async function findPoliticalEntities(
+  filter: PoliticalEntityFilter,
+  limit: number,
+  offset: number,
+): Promise<Page<PoliticalEntity>> {
+  const conditions = [];
+  if (filter.type) conditions.push(eq(politicalEntities.type, filter.type));
+  if (filter.parentId) conditions.push(eq(politicalEntities.parentId, filter.parentId));
+  if (filter.name) conditions.push(eq(politicalEntities.name, filter.name));
+  const condition = conditions.length ? and(...conditions) : undefined;
+  const [totalRow, rows] = await Promise.all([
+    db.select({ total: count() }).from(politicalEntities).where(condition),
+    db
+      .select()
+      .from(politicalEntities)
+      .where(condition)
+      .orderBy(asc(politicalEntities.name), asc(politicalEntities.id))
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return page(rows, totalRow[0].total, limit, offset);
+}
+
+/**
+ * Ancestors of a political entity, from its direct parent up to the root. Stops on a cycle
+ * (which `linkPoliticalParent` refuses, but the walk must never loop).
+ * @param entityId - Entity id.
+ * @returns Ancestors, nearest first (empty when independent).
+ */
+export async function listPoliticalAncestors(entityId: string): Promise<PoliticalEntity[]> {
+  const entity = await requirePoliticalEntity(entityId);
+  const ancestors: PoliticalEntity[] = [];
+  const seen = new Set<string>([entity.id]);
+  let current = entity.parentId;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const [row] = await db.select().from(politicalEntities).where(eq(politicalEntities.id, current)).limit(1);
+    if (!row) break;
+    ancestors.push(row);
+    current = row.parentId;
+  }
+  return ancestors;
 }
 
 /**
@@ -452,6 +515,40 @@ async function wouldCreateCycle(entityId: string, parentId: string): Promise<boo
 }
 
 /**
+ * Validates and applies a parent link: the parent must be of a strictly higher level and cycles
+ * are refused. Shared by the player path and the internal (system) path.
+ * @param child - Child entity.
+ * @param actorId - Acting profile, or null for a system change.
+ * @param parentId - New parent id, or null to detach.
+ * @returns Updated entity.
+ */
+async function linkPoliticalParent(
+  child: PoliticalEntity,
+  actorId: string | null,
+  parentId: string | null,
+): Promise<PoliticalEntity> {
+  if (parentId) {
+    if (parentId === child.id) {
+      throw new HttpError(400, 'INVALID_PARENT', t('parent.self_politics'));
+    }
+    const parent = await requirePoliticalEntity(parentId);
+    if (POLITICAL_ENTITY_ORDER[parent.type] <= POLITICAL_ENTITY_ORDER[child.type]) {
+      throw new HttpError(400, 'INVALID_PARENT_LEVEL', 'The parent must be of a higher political level');
+    }
+    if (await wouldCreateCycle(child.id, parentId)) {
+      throw new HttpError(409, 'POLITICAL_CYCLE', 'This link would create a cycle in the hierarchy');
+    }
+  }
+  const [updated] = await db
+    .update(politicalEntities)
+    .set({ parentId, updatedAt: new Date() })
+    .where(eq(politicalEntities.id, child.id))
+    .returning();
+  await recordPoliticalActivity(child.id, actorId, parentId ? 'parent_set' : 'parent_cleared', { parentId });
+  return updated;
+}
+
+/**
  * Attaches a political entity to a higher-level entity, or detaches it (`parentId = null`).
  * Requires `manage_hierarchy`; the parent must be of a strictly higher level and cycles are refused.
  * @param entityId - Child entity id.
@@ -466,25 +563,23 @@ export async function setPoliticalEntityParent(
 ): Promise<PoliticalEntity> {
   const child = await requirePoliticalEntity(entityId);
   await requirePoliticalPermission(entityId, actorId, 'manage_hierarchy');
-  if (parentId) {
-    if (parentId === entityId) {
-      throw new HttpError(400, 'INVALID_PARENT', t('parent.self_politics'));
-    }
-    const parent = await requirePoliticalEntity(parentId);
-    if (POLITICAL_ENTITY_ORDER[parent.type] <= POLITICAL_ENTITY_ORDER[child.type]) {
-      throw new HttpError(400, 'INVALID_PARENT_LEVEL', 'The parent must be of a higher political level');
-    }
-    if (await wouldCreateCycle(entityId, parentId)) {
-      throw new HttpError(409, 'POLITICAL_CYCLE', 'This link would create a cycle in the hierarchy');
-    }
-  }
-  const [updated] = await db
-    .update(politicalEntities)
-    .set({ parentId, updatedAt: new Date() })
-    .where(eq(politicalEntities.id, entityId))
-    .returning();
-  await recordPoliticalActivity(entityId, actorId, parentId ? 'parent_set' : 'parent_cleared', { parentId });
-  return updated;
+  return linkPoliticalParent(child, actorId, parentId);
+}
+
+/**
+ * Attaches or detaches a political entity on behalf of a trusted service (internal API): same
+ * level and cycle rules as {@link setPoliticalEntityParent}, without any member permission.
+ * Journaled with a null actor.
+ * @param entityId - Child entity id.
+ * @param parentId - New parent id, or null to detach.
+ * @returns Updated entity.
+ */
+export async function setPoliticalEntityParentAsSystem(
+  entityId: string,
+  parentId: string | null,
+): Promise<PoliticalEntity> {
+  const child = await requirePoliticalEntity(entityId);
+  return linkPoliticalParent(child, null, parentId);
 }
 
 /**

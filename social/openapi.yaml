@@ -2762,10 +2762,45 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/internal/politics:
+    get:
+      tags: [internal]
+      operationId: internalFindPoliticalEntities
+      summary: Look up political entities by exact filters (social:politics:read)
+      description: >
+        Every filter is optional and exact: `name` matches the full (unique) name, so a caller
+        can bootstrap a hierarchy idempotently (look up by name, create when absent). Ordered by name.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: type
+          in: query
+          schema: { $ref: '#/components/schemas/PoliticalEntityType' }
+        - name: parentId
+          in: query
+          description: Direct parent entity
+          schema: { type: string, format: uuid }
+        - name: name
+          in: query
+          description: Exact entity name
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Matching entities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntityListPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     post:
       tags: [internal]
       operationId: internalCreatePoliticalEntity
-      summary: Create a political entity with an explicit head (player or NPC)
+      summary: Create a political entity with an explicit head (player or NPC), or without head
+      description: >
+        Default offices are seeded according to the level. With `headId`, that profile holds the
+        head office; without it (omitted or null), the entity is system-governed and the head
+        office stays vacant (internal PATCH/DELETE/transfer then answer `409 NO_HEAD`).
       security: [{ serviceAuth: [] }]
       requestBody:
         required: true
@@ -2786,6 +2821,21 @@ paths:
   /api/internal/politics/{entityId}:
     parameters:
       - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [internal]
+      operationId: internalGetPoliticalEntity
+      summary: Political entity (social:politics:read)
+      security: [{ serviceAuth: [] }]
+      responses:
+        '200':
+          description: Entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [internal]
       operationId: internalUpdatePoliticalEntity
@@ -2814,6 +2864,84 @@ paths:
       security: [{ serviceAuth: [] }]
       responses:
         '204': { description: Entity disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/politics/{entityId}/children:
+    get:
+      tags: [internal]
+      operationId: internalListPoliticalChildren
+      summary: Direct lower-level entities (social:politics:read)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Child summaries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntitySummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/politics/{entityId}/ancestors:
+    get:
+      tags: [internal]
+      operationId: internalListPoliticalAncestors
+      summary: Ancestors up to the root (social:politics:read)
+      description: Ordered from the direct parent up to the root; empty when the entity is independent.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      responses:
+        '200':
+          description: Ancestors, nearest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/politics/{entityId}/parent:
+    put:
+      tags: [internal]
+      operationId: internalSetPoliticalEntityParent
+      summary: Attach to a higher-level entity, or detach (social:politics:write)
+      description: >
+        Same rules as the player route without any member permission: the parent must be of a
+        strictly higher level (`400 INVALID_PARENT_LEVEL`, `400 INVALID_PARENT` for itself) and
+        cycles are refused (`409 POLITICAL_CYCLE`). Journaled with a null actor.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parentId]
+              properties:
+                parentId:
+                  type: [string, 'null']
+                  format: uuid
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3697,9 +3825,11 @@ components:
       allOf:
         - $ref: '#/components/schemas/CreatePoliticalEntity'
         - type: object
-          required: [headId]
           properties:
-            headId: { type: string, format: uuid, description: Profile (player or NPC) to make head }
+            headId:
+              type: [string, 'null']
+              format: uuid
+              description: Profile (player or NPC) to make head; omitted or null for a headless (system-governed) entity
 
     # ── Reputation & moderation ──
     ReputationEvent:
@@ -4339,6 +4469,30 @@ components:
         items:
           items:
             $ref: '#/components/schemas/PoliticalEntitySummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalEntityListPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalEntity'
           type: array
         limit:
           default: 20

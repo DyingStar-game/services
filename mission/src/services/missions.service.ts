@@ -19,16 +19,18 @@ import {
   type MissionObjective,
   type MissionStatus,
   type EscrowPayerType,
+  type EscrowStatus,
   type MissionVisibility,
   type MissionZone,
   type PrerequisiteSpec,
   type RewardComponent,
+  type RewardCredits,
   type ZoneLocation,
 } from '../db/schema/index.js';
 import { getObjectiveKind } from '../kinds/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
-import { creditHolder, debitHolder, type WalletHolderType } from './economy.client.js';
+import { creditHolder, debitHolder } from './economy.client.js';
 import { createHold, releaseHold } from './inventory.client.js';
 import { settledTotal } from './rewards.service.js';
 import { authorizeAction, getGroup, isCorporationMember } from './social.client.js';
@@ -57,9 +59,16 @@ export interface CreateMissionInput {
   maxAssignees?: number;
   /** Limited to a single group: the first group to accept claims it. */
   groupClaimable?: boolean;
+  /** Big event mission (open multijoueur). */
+  isEvent?: boolean;
   scriptId?: string | null;
   expiresAt?: Date | null;
   objectives: SpecObjectiveInput[];
+  /**
+   * Treasury funding the credits reward (trusted service caller, role checked by the
+   * route): debited at creation instead of paying the reward from the faucet.
+   */
+  escrow?: { payerType: 'politics'; payerId: string } | null;
 }
 
 /** Input describing a player-created mission (reward escrowed from the creator). */
@@ -235,12 +244,66 @@ export async function listMissions(filters: MissionFilters, limit: number, offse
   return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
+/** Account funding a mission's credits escrow (refunded there on cancel/expire). */
+interface EscrowPayer {
+  type: EscrowPayerType;
+  id: string;
+}
+
+/** Economy idempotency key of a mission's credits escrow debit. */
+function escrowExternalIdOf(missionId: string): string {
+  return `mission-escrow:${missionId}`;
+}
+
+/**
+ * Credits escrow columns of a mission row being inserted: `pending` until the debit
+ * succeeds, `none` when the mission has no credits component.
+ * @param missionId - Id of the mission being inserted.
+ * @param payer - Funding account.
+ * @param economic - Credits component, if any.
+ */
+function creditsEscrowColumns(missionId: string, payer: EscrowPayer, economic: RewardCredits | undefined) {
+  return {
+    escrowStatus: (economic ? 'pending' : 'none') as EscrowStatus,
+    escrowAmount: economic ? economic.amount : null,
+    escrowCurrency: economic ? economic.currency : null,
+    escrowPayerId: payer.id,
+    escrowPayerType: payer.type,
+    escrowExternalId: economic ? escrowExternalIdOf(missionId) : null,
+  };
+}
+
+/**
+ * Debits a mission's credits escrow from its funding account (player wallet or
+ * organization treasury). The key is deterministic per mission, so a retry never debits
+ * twice.
+ * @throws 409 `INSUFFICIENT_FUNDS` when the account cannot fund the escrow.
+ */
+async function debitCreditsEscrow(missionId: string, payer: EscrowPayer, economic: RewardCredits): Promise<void> {
+  await debitHolder(payer.type, payer.id, {
+    amount: economic.amount,
+    currency: economic.currency,
+    reference: 'mission_escrow',
+    externalId: escrowExternalIdOf(missionId),
+  });
+}
+
+/** Credits component of a validated reward list, if any. */
+function creditsComponent(rewards: RewardComponent[]): RewardCredits | undefined {
+  return rewards.find((component): component is RewardCredits => component.type === 'credits');
+}
+
 /**
  * Creates a mission and its objectives atomically (spec validated by the kind registry).
+ *
+ * With `escrow`, the credits component is debited from the given treasury once the
+ * mission is inserted (same escrow lifecycle as player missions: `held`, refunded on
+ * cancel/expire, `claimed` at settlement); a refused debit deletes the mission again.
  * @param input - Mission and objective definitions.
  * @param createdBy - Keycloak client id of the creator service (or player id).
  * @returns The created mission and objectives.
- * @throws 409 when a `scriptId` is already used.
+ * @throws 409 when a `scriptId` is already used, 409 `INSUFFICIENT_FUNDS` when the
+ *   treasury cannot fund the escrow (nothing is persisted).
  */
 export async function createMission(
   input: CreateMissionInput,
@@ -254,9 +317,14 @@ export async function createMission(
       rewards: input.rewards,
       maxAssignees: input.maxAssignees ?? 1,
     },
-    { escrowed: false },
+    { escrowed: false, treasuryEscrow: Boolean(input.escrow) },
   );
   await assertPoiZonesExist(input.zones);
+
+  const missionId = randomUUID();
+  const payer: EscrowPayer | null = input.escrow ? { type: input.escrow.payerType, id: input.escrow.payerId } : null;
+  // `treasuryEscrow` guarantees a credits component whenever a payer is set.
+  const economic = payer ? creditsComponent(spec.rewards) : undefined;
 
   const expiresAt =
     input.expiresAt ??
@@ -264,11 +332,13 @@ export async function createMission(
       ? new Date(Date.now() + env.mission.defaultTtlHours * 3600 * 1000)
       : null);
 
+  let created: MissionWithObjectives;
   try {
-    return await db.transaction(async (tx) => {
+    created = await db.transaction(async (tx) => {
       const [mission] = await tx
         .insert(missions)
         .values({
+          id: missionId,
           title: input.title,
           description: input.description,
           kind: input.kind ?? 'dynamic',
@@ -280,8 +350,10 @@ export async function createMission(
           zones: input.zones ?? [],
           maxAssignees: input.maxAssignees ?? 1,
           groupClaimable: input.groupClaimable ?? false,
+          isEvent: input.isEvent ?? false,
           scriptId: input.scriptId ?? null,
           expiresAt,
+          ...(payer ? creditsEscrowColumns(missionId, payer, economic) : {}),
           createdBy,
         })
         .returning();
@@ -299,6 +371,22 @@ export async function createMission(
     }
     throw err;
   }
+  if (!payer || !economic) return created;
+
+  // Inserted first so a duplicate `scriptId` is refused before any money moves.
+  try {
+    await debitCreditsEscrow(missionId, payer, economic);
+  } catch (err) {
+    // Refused (or failed) debit: the mission must not exist (objectives cascade).
+    await db.delete(missions).where(eq(missions.id, missionId));
+    throw err;
+  }
+  const [mission] = await db
+    .update(missions)
+    .set({ escrowStatus: 'held', updatedAt: new Date() })
+    .where(eq(missions.id, missionId))
+    .returning();
+  return { mission, objectives: created.objectives };
 }
 
 /**
@@ -393,15 +481,15 @@ export async function createPlayerMission(
     }
     await assertTreasuryAccess(issuerType, issuerId, playerId);
   }
-  const escrowPayerType: EscrowPayerType =
-    escrowSource === 'issuer' ? (issuerType === 'politics' ? 'politics' : 'corporation') : 'player';
-  // `issuerId` is non-null here: the `issuer` branch above throws otherwise.
-  const escrowPayerId: string = escrowSource === 'issuer' ? issuerId! : playerId;
+  const payer: EscrowPayer = {
+    type: escrowSource === 'issuer' ? (issuerType === 'politics' ? 'politics' : 'corporation') : 'player',
+    // `issuerId` is non-null here: the `issuer` branch above throws otherwise.
+    id: escrowSource === 'issuer' ? issuerId! : playerId,
+  };
 
-  const economic = spec.rewards.find((component) => component.type === 'credits');
+  const economic = creditsComponent(spec.rewards);
   const items = spec.rewards.filter((component): component is Extract<RewardComponent, { type: 'item' }> => component.type === 'item');
   const missionId = randomUUID();
-  const escrowExternalId = `mission-escrow:${missionId}`;
 
   const created = await db.transaction(async (tx) => {
     const [mission] = await tx
@@ -421,12 +509,7 @@ export async function createPlayerMission(
         maxAssignees: input.maxAssignees ?? 1,
         groupClaimable: input.groupClaimable ?? false,
         expiresAt: input.expiresAt ?? null,
-        escrowStatus: economic ? 'pending' : 'none',
-        escrowAmount: economic ? economic.amount : null,
-        escrowCurrency: economic ? economic.currency : null,
-        escrowPayerId,
-        escrowPayerType,
-        escrowExternalId: economic ? escrowExternalId : null,
+        ...creditsEscrowColumns(missionId, payer, economic),
         escrowItemStatus: items.length > 0 ? 'held' : 'none',
         createdBy: playerId,
       })
@@ -476,12 +559,7 @@ export async function createPlayerMission(
   // or the issuing organization's treasury).
   if (economic) {
     try {
-      await debitHolder(escrowPayerType, escrowPayerId, {
-        amount: economic.amount,
-        currency: economic.currency,
-        reference: 'mission_escrow',
-        externalId: escrowExternalId,
-      });
+      await debitCreditsEscrow(missionId, payer, economic);
     } catch (err) {
       await Promise.all(holdIds.map((holdId) => releaseHold(holdId).catch(() => undefined)));
       await db
@@ -508,7 +586,7 @@ export async function createPlayerMission(
 }
 
 /**
- * Refunds the unspent escrow of a cancelled/expired player mission to its creator, and
+ * Refunds the unspent escrow of a cancelled/expired mission to its funding account, and
  * releases any held item escrow. Idempotent through the `mission-refund:<missionId>` Economy
  * key and the hold status.
  * @param mission - Mission whose escrow may be refunded.
