@@ -1,4 +1,4 @@
-# Local stack: API in watch mode + PostgreSQL. Run from the service root:
+# Local stack: API in watch mode + PostgreSQL + Valkey + Mosquitto. Run from the service root:
 #   docker compose -f docker/docker-compose.yml --env-file .env up
 name: social
 
@@ -24,10 +24,20 @@ services:
       - ../.env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-social}
+      # Overrides a host-oriented VALKEY_URL from .env: inside the stack the cache lives in this compose file
+      - VALKEY_URL=redis://valkey:6379
+      # Dev broker lives in this compose file (anonymous, see docker/mosquitto-dev.conf):
+      # the secret is cleared so the publisher skips the Keycloak token flow
+      - MOSQUITTO_URL=mqtt://mosquitto:1883
+      - MQTT_CLIENT_SECRET=
       - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       postgres:
         condition: service_healthy
+      valkey:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
     networks:
       - backend
 
@@ -48,6 +58,35 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # Cache only: no persistence (no RDB, no AOF, no volume) — losing it costs one
+  # playtime flush interval and a presence re-warm from the next heartbeat.
+  valkey:
+    image: valkey/valkey:8
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${VALKEY_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # Dev-only broker (anonymous): exercises the notification publisher end to end —
+  # no go-auth plugin here, the real stack authenticates through chatauth.
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "${MOSQUITTO_PORT:-1883}:1883"
+    volumes:
+      - ./mosquitto-dev.conf:/mosquitto/config/mosquitto.conf:ro
     networks:
       - backend
     restart: unless-stopped

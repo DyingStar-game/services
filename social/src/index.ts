@@ -5,6 +5,7 @@ import cors from 'cors';
 import express from 'express';
 import morgan from 'morgan';
 
+import { closeCache, connectCache, initCache } from './cache/valkey.js';
 import { env } from './config/env.js';
 import { testConnection } from './db/connection.js';
 import { runMigrations } from './db/migrate.js';
@@ -14,6 +15,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { languageMiddleware } from './middleware/language.js';
 import { apiRouter } from './routes/index.js';
 import { internalRoutes } from './routes/internal.routes.js';
+import { flushPlaytimeDeltas, startPlaytimeFlushScheduler } from './services/playtime.service.js';
 import { startRehabilitationScheduler } from './services/reputation.service.js';
 
 const app = express();
@@ -22,6 +24,9 @@ const app = express();
 app.use(languageMiddleware);
 app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
+// The presence batch heartbeat carries up to 5000 players — beyond the global 1 mb body
+// limit — so it gets its own parser first (body-parser skips already-parsed bodies).
+app.use('/api/internal/players/presence/batch', express.json({ limit: '5mb' }));
 app.use(express.json({ limit: '1mb' }));
 
 /** Root discovery endpoint. */
@@ -55,6 +60,14 @@ async function start(): Promise<void> {
   }
   await runMigrations();
 
+  if (!initCache()) {
+    console.log('VALKEY_URL is empty — cache disabled (database only)');
+  } else if (await connectCache()) {
+    console.log(`Valkey cache connected (presence TTL ${env.valkey.presenceTtlSeconds}s)`);
+  } else {
+    console.warn('Valkey cache unreachable — continuing with the database only');
+  }
+
   if (env.authDevBypass) {
     console.warn('AUTH_DEV_BYPASS is enabled: X-Player-Id headers are trusted without a JWT');
   }
@@ -70,14 +83,33 @@ async function start(): Promise<void> {
   if (startRehabilitationScheduler()) {
     console.log(`Reputation rehabilitation pass every ${env.reputation.rehabIntervalMinutes} min`);
   }
+  if (startPlaytimeFlushScheduler()) {
+    console.log(`Playtime flush every ${env.valkey.playtimeFlushIntervalMinutes} min`);
+  }
 
   app.listen(env.port, () => {
     console.log(`DyingStar Social API listening on http://localhost:${env.port}`);
   });
 }
 
-process.on('SIGINT', () => process.exit(0));
-process.on('SIGTERM', () => process.exit(0));
+let shuttingDown = false;
+
+/** Flushes cached playtime, closes the cache, then exits (5 s safety net). */
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  setTimeout(() => process.exit(1), 5_000).unref();
+  try {
+    await flushPlaytimeDeltas();
+  } catch (err) {
+    console.error('Playtime flush on shutdown failed:', err);
+  }
+  await closeCache();
+  process.exit(0);
+}
+
+process.on('SIGINT', () => void shutdown());
+process.on('SIGTERM', () => void shutdown());
 
 start().catch((err) => {
   console.error(err);

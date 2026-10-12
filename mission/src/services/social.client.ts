@@ -256,3 +256,30 @@ export interface PlayerPresence {
 export async function getPlayerPresence(playerId: string): Promise<PlayerPresence> {
   return fetchInternal<PlayerPresence>(`/api/internal/players/${playerId}/presence`);
 }
+
+// ── Player notifications ─────────────────────────────────────────────────────
+
+/** A best-effort push relayed by Social to the player's MQTT channel. */
+export interface PlayerNotification {
+  type: string;
+  title?: string;
+  body?: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Asks Social to notify a player (only while they are online; the message is
+ * ephemeral — no offline storage, so `{ delivered: false }` is not an error).
+ * @param playerId - Target player.
+ * @param notification - Content (`type` drives client-side rendering).
+ * @returns Whether the broker accepted the message.
+ */
+export async function notifyPlayer(
+  playerId: string,
+  notification: PlayerNotification,
+): Promise<{ delivered: boolean; reason?: string }> {
+  return postInternal<{ delivered: boolean; reason?: string }>(
+    `/api/internal/players/${playerId}/notifications`,
+    notification,
+  );
+}

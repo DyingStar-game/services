@@ -8,6 +8,7 @@ import { validate } from '../middleware/validate.js';
 import { getCorporationRefMap } from '../services/corporations.service.js';
 import { getPoliticalRefMap } from '../services/politics.service.js';
 import { getPresence } from '../services/presence.service.js';
+import { withLivePlaytime } from '../services/playtime.service.js';
 import { requireProfile, searchProfiles } from '../services/profiles.service.js';
 import { playerIdParams, profileSearchQuery } from './schemas.js';
 
@@ -35,7 +36,7 @@ profilesRoutes.get(
   '/:playerId',
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
-    const profile = await requireProfile(req.params.playerId);
+    const profile = await withLivePlaytime(await requireProfile(req.params.playerId));
     const [presence, corporationRefs, politicsRefs] = await Promise.all([
       getPresence(profile.playerId),
       getCorporationRefMap([profile.playerId]),
