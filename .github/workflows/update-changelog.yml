@@ -1,48 +1,66 @@
 name: Update Changelog
 
+# Variant for DyingStar-game/services: the component comes from the PR's
+# service:* label. Copy to .github/workflows/update-changelog.yml; add a line
+# to SERVICE_MAP (and the component to components.json) for a new service.
+
 on:
   pull_request:
-    types: [closed]
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled, closed]
 
 jobs:
-  extract:
-    if: github.event.pull_request.merged == true
+  component:
     runs-on: ubuntu-latest
     outputs:
-      component: ${{ steps.parse.outputs.component }}
-      entry_en: ${{ steps.parse.outputs.entry_en }}
-      entry_fr: ${{ steps.parse.outputs.entry_fr }}
+      component: ${{ steps.label.outputs.component }}
     steps:
-      - name: Parse changelog sections and service label from PR
-        id: parse
+      - name: Component from the service:* label
+        id: label
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels) }}
         run: |
           python3 - <<'PYEOF'
-          import json, os, re, sys
+          import json, os
 
-          body = os.environ.get('PR_BODY', '')
-          labels_raw = os.environ.get('PR_LABELS', '[]')
-
-          # Determine component from service:* label
-          service_map = {
+          SERVICE_MAP = {
               'service:monitoring':       'services/monitoring',
               'service:persistence':      'services/persistence',
               'service:resourcesDynamic': 'services/resourcesDynamic',
           }
-          labels = [lbl['name'] for lbl in json.loads(labels_raw)]
-          component = ''
-          for lbl in labels:
-              if lbl in service_map:
-                  component = service_map[lbl]
-                  break
-
+          labels = [lbl['name'] for lbl in json.loads(os.environ.get('PR_LABELS', '[]'))]
+          component = next((SERVICE_MAP[l] for l in labels if l in SERVICE_MAP), '')
           if not component:
-              print('No service:* label found — skipping changelog update.', file=sys.stderr)
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
-                  fh.write('component=\nentry_en=\nentry_fr=\n')
-              sys.exit(0)
+              print('No service:* label: no changelog for this PR.')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f'component={component}\n')
+          PYEOF
+
+  check:
+    needs: [component]
+    if: github.event.action != 'closed' && needs.component.outputs.component != ''
+    uses: DyingStar-game/changelog/.github/workflows/check-entry.yml@main
+    with:
+      component: ${{ needs.component.outputs.component }}
+
+  extract:
+    needs: [component]
+    if: |
+      github.event.action == 'closed' && github.event.pull_request.merged == true &&
+      needs.component.outputs.component != ''
+    runs-on: ubuntu-latest
+    outputs:
+      entry_en: ${{ steps.parse.outputs.entry_en }}
+      entry_fr: ${{ steps.parse.outputs.entry_fr }}
+    steps:
+      - name: Parse changelog sections from PR body
+        id: parse
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re
+
+          body = os.environ.get('PR_BODY', '')
 
           def extract(tag, text):
               m = re.search(
@@ -57,20 +75,16 @@ jobs:
 
           delimiter = 'GHADELIMITER'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
-              fh.write(f'component={component}\n')
               fh.write(f'entry_en<<{delimiter}\n{entry_en}\n{delimiter}\n')
               fh.write(f'entry_fr<<{delimiter}\n{entry_fr}\n{delimiter}\n')
           PYEOF
 
   changelog:
-    needs: [extract]
-    if: |
-      needs.extract.result == 'success' &&
-      needs.extract.outputs.component != '' &&
-      needs.extract.outputs.entry_en != ''
+    needs: [component, extract]
+    if: needs.extract.result == 'success' && needs.extract.outputs.entry_en != ''
     uses: DyingStar-game/.github/.github/workflows/update-changelog.yml@main
     with:
-      component: ${{ needs.extract.outputs.component }}
+      component: ${{ needs.component.outputs.component }}
       entry_en: ${{ needs.extract.outputs.entry_en }}
       entry_fr: ${{ needs.extract.outputs.entry_fr }}
       pr_number: ${{ github.event.pull_request.number }}
