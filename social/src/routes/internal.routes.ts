@@ -44,6 +44,7 @@ import {
   updatePoliticalEntity,
 } from '../services/politics.service.js';
 import { getPresence, setPresence, setPresenceBatch } from '../services/presence.service.js';
+import { addStanding, getStanding } from '../services/standing.service.js';
 import { notifyPlayer } from '../services/notifications.service.js';
 import {
   applyStats,
@@ -87,6 +88,7 @@ import {
   presenceBatchBody,
   presenceBody,
   statsBody,
+  standingBody,
   targetPlayerBody,
   upsertPlayerBody,
 } from './schemas.js';
@@ -113,6 +115,28 @@ internalRoutes.get(
   asyncHandler(async (req, res) => {
     const profile = await getProfile(req.params.playerId);
     res.json(profile ? await withLivePlaytime(profile) : null);
+  }),
+);
+
+/** GET /players/:playerId/standing — Character standing per domain (empty map when none). */
+internalRoutes.get(
+  '/players/:playerId/standing',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json({ playerId: req.params.playerId, standing: await getStanding(req.params.playerId) });
+  }),
+);
+
+/** PATCH /players/:playerId/standing — Apply a signed standing delta on one domain. */
+internalRoutes.patch(
+  '/players/:playerId/standing',
+  requireServiceRole(SERVICE_ROLES.standingWrite),
+  validate(playerIdParams, 'params'),
+  validate(standingBody),
+  asyncHandler(async (req, res) => {
+    const standing = await addStanding(req.params.playerId, req.body.domain, req.body.amount);
+    res.json({ playerId: req.params.playerId, domain: req.body.domain, standing });
   }),
 );
 

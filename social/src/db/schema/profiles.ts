@@ -3,6 +3,7 @@
  * `playerId` is the Keycloak subject (UUID) of the player.
  */
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 /** Optional role-play sheet attached to a profile. */
 export interface RpSheet {
@@ -10,6 +11,13 @@ export interface RpSheet {
   story?: string;
   alignment?: string;
 }
+
+/**
+ * Character standing per domain (mission categories, held by mission/social consumers):
+ * a map of domain → integer score. Distinct from `reputation`, which stays the
+ * moderation/social score of the player.
+ */
+export type StandingMap = Record<string, number>;
 
 /** Profile kinds: real players (authenticated via Keycloak) and server-managed NPCs. */
 export const ENTITY_TYPES = ['player', 'npc'] as const;
@@ -24,6 +32,12 @@ export const playerProfiles = pgTable('player_profiles', {
   biography: text('biography'),
   role: text('role'),
   reputation: integer('reputation').notNull().default(0),
+  /**
+   * Character standing per domain (mission categories). Social only stores it: the game
+   * writes deltas through the internal API, mission reads it for prerequisites and
+   * settlement. Empty object by default.
+   */
+  standing: jsonb('standing').$type<StandingMap>().notNull().default(sql`'{}'::jsonb`),
   playtimeSeconds: bigint('playtime_seconds', { mode: 'number' }).notNull().default(0),
   rpSheet: jsonb('rp_sheet').$type<RpSheet>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

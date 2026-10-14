@@ -60,46 +60,48 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `INVENTORY_INTERNAL_API_KEY` | Repli dev : `X-Internal-Key` envoyé à inventory |
 | `INVENTORY_SYSTEM_HOLDER_ID` | Détenteur `system` servant de source aux récompenses item non séquestrées |
 | `MISSION_REWARD_AUTO_SETTLE` | Payer automatiquement les récompenses à la complétion (défaut `true`) |
-| `MISSION_DEFAULT_TTL_HOURS` | Durée de vie par défaut d'une mission en heures (0 = jamais) |
+| `MISSION_DEFAULT_TTL_HOURS` | Durée de vie par défaut d'une mission **interne** en heures (0 = jamais) |
+| `MISSION_PLAYER_DEFAULT_TTL_HOURS` | Durée de vie par défaut d'une mission **joueur** en heures (défaut `72`) — bornée par `expiresAt`/`expiresInHours` |
+| `MISSION_MAX_ACTIVE_ASSIGNMENTS` | Assignations actives simultanées max par joueur (défaut `5`, 0 = illimité ; PNJ exclus) |
+| `MISSION_EXPIRE_INTERVAL_SECONDS` | Intervalle du balayage d'expiration **intégré** en secondes — **`0` par défaut (désactivé)** : en Kubernetes l'expiration est une **commande** (CronJob appelant `POST /api/internal/missions/expire`), le service ne tourne aucun timer ; renseigner une valeur positive réactive le balayage in-process (dev monoposte) |
 
 ## Fonctionnement
 
 **Pipeline** : toute mission traverse les mêmes 4 étapes — **SPEC** (validation par le **registre de kinds**) → **ACCEPT** (prérequis + visibilité + groupe) → **PROGRESS** (dispatch par kind d'évaluation) → **REWARD** (récompenses en composants). Ajouter une capacité = ajouter un fichier dans `src/kinds/` (1 entrée de registre, 0 migration, aucune règle en dur dans le pipeline). Catalogue servi par **`GET /api/missions/kinds`** (catégories, kinds + leur **`name`** bilingue localisé, leur `summary` et le JSON Schema de leurs params, forme des récompenses) ; dry-run par **`POST /api/missions/validate`**.
 
-**Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery, transport, generic, mining, farming, crafting, construction, trading, exploration, salvage, combat, reception` — enum élargie en une ligne de code), un émetteur (`issuerType` + `issuerId`), une `visibility` (`public` | `corporation`), un statut, une liste **`rewards[]`**, une liste **`prerequisites[]`** et des **objectifs**. Trois colonnes pilotent le partage : `groupId`, `groupClaimable` (limitée à **1 groupe**), `isEvent`. **La spec est immuable après création** (objectifs, prérequis, récompenses, capacité figés — seul `title`, `description`, `expiresAt`, `isEvent` reste patchable) : le séquestre est pris dessus à la création.
+**Une mission** possède un `kind` (`dynamic`, `scenario`, `player`), une `category` (`delivery, transport, mining, exploration, divers` — enum élargie en une ligne de code), un émetteur (`issuerType` + `issuerId`), une `visibility` (`public` | `corporation`), un statut, une liste **`rewards[]`**, une liste **`prerequisites[]`** et des **objectifs**. Trois colonnes pilotent le partage : `groupId`, `groupClaimable` (limitée à **1 groupe**), `isEvent`. **La spec est immuable après création** (objectifs, prérequis, récompenses, capacité figés — seul `title`, `description`, `expiresAt`, `isEvent` reste patchable) : le séquestre est pris dessus à la création.
 
-**Catégories contraignantes** : chaque kind (objectif **et** prérequis) déclare ses catégories autorisées (`categories` dans `src/kinds/`), exposées par `GET /api/missions/kinds` — un builder filtre ainsi les kinds selon la catégorie choisie. La validation à la création rejette une incohérence (`400 OBJECTIVE_NOT_IN_CATEGORY` / `PREREQ_NOT_IN_CATEGORY`). Échappatoires : les kinds `'all'` (`manual`, `min_reputation`, `corporation_member`) et la catégorie **`generic`** (bypass total). Matrice (hors `'all'`) :
+**Catégories contraignantes** : chaque kind (objectif **et** prérequis) déclare ses catégories autorisées (`categories` dans `src/kinds/`), exposées par `GET /api/missions/kinds` — un builder filtre ainsi les kinds selon la catégorie choisie. La validation à la création rejette une incohérence (`400 OBJECTIVE_NOT_IN_CATEGORY` / `PREREQ_NOT_IN_CATEGORY`). Échappatoires : les kinds `'all'` (`manual`, `min_reputation`, `min_standing`) et la catégorie **`divers`** (bypass total). Matrice (hors `'all'`) :
 
 | kind | catégories |
 |---|---|
-| `deliver_material` | delivery, transport, mining, farming, crafting, trading, salvage, reception |
-| `deliver_items` | delivery, trading, reception, mining, farming, salvage |
-| `transport` | transport, delivery, trading, reception |
-| `visit` | exploration, combat, construction, salvage, delivery, reception |
-| `owns_items` (objectif) | mining, farming, crafting, construction, trading, salvage |
-| `has_credits` (objectif) | trading, reception, delivery |
-| `owns_items` (prérequis) | mining, farming, crafting, construction, trading, salvage, delivery |
-| `has_credits` (prérequis) | trading, delivery, construction, reception, mining, farming, crafting |
+| `deliver_material` | delivery, transport, mining |
+| `transport` | transport, delivery, mining |
+| `transport_passenger` | transport |
+| `visit` | exploration, delivery, transport, mining |
+| `owns_items` (objectif) | mining, delivery, transport |
+| `owns_items` (prérequis) | mining, delivery, transport |
 
-**Kinds d'objectifs** (registre `src/kinds/objectives/`) — 3 modes d'évaluation :
-- **`game`** — le serveur de jeu soumet la quantité (`reportProgress`) : `deliver_material`, `transport`, `visit` ;
-- **`service`** — le service mesure contre l'état des services via **`POST /:missionId/verify`** : `owns_items` (instantané inventaire, peut régresser), `has_credits` (instantané solde), `deliver_items` (transfère les biens disponibles vers `to` **au moment du verify** — livraison terminale, irréversible ; `to.holderType` : `player|npc|corporation|system|warehouse`, l'id d'un `warehouse` étant l'uuid du POI persistence) ;
+**Kinds d'objectifs** (registre `src/kinds/objectives/`) — 2 modes d'évaluation :
+- **`service`** — le service mesure contre l'état du joueur (présence + biens portés) via **`POST /:missionId/verify`** : `visit` (présence dans le POI, latché), `deliver_material` (biens `carried` dans la zone de livraison, high-water mark), `transport` (latch `pickedUpAt` + livraison, high-water mark), `transport_passenger` (passager dans le POI, high-water mark), `owns_items` (instantané inventaire, peut régresser) ;
 - **`issuer`** — le créateur confirme : `manual` (`POST /:missionId/objectives/:objectiveId/confirm`, réservé au créateur ; le jeu confirme via l'API interne).
+
+**Sémantique high-water mark** : `visit`, `deliver_material`, `transport` et `transport_passenger` ne régressent jamais — `progress = max(stored, measured)`. Une livraison partielle reste créditée (`allowPartial: true` paie le ratio en crédits) et l'auto-complétion se déclenche à 100 %.
 
 Un push `reportProgress` sur un kind non-`game` → `409 OBJECTIVE_NOT_PUSHABLE`. Pour une mission `scenario`, un objectif reste verrouillé (`409 OBJECTIVE_LOCKED`) tant que les précédents ne sont pas faits.
 
-**Prérequis** (registre `src/kinds/prerequisites/`) : évalués à l'acceptation (joueurs uniquement, PNJ exclus) dans l'ordre, échec au premier → **`403 PREREQ_FAILED`** avec kind + détail. Kinds v1 : `has_credits` `{currency, amount}`, `owns_items` `{itemId, quantity, scope}`, `min_reputation` `{min}`, `corporation_member` `{corporationId}`.
+**Prérequis** (registre `src/kinds/prerequisites/`) : évalués à l'acceptation (joueurs uniquement, PNJ exclus) dans l'ordre, échec au premier → **`403 PREREQ_FAILED`** avec kind + détail. Kinds v1 : `min_standing` `{domain, min}` (domain = catégorie ou `general` — RMS dérivé), `min_reputation` `{min}`, `owns_items` `{itemId, quantity, scope}`.
 
 **Disponibilité** : la liste joueur ne retourne que les missions **avec au moins une place libre** — une mission prise et pleine **disparaît de la liste des missions dispo**. Statuts par défaut `available` + `active` ; les missions partagées à un groupe ne sont listées que pour ses membres.
 
-**Zones** (`zones[]`, vide = **globale**) : la dispo peut être restreinte à la **position du joueur** — scopes mappés sur la présence social (`PUT/GET /api/internal/players/:id/presence`) :
-- `{kind:'system', system}` — même système ;
+**Zones** (`zones[]`, vide = **globale**) : la dispo peut être restreinte à la **position du joueur** — scopes mappés sur le store d'état joueur (`PUT /api/internal/missions/player-states`, TTL 30 s) :
+- `{kind:'system', system}` — même système (`""` = hors système) ;
 - `{kind:'poi', poiId, radiusM?}` — **point ou zone du registre POI** d'`inventory` (résolution batch `POST /api/internal/pois/resolve`, cache 60 s) :
   - POI sans rayon mais avec une `scene` → **sous-arbre de scène** (égalité ou préfixe de segment : `tarsis_1` accepte `tarsis_1/new-paris`, jamais `tarsis_10`) → couvre planète, ville, district, donjon… **Convention jeu : encoder la hiérarchie dans `location.scene`** ;
-  - `radiusM` déclaré sur la **zone** (prioritaire) ou sur le **POI** → **aire** : distance euclidienne au centre (unités jeu = mètres supposés) ;
+  - `radiusM` déclaré sur la **zone** (prioritaire, **borné par le rayon de la POI**) ou sur le **POI** → **aire** : distance euclidienne au centre (unités jeu = mètres supposés) ;
   - sinon → **point** : position exacte du POI.
 
-  Un `system` porté par le POI doit être égal à `location.system`. Un POI inconnu/supprimé → la zone **ne matche jamais** (échec ferme) ; le registre refuse la création d'une zone sur un POI inexistant (`400 POI_NOT_FOUND`). L'ancien couple `scene`/`area` en dur a été retiré (migration `0002` purge les kinds legacy).
+  Un `system` porté par le POI doit être égal à `location.system`. Un POI inconnu/supprimé → la zone **ne matche jamais** (échec ferme) ; le registre refuse la création d'une zone sur un POI inexistant (`400 POI_NOT_FOUND`) ou avec un rayon supérieur à celui de la POI (`400 POI_RADIUS_EXCEEDED`).
 
 Filtrée au **listing** (SQL, géométries POI injectées en jsonb ; joueur sans position = ne voit que les globales ; panne Social **ou** inventory = idem, fail-safe) **et à l'acceptation** (`403 OUT_OF_ZONE`, échec ferme). Zéro coût Social/inventory pour les missions globales. `zones` est **modifiable via l'API interne uniquement** (le jeu re-zone un event en direct ; sans impact séquestre).
 
@@ -167,6 +169,30 @@ Erreurs typées : `403 NOT_CORPORATION_MEMBER` (visibilité corporation hors cor
 
 **Règlement** : à la complétion, **revérification** des objectifs `service` (sauf `force`) puis paiement composant par composant : crédits idempotents via `externalId = mission:<missionId>:<playerId>` ; items = **claim atomique** dans `settledComponents` (`item:<itemId>`) *avant* le transfert (hold séquestré consommé, sinon faucet `system`) — un échec partiel se rejoue sans jamais double-payer. Rejouer via `POST /api/internal/missions/:missionId/settle`.
 
+## Gameplay (cycles de vie avancés)
+
+**Complétion automatique** (`autoComplete`, défaut `true`) : dès que **tous les objectifs requis** sont faits (push `reportProgress` ou `verify`), la mission se complète et se règle **d'elle-même** — la réponse porte `completed: true` et l'assignation passe `completed`. Avec `autoComplete: false`, le jeu ou le joueur appelle `POST /:missionId/complete`.
+
+**Objectifs bonus** (`isBonus: true`) : hors du gate de complétion, de l'ordre scénarisé **et** du ratio partiel. Un objectif bonus peut porter un **`bonusReward`** (1 composant) accordé **en plus** de la récompense de base, **uniquement sur une complétion totale** (jamais sur un partiel) ; les crédits bonus s'additionnent au composant crédits unique, les items bonus sont ajoutés à la liste. Une mission doit garder **au moins un objectif non-bonus** (`400 MISSING_REQUIRED_OBJECTIVE`) ; un `bonusReward` sur un objectif non-bonus est refusé (`400 BONUS_REWARD_WITHOUT_BONUS`).
+
+**Remise partielle** (`allowPartial`) : `POST /:missionId/complete {partial: true}` (joueur) ou `partial: true` (interne) rend la mission **proportionnellement** à l'avancement pondéré des objectifs requis (`weight`, en points de base : `ratioBp = Σ weight×progress/target / Σ weight × 10000`) :
+- l'assignation passe en statut terminal **`partially_completed`** (jamais ré-acceptable : le `rewardExternalId` est déjà consommé) avec `completionRatio` figé ;
+- seuls les **crédits** sont payés, **au prorata** (`floor(part × ratioBp / 10000)`) ; **aucun item** n'est versé ;
+- la mission est **close** (statut `completed`) et le **solde non utilisé du séquestre est remboursé** au payeur (`mission-refund:<id>`) ;
+- refus : mission sans `allowPartial` (`409 PARTIAL_NOT_ALLOWED`), aucun progrès (`409 PARTIAL_NO_PROGRESS`), un autre assigné encore actif (`409 PARTIAL_MULTIPLAYER` — le partiel est un cas solo : le part du joueur est calculée sur la totalité de la mission).
+
+**Expiration & deadlines** : `expiresAt` (absolu) ou `expiresInHours` (relatif) bornent la mission ; sans les deux, le TTL par défaut s'applique (`MISSION_DEFAULT_TTL_HOURS` interne, `MISSION_PLAYER_DEFAULT_TTL_HOURS` joueur). `assignmentDeadlineHours` pose une **deadline par assignation** (`deadlineAt`, calculée à l'acceptation). L'expiration est pilotée **de l'extérieur** : une commande (CronJob Kubernetes) appelle `POST /api/internal/missions/expire`, qui ferme les missions (`expired` + remboursement) et les assignations dépassées (`expired`), en **notifiant** les joueurs une fois (`deadlineNotifiedAt`) — opération **idempotente**, rejouable à la main. Un balayage in-process optionnel (`scheduler.ts`) existe pour le dev monoposte, **désactivé par défaut** (`MISSION_EXPIRE_INTERVAL_SECONDS=0`). Agir sur une assignation dépassée → `409 DEADLINE_PASSED`. Anti-accumulation : un joueur ne dépasse pas `MISSION_MAX_ACTIVE_ASSIGNMENTS` assignations actives (`409 ASSIGNMENT_LIMIT_REACHED`).
+
+**Chaînage de scénarios** (`requiresMissionIds[]`) : une mission ne peut être acceptée que si le joueur a **déjà complété** chaque mission listée (`409 CHAIN_INCOMPLETE`, joueurs uniquement — les assignations PNJ l'ignorent). À la création : ids inconnus (`400 CHAIN_UNKNOWN`), auto-référence (`400 CHAIN_SELF`) et **cycles** (`400 CHAIN_CYCLE`) sont refusés.
+
+**Annulation par le créateur** : `DELETE /api/missions/:missionId` (créateur ou membre de la corporation émettrice) — la mission passe `cancelled`, les assignations actives sont abandonnées, les séquestres (crédits + items) remboursés. Échec si déjà `completed` (`409 MISSION_COMPLETED`).
+
+**Assignations en échec** : une mesure `service` qui bute sur une erreur **permanente** du service cible (Inventory `404`) met l'assignation en **`failed`** (terminal) et notifie le joueur — retenter ne sert à rien.
+
+**Récompenses de standing** (`{type:'standing', domain, amount}`) : le **standing de personnage** (score par domaine, catégorie de mission) est **détenu par Social** (`player_profiles.standing`, colonne `jsonb`) — distinct de `reputation` (modération sociale). À la complétion **totale** (jamais sur un partiel), le delta `amount` est appliqué via `PATCH /api/internal/players/:id/standing` (rol `social:standing:write`), **sans partage** entre les assignés (chaque participant reçoit le montant complet, figé dans `rewardShares`) ; ignoré pour les assignations PNJ. Idempotent : chaque composant standing réclame sa clé `standing:<domain>` dans `settledComponents` avant l'appel Social ; échec Social → `502 SOCIAL_STANDING_FAILED` (assignation rejouable). Le prereq correspondant `min_standing {domain, min}` vérifie le score à l'acceptation (domaine absent = 0).
+
+**Notifications** (`type` + `data`, jamais bloquantes, Social en best-effort) : `mission.expired`, `mission.deadline`, `mission.completed`, `mission.partially_completed`, `mission.failed`, `mission.cancelled`.
+
 ## Pagination (rupture de contrat)
 
 Toutes les listes acceptent désormais `?limit=&offset=` et répondent par l'enveloppe
@@ -209,6 +235,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/missions?status=&kind=&category=&issuerType=&issuerId=&visibility=&groupClaimable=&isEvent=&limit=&offset=` | Missions **avec une place libre** (statuts `available` + `active` par défaut ; groupes partagés visibles membres uniquement ; **zones** : sans position connue, seules les missions globales sont listées) |
 | POST | `/api/missions` `{title, rewards[], prerequisites?, zones?, visibility?, corporationId?, politicalEntityId?, escrowSource?, maxAssignees?, groupClaimable?, objectives[{type(kind), params?…}]}` | Créer une mission (récompenses séquestrées ; `escrowSource: 'issuer'` = prélevé sur le **trésor corpo/politique**) |
 | GET | `/api/missions/:missionId` | Détail + objectifs + mon assignation (404 si partagée à un groupe dont je ne suis pas membre) |
+| DELETE | `/api/missions/:missionId` | **Annuler ma mission** (créateur ou membre corp ; séquestres remboursés, `409 MISSION_COMPLETED` si déjà complétée) |
 | POST | `/api/missions/:missionId/accept` | Accepter : corp + **zone** (`403 OUT_OF_ZONE`) + **prérequis** (`403 PREREQ_FAILED`) + groupe (`NOT_GROUP_MEMBER`, `NO_GROUP`, `GROUP_ALREADY_CLAIMED`) |
 | POST | `/api/missions/:missionId/verify` | Re-mesurer les objectifs `service` (effectue les livraisons `deliver_items`) |
 | POST | `/api/missions/:missionId/objectives/:objectiveId/confirm` | Confirmer un objectif `manual` (**créateur** de la mission uniquement) |
@@ -217,7 +244,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/missions/:missionId/event` `{enabled, maxAssignees?}` | Déclarer/retirer le flag **event** (mission corporation, action `mission:event:manage` : CEO ou `manage_corporation`) |
 | POST | `/api/missions/:missionId/abandon` | Abandonner l'assignation |
 | POST | `/api/missions/:missionId/objectives/:objectiveId/progress` `{quantity}` | Reporter la progression d'un objectif **`game`** uniquement (`409 OBJECTIVE_NOT_PUSHABLE` sinon) |
-| POST | `/api/missions/:missionId/complete` | Compléter : **revérifie** les objectifs `service`, puis répartit chaque composant de récompense |
+| POST | `/api/missions/:missionId/complete` `{partial?}` | Compléter : **revérifie** les objectifs `service`, puis répartit chaque composant de récompense (`partial: true` = remise proportionnelle, missions `allowPartial`) |
 | GET | `/api/me/missions?status=&limit=&offset=` | Mes missions (assignations + mission) |
 | GET | `/api/me/missions-created?status=&limit=&offset=` | **Mes missions créées** (`createdBy` = moi), tous statuts, **sans filtre zone/groupe/place libre** — vue de gestion du créateur (le browse `/api/missions` reste filtré par zone) |
 
@@ -226,17 +253,18 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 |---|---|---|---|
 | POST | `/api/internal/missions` | `mission:write` (+ `mission:escrow:politics` si `escrow`) | Créer une mission (`rewards[]`, `prerequisites[]`, `zones[]`, kinds, `groupClaimable`, `isEvent`, `escrow?`) |
 | GET | `/api/internal/missions?status=&kind=&category=&issuerType=&issuerId=&groupClaimable=&isEvent=&limit=&offset=` | `mission:read` | Catalogue complet (tous statuts, sans filtre zone) |
+| GET | `/api/internal/missions/:missionId` | `mission:read` | **Détail complet** pour le panneau admin : mission, objectifs ordonnés, **toutes** les assignations, noms joueurs + groupe (Social best-effort, cache 60 s), chaîne requise, synthèse (compte par statut + `progressBp`) |
 | PATCH | `/api/internal/missions/:missionId` | `mission:write` | Modifier **titre, description, expiration, `isEvent`, `zones`** seulement (spec immuable ; zones sans impact séquestre) |
 | POST | `/api/internal/missions/:missionId/share` `{groupId}` | `mission:write` | Partager la mission à un groupe (canal de confiance) |
 | DELETE | `/api/internal/missions/:missionId/share` | `mission:write` | Retirer le partage |
 | POST | `/api/internal/missions/:missionId/event` `{enabled, maxAssignees?}` | `mission:write` | Déclarer/retirer le flag **event** (pas de vérif corporation) |
 | POST | `/api/internal/missions/:missionId/cancel` | `mission:write` | Annuler la mission, ses assignations actives et **rembourser le séquestre** |
-| POST | `/api/internal/missions/expire` | `mission:write` | Expirer les missions dépassées (job planifié) et rembourser leur séquestre |
+| POST | `/api/internal/missions/expire` | `mission:write` | Expire missions **et assignations** dépassées (balayage intégré, idempotent) → `{expired, expiredAssignments}` |
 | POST | `/api/internal/missions/:missionId/assign` `{playerId, holderType?}` | `mission:write` | Assigner une mission à un détenteur (`player` ou `npc`) |
 | POST | `/api/internal/missions/:missionId/objectives/:objectiveId/progress` `{playerId, quantity}` | `mission:progress` | Progression **vérifiée** côté serveur de jeu (kinds `game`) |
 | POST | `/api/internal/missions/:missionId/objectives/:objectiveId/confirm` `{}` | `mission:progress` | Confirmer un objectif `manual` (mission créée par le jeu/corp) |
 | POST | `/api/internal/missions/:missionId/verify` `{playerId}` | `mission:progress` | Re-mesurer les objectifs `service` d'un détenteur |
-| POST | `/api/internal/missions/:missionId/complete` `{playerId, force?, settle?}` | `mission:complete` | Compléter tous les participants (revérifie ; `force` pour outrepasser) |
+| POST | `/api/internal/missions/:missionId/complete` `{playerId, force?, settle?, partial?}` | `mission:complete` | Compléter tous les participants (revérifie ; `force` pour outrepasser, `partial` pour une remise proportionnelle) |
 | POST | `/api/internal/missions/:missionId/settle` `{playerId}` | `mission:complete` | Rejouer le règlement des composants non réglés (idempotent) |
 | GET | `/api/internal/players/:playerId/missions` | `mission:read` | Assignations d'un joueur (+ mission) |
 
@@ -292,6 +320,15 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Les missions sans place libre disparaissent de la liste des missions dispo
 - [x] Missions réservées à 1 groupe (premier groupe claimant) et partage de toute mission à un groupe
 - [x] Missions event déclarées par le jeu ou une corporation (action `mission:event:manage`)
+- [x] **Complétion automatique** (`autoComplete`) — la mission se règle seule quand les objectifs requis sont faits
+- [x] **Objectifs bonus** (`isBonus` + `bonusReward`) hors gate/ratio, récompensés en plus sur complétion totale
+- [x] **Remise partielle proportionnelle** (`allowPartial` + `partial`) : crédits au prorata pondéré, items jamais payés, séquestre remboursé, assignation `partially_completed`
+- [x] **Expiration** : TTL par défaut joueur/interne, `expiresInHours`, **deadline par assignation** (`assignmentDeadlineHours`), balayage intégré + notifications
+- [x] **Chaînage de scénarios** (`requiresMissionIds` : gate d'acceptation, anti-cycle à la création)
+- [x] **Annulation par le créateur** (`DELETE /api/missions/:missionId`)
+- [x] **Anti-accumulation** : plafond d'assignations actives par joueur
+- [x] **Assignations en échec** (`failed` sur erreur permanente d'Inventory)
+- [x] **Détail interne complet** pour le panneau admin (`GET /api/internal/missions/:missionId`)
 - [ ] Branches/conditions dans les scénarios (échec, embranchements)
 
 ### Système programmable (registre de kinds)
@@ -307,13 +344,14 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Missions **zonées** : dispo par système ou **POI** (`inventory` : scène hiérarchique / aire / point) — filtrées au listing et à l'acceptation (`403 OUT_OF_ZONE`) selon la présence social
 - [x] Spec immuable après création (précédent FTB : le séquestre est pris dessus)
 - [x] **Break propre** : ancienne forme `reward` retirée, serveur de jeu à adapter (corps `rewards[]`, `params`, verify/confirm)
-- [ ] Composition booléenne des prérequis (all/any/none), caution du contractor, missions répétables, chaînes `nextMissionId` (phase 2)
+- [ ] Composition booléenne des prérequis (all/any/none), caution du contractor, missions répétables (phase 2) — les **chaînes** sont livrées via `requiresMissionIds`
 - [ ] Kind `traded_items` (vérifié via market) — phase 2
 
 ### Missions dynamiques
 - [ ] Génération à partir des besoins en ressources des corporations IA / villes (via l'API economie)
 - [x] Missions de livraison avec vérification de la quantité livrée avant paiement (`deliver_items`)
-- [ ] Régénération/rotation périodique et expiration
+- [x] Expiration périodique (TTL + deadlines, balayage intégré)
+- [ ] Régénération/rotation périodique des missions dynamiques
 
 ### Missions joueurs
 - [x] Création de missions par les joueurs (récompense économique et/ou item séquestrée)
@@ -324,4 +362,4 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Paiement économique via l'API interne economie (idempotent)
 - [x] Séquestre des récompenses des missions joueurs (débit/remboursement ; hold item/release)
 - [x] Récompenses items via le service inventory (hold/consume ou transfert depuis `system`)
-- [ ] Récompenses de réputation (via l'API interne sociale)
+- [x] Récompenses de **standing de personnage** (`{type:'standing', domain, amount}` — Social détient `player_profiles.standing`, delta non splitté, jamais sur un partiel, prereq `min_standing`) ; la réputation de modération reste gérée à part (service Social)

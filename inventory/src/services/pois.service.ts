@@ -28,6 +28,8 @@ import { HttpError, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
 import { authorizeAction, isSocialConfigured } from './social.client.js';
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /** POI plus its shares (returned by detail endpoints). */
 export interface PoiView extends InventoryPoi {
   shares: InventoryPoiShare[];
@@ -46,6 +48,8 @@ export interface PoiInput {
   radiusM?: number | null;
   visibility?: PoiVisibility;
   metadata?: Record<string, unknown> | null;
+  /** Who created the POI (audit); for mission POIs this is the mission creator. */
+  createdBy?: string | null;
 }
 
 /** Mutable POI fields (ownership changes go through `transferPoi`). */
@@ -89,6 +93,7 @@ function grantedTo(granteeType: PoiGranteeType, granteeId: string) {
 export async function listPlayerPois(playerId: string, limit: number, offset: number): Promise<Page<InventoryPoi>> {
   const condition = or(
     and(eq(inventoryPois.ownerType, 'player'), eq(inventoryPois.ownerId, playerId)),
+    and(eq(inventoryPois.ownerType, 'mission'), eq(inventoryPois.createdBy, playerId)),
     eq(inventoryPois.visibility, 'public'),
     grantedTo('player', playerId),
   );
@@ -193,30 +198,74 @@ export async function listHolderPois(
   return page(rows, totalRow[0].total, limit, offset);
 }
 
+/** Reserved owner UUID for mission POIs (the creator is recorded in `createdBy`). */
+export const MISSION_POI_OWNER_ID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Validates system/scene coherence: when both are declared, the scene root must match
+ * the system (`tarsis` / `tarsis_1/new-paris`).
+ * @throws 400 `POI_SCENE_SYSTEM_MISMATCH` when the scene root differs from the system.
+ */
+function assertSceneSystemCoherence(system: string | null | undefined, scene: string | null | undefined): void {
+  if (!system || !scene) return;
+  const root = scene.split('/')[0];
+  if (root !== system) {
+    throw new HttpError(400, 'POI_SCENE_SYSTEM_MISMATCH', `Scene "${scene}" does not start with system "${system}"`);
+  }
+}
+
+/**
+ * Validates that a parentId does not create a cycle by walking up the parent chain.
+ * @throws 400 `POI_PARENT_NOT_FOUND` when the parent does not exist.
+ * @throws 400 `POI_PARENT_CYCLE` when the parent chain forms a loop.
+ */
+async function assertParentValid(tx: Tx, poiId: string | undefined, parentId: string | null | undefined): Promise<void> {
+  if (!parentId) return;
+  if (poiId && parentId === poiId) {
+    throw new HttpError(400, 'POI_PARENT_CYCLE', 'A POI cannot be its own parent');
+  }
+  const visited = new Set<string>();
+  let current: string | null = parentId;
+  while (current) {
+    if (current === poiId || visited.has(current)) {
+      throw new HttpError(400, 'POI_PARENT_CYCLE', 'Parent chain forms a cycle');
+    }
+    visited.add(current);
+    const [parent] = await tx.select({ parentId: inventoryPois.parentId }).from(inventoryPois).where(eq(inventoryPois.id, current)).limit(1);
+    if (!parent) throw new HttpError(400, 'POI_PARENT_NOT_FOUND', `Parent POI ${current} does not exist`);
+    current = parent.parentId;
+  }
+}
+
 /** Creates a POI for an owner. */
 export async function createPoi(
   owner: { ownerType: PoiOwnerType; ownerId: string },
   input: PoiInput,
 ): Promise<InventoryPoi> {
-  const [poi] = await db
-    .insert(inventoryPois)
-    .values({
-      ownerType: owner.ownerType,
-      ownerId: owner.ownerId,
-      name: input.name,
-      description: input.description ?? null,
-      system: input.system ?? null,
-      scene: input.scene ?? null,
-      parentId: input.parentId ?? null,
-      x: input.x,
-      y: input.y,
-      z: input.z,
-      radiusM: input.radiusM ?? null,
-      visibility: input.visibility ?? 'private',
-      metadata: input.metadata ?? null,
-    })
-    .returning();
-  return poi;
+  assertSceneSystemCoherence(input.system, input.scene);
+  return db.transaction(async (tx) => {
+    await assertParentValid(tx, undefined, input.parentId);
+    const [poi] = await tx
+      .insert(inventoryPois)
+      .values({
+        ownerType: owner.ownerType,
+        ownerId: owner.ownerId,
+        name: input.name,
+        description: input.description ?? null,
+        system: input.system ?? null,
+        scene: input.scene ?? null,
+        parentId: input.parentId ?? null,
+        x: input.x,
+        y: input.y,
+        z: input.z,
+        radiusM: input.radiusM ?? null,
+        visibility: input.visibility ?? 'private',
+        metadata: input.metadata ?? null,
+        createdBy: input.createdBy ?? null,
+      })
+      .returning();
+    return poi;
+  });
 }
 
 /** Applies a partial update to a POI (ownership untouched). */
@@ -234,9 +283,17 @@ export async function updatePoi(poiId: string, patch: PoiPatch): Promise<Invento
   if (patch.visibility !== undefined) set.visibility = patch.visibility;
   if (patch.metadata !== undefined) set.metadata = patch.metadata;
 
-  const rows = await db.update(inventoryPois).set(set).where(eq(inventoryPois.id, poiId)).returning();
-  if (!rows[0]) throw notFound(t('not_found.poi', { id: poiId }));
-  return rows[0];
+  // P2: validate system/scene coherence (after the patch fields are known).
+  const existing = await getPoi(poiId);
+  if (!existing) throw notFound(t('not_found.poi', { id: poiId }));
+  assertSceneSystemCoherence(patch.system ?? existing.system, patch.scene ?? existing.scene);
+
+  return db.transaction(async (tx) => {
+    await assertParentValid(tx, poiId, patch.parentId !== undefined ? patch.parentId : existing.parentId);
+    const rows = await tx.update(inventoryPois).set(set).where(eq(inventoryPois.id, poiId)).returning();
+    if (!rows[0]) throw notFound(t('not_found.poi', { id: poiId }));
+    return rows[0];
+  });
 }
 
 /** Deletes a POI (its shares cascade). */
@@ -383,6 +440,7 @@ export async function assertPoliticalManage(playerId: string, entityId: string):
 /**
  * Whether a player may mutate a POI (owner, or member with the org permission).
  * `system`/`npc` POIs are never manageable by a player through this API.
+ * `mission` POIs are manageable by their creator (`createdBy`) only.
  * @param poi - POI.
  * @param playerId - Acting player.
  * @throws 403 `NOT_POI_OWNER` / `POI_SYSTEM_OWNER_FORBIDDEN` / org errors, 503 without Social.
@@ -396,6 +454,9 @@ export async function assertPoiWriteAccess(poi: InventoryPoi, playerId: string):
       throw new HttpError(403, 'NOT_POI_OWNER', t('poi.not_owner'));
     case 'system':
       throw new HttpError(403, 'POI_SYSTEM_OWNER_FORBIDDEN', t('poi.system_owner'));
+    case 'mission':
+      if (poi.createdBy === playerId) return;
+      throw new HttpError(403, 'NOT_POI_OWNER', t('poi.not_owner'));
     case 'corporation':
       await assertCorporationManage(playerId, poi.ownerId);
       return;
@@ -442,6 +503,7 @@ function hasPlayerShare(poiId: string, playerId: string): Promise<boolean> {
 export async function canReadAsPlayer(poi: InventoryPoi, playerId: string): Promise<boolean> {
   if (poi.visibility === 'public') return true;
   if (poi.ownerType === 'player' && poi.ownerId === playerId) return true;
+  if (poi.ownerType === 'mission' && poi.createdBy === playerId) return true;
   if (await hasPlayerShare(poi.id, playerId)) return true;
   if (poi.ownerType === 'corporation' || poi.ownerType === 'political') {
     try {

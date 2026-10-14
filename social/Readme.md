@@ -223,7 +223,9 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | Méthode | Route | Rôle requis | Description |
 |---|---|---|---|
 | PUT | `/api/internal/players/:playerId` `{displayName}` | `social:profile:write` | Créer le profil au login (nom existant conservé) |
-| GET | `/api/internal/players/:playerId` | `social:profile:read` | Profil complet (**réputation** inclus) ou `null` — utilisé par Mission pour les prérequis `min_reputation` |
+| GET | `/api/internal/players/:playerId` | `social:profile:read` | Profil complet (**réputation** + **standing** incluss) ou `null` — utilisé par Mission pour les prérequis `min_reputation` / `min_standing` |
+| GET | `/api/internal/players/:playerId/standing` | `social:profile:read` | **Standing de personnage** par domaine (map `domain → int`, `{}` par défaut) — lu par Mission (prérequis `min_standing`). Inclut le domaine **`general` dérivé** (RMS des 5 catégories : `round(√(Σ valeur² / 5))`) |
+| PATCH | `/api/internal/players/:playerId/standing` `{domain, amount}` | `social:standing:write` | Applique un delta signé non nul sur un domaine (borne `[-100000, 100000]`) — écrit par le jeu pour les récompenses de standing des missions ; **distinct de `reputation`** (modération). Domaine valide = `delivery\|transport\|mining\|exploration\|divers` ; `general` est **réservé** (dérivé, jamais grantie) → `400 STANDING_DOMAIN_RESERVED` |
 | PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?}` | `social:profile:write` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
 | PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | Transition (login/mission/logout) : `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` — écrit dans le cache (TTL) ; la base ne suit qu'aux changements de statut |
 | GET | `/api/internal/players/:playerId/presence` | `social:profile:read` | Statut + localisation (défaut hors ligne / `location: null`) — lu par Mission pour filtrer les missions zonées ; cache d'abord, base en repli |

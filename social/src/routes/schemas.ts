@@ -139,6 +139,17 @@ export const statsBody = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
+/**
+ * Standing delta applied by the game (mission settlement, scenario events). `domain` is
+ * an opaque label (mission categories); `amount` is a signed non-zero delta.
+ */
+export const standingBody = z.object({
+  domain: z.string().trim().min(1).max(32),
+  amount: z.number().int().min(-100_000).max(100_000).refine((v) => v !== 0, {
+    message: 'Standing delta must be non-zero',
+  }),
+});
+
 export const activityBody = z.object({
   type: z.string().trim().min(1).max(64),
   details: z.record(z.string(), z.unknown()).optional(),

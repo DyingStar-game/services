@@ -9,6 +9,7 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
+  carriedDelta,
   consumeHold,
   createHold,
   creditStack,
@@ -32,6 +33,7 @@ import {
 } from '../services/pois.service.js';
 import type { PoiOwnerType } from '../db/schema/index.js';
 import {
+  carriedDeltaBody,
   consumeHoldBody,
   createHoldBody,
   creditBody,
@@ -108,6 +110,17 @@ internalRoutes.post(
   validate(creditBody),
   asyncHandler(async (req, res) => {
     res.status(201).json(await debitStack(holderFrom(req), req.body.goodType, req.body.quantity));
+  }),
+);
+
+/** POST /holders/:holderType/:holderId/stacks/:goodType/carried — Carried-quantity delta (mining / load / drop-off). */
+internalRoutes.post(
+  '/holders/:holderType/:holderId/stacks/:goodType/carried',
+  requireServiceRole(SERVICE_ROLES.carriedWrite),
+  validate(holderStackParams, 'params'),
+  validate(carriedDeltaBody),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await carriedDelta(holderFrom(req), req.params.goodType, req.body.delta, req.body));
   }),
 );
 

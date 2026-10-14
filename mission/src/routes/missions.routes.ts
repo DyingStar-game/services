@@ -1,6 +1,6 @@
 /**
  * Player-facing mission routes (`/api/missions`): browse available missions, accept one,
- * report objective progress, complete (reward) or abandon.
+ * verify service objectives, complete (reward) or abandon.
  */
 import { Router, type IRouter } from 'express';
 import { t } from '../i18n/index.js';
@@ -14,10 +14,10 @@ import {
   acceptMission,
   completeMission,
   getAssignment,
-  reportProgress,
   verifyPlayerObjectives,
 } from '../services/assignments.service.js';
 import {
+  cancelPlayerMission,
   confirmObjective,
   createPlayerMission,
   getMissionWithObjectives,
@@ -31,12 +31,12 @@ import { isGroupMember, getPlayerGroup, getPlayerPresence } from '../services/so
 import { validateMissionSpec } from '../services/spec.service.js';
 import { missionKindsCatalog } from '../kinds/index.js';
 import {
+  completeBody,
   createPlayerMissionBody,
   eventBody,
   missionIdParams,
   missionListQuery,
   objectiveParams,
-  progressBody,
   shareBody,
   validateMissionBody,
 } from './schemas.js';
@@ -196,30 +196,14 @@ missionsRoutes.post(
   }),
 );
 
-/** POST /:missionId/objectives/:objectiveId/progress — Report objective progress. */
-missionsRoutes.post(
-  '/:missionId/objectives/:objectiveId/progress',
-  validate(objectiveParams, 'params'),
-  validate(progressBody),
-  asyncHandler(async (req, res) => {
-    const player = requirePlayer(req);
-    const result = await reportProgress(
-      req.params.missionId,
-      player.id,
-      req.params.objectiveId,
-      req.body.quantity,
-    );
-    res.json(result);
-  }),
-);
-
 /** POST /:missionId/complete — Complete the mission and settle its reward. */
 missionsRoutes.post(
   '/:missionId/complete',
   validate(missionIdParams, 'params'),
+  validate(completeBody),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await completeMission(req.params.missionId, player.id));
+    res.json(await completeMission(req.params.missionId, player.id, { partial: req.body.partial }));
   }),
 );
 
@@ -230,6 +214,16 @@ missionsRoutes.post(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     res.json(await verifyPlayerObjectives(req.params.missionId, player.id));
+  }),
+);
+
+/** DELETE /:missionId — Cancel a mission you manage (escrow refunded, assignees dropped). */
+missionsRoutes.delete(
+  '/:missionId',
+  validate(missionIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await cancelPlayerMission(req.params.missionId, player.id));
   }),
 );
 

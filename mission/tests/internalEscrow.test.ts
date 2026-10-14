@@ -26,7 +26,6 @@ const { db } = await import('../src/db/connection.js');
 const { missionObjectives, missions } = await import('../src/db/schema/index.js');
 
 const ARES = '7b0c3f2e-1a4d-4c8e-9f21-3d5a6b7c8d90';
-const WAREHOUSE = '2e9d4a61-5b3c-4f7a-8e12-6c4b3a2d1e0f';
 const PLAYER = '9a8b7c6d-5e4f-4a3b-b2c1-0d9e8f7a6b5c';
 const ALL_ROLES = 'mission:write,mission:escrow:politics,mission:complete';
 
@@ -44,10 +43,10 @@ function escrowedMission(overrides: Record<string, unknown> = {}) {
     escrow: { payerType: 'politics', payerId: ARES },
     objectives: [
       {
-        type: 'deliver_items',
-        title: 'Livrer 50 minerais',
+        type: 'owns_items',
+        title: 'Avoir 50 minerais',
         targetQuantity: 50,
-        params: { itemId: 'iron_ore', to: { holderType: 'warehouse', holderId: WAREHOUSE } },
+        params: { itemId: 'iron_ore' },
       },
     ],
     ...overrides,
@@ -103,7 +102,7 @@ describe('POST /api/internal/missions with escrow', () => {
       escrowExternalId: `mission-escrow:${id}`,
       createdBy: 'svc-universesimulator',
     });
-    expect(body.objectives[0].params.to).toEqual({ holderType: 'warehouse', holderId: WAREHOUSE });
+    expect(body.objectives[0].params.itemId).toBe('iron_ore');
   });
 
   it('refunds the treasury when the mission is cancelled', async () => {
@@ -234,7 +233,7 @@ describe('POST /api/internal/missions without escrow', () => {
     expect(created.mission).toMatchObject({ isEvent: true, maxAssignees: 500 });
   });
 
-  it('rejects deliver_items towards an unknown holder type', async () => {
+  it('rejects deliver_material with a missing zone', async () => {
     const { escrow: _escrow, ...body } = escrowedMission();
     const { status, body: error } = await post(
       '/missions',
@@ -242,9 +241,9 @@ describe('POST /api/internal/missions without escrow', () => {
         ...body,
         objectives: [
           {
-            type: 'deliver_items',
+            type: 'deliver_material',
             title: 'Livrer',
-            params: { itemId: 'iron_ore', to: { holderType: 'planet', holderId: WAREHOUSE } },
+            params: { goodType: 'ore.iron' },
           },
         ],
       },

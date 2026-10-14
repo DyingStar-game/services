@@ -30,9 +30,11 @@ export interface Holder {
   holderId: string;
 }
 
-/** A stack with its reserved and available quantities. */
+/** A stack with its reserved, carried and available quantities. */
 export interface StackView extends InventoryStack {
   held: number;
+  /** Physically carried quantity (e.g. crates in a player's hold). */
+  carried: number;
   available: number;
 }
 
@@ -143,7 +145,7 @@ export async function getHolderInventory(holder: Holder, limit: number, offset: 
         ),
       );
     const heldCount = Number(held[0]?.total ?? 0);
-    views.push({ ...stack, held: heldCount, available: stack.quantity - heldCount });
+    views.push({ ...stack, held: heldCount, carried: stack.carried, available: stack.quantity - heldCount - stack.carried });
   }
 
   return {
@@ -189,7 +191,7 @@ export async function getStack(holder: Holder, goodType: string): Promise<StackV
       ),
     );
   const heldCount = Number(held[0]?.total ?? 0);
-  return { ...stack, held: heldCount, available: stack.quantity - heldCount };
+  return { ...stack, held: heldCount, carried: stack.carried, available: stack.quantity - heldCount - stack.carried };
 }
 
 /**
@@ -240,8 +242,9 @@ export async function debitStack(holder: Holder, goodType: string, quantity: num
       .for('update');
     if (!stack) throw notFound(t('not_found.stack', { id: goodType }));
     const held = await heldQuantity(tx, holder, goodType);
-    if (stack.quantity - held < quantity) {
-      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available: stack.quantity - held, goodType }));
+    const available = stack.quantity - held - stack.carried;
+    if (available < quantity) {
+      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available, goodType }));
     }
     const [row] = await tx
       .update(inventoryStacks)
@@ -397,8 +400,9 @@ export async function createHold(
       .for('update');
     if (!stack) throw notFound(t('not_found.stack', { id: input.goodType }));
     const held = await heldQuantity(tx, holder, input.goodType);
-    if (stack.quantity - held < quantity) {
-      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available: stack.quantity - held, goodType: input.goodType }));
+    const available = stack.quantity - held - stack.carried;
+    if (available < quantity) {
+      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available, goodType: input.goodType }));
     }
     const [row] = await tx
       .insert(inventoryHolds)
@@ -536,8 +540,9 @@ export async function transferStack(
       .for('update');
     if (!stack) throw notFound(t('not_found.stack_source', { id: goodType }));
     const held = await heldQuantity(tx, from, goodType);
-    if (stack.quantity - held < quantity) {
-      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available: stack.quantity - held, goodType }));
+    const available = stack.quantity - held - stack.carried;
+    if (available < quantity) {
+      throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available, goodType }));
     }
     await tx
       .update(inventoryStacks)
@@ -558,6 +563,162 @@ export async function transferStack(
       })
       .returning();
     return toStack;
+  });
+}
+
+/**
+ * Applies a carried-quantity delta on a holder's stack.
+ *
+ * - `delta > 0` without `from`: the goods are created (mining) — `quantity += delta`,
+ *   `carried += delta`.
+ * - `delta > 0` with `from`: the goods are loaded from another holder's **available** stock
+ *   (warehouse, corporation, ...) — taken from `from` and credited to the holder as
+ *   `quantity += delta` + `carried += delta`, atomically.
+ * - `delta < 0` with `to`: the holder drops a crate in a delivery zone — the goods leave
+ *   the holder entirely (`quantity -= |delta|`, `carried -= |delta|`) and land on `to`.
+ *
+ * @param holder - Owning holder.
+ * @param goodType - Good type.
+ * @param delta - Signed change (positive = load, negative = drop-off).
+ * @param opts - Counterparty: `from` for a load (delta > 0), `to` for a drop-off (delta < 0).
+ * @returns Updated source stack (and the counterparty stack when the goods moved).
+ * @throws 400 `INVALID_DELTA` when delta is zero.
+ * @throws 422 `CARRIED_COUNTERPARTY_MISMATCH` when `from`/`to` contradict the delta sign.
+ * @throws 422 `DESTINATION_REQUIRED` when `delta < 0` and `to` is missing.
+ * @throws 400 `SOURCE_SELF` / `DESTINATION_SELF` on a self-transfer.
+ * @throws 409 `INSUFFICIENT_CARRIED` when `|delta|` exceeds the carried quantity.
+ * @throws 409 `INSUFFICIENT_GOODS` when `from` lacks available stock.
+ */
+export async function carriedDelta(
+  holder: Holder,
+  goodType: string,
+  delta: number,
+  opts: { from?: Holder; to?: Holder } = {},
+): Promise<{ source: InventoryStack; counterparty?: InventoryStack }> {
+  const { from, to } = opts;
+  if (delta === 0) throw new HttpError(400, 'INVALID_DELTA', 'delta must be non-zero');
+  if (delta > 0 && to) {
+    throw new HttpError(422, 'CARRIED_COUNTERPARTY_MISMATCH', 'to is only valid with a negative delta');
+  }
+  if (delta < 0 && from) {
+    throw new HttpError(422, 'CARRIED_COUNTERPARTY_MISMATCH', 'from is only valid with a positive delta');
+  }
+  if (delta < 0 && !to) throw new HttpError(422, 'DESTINATION_REQUIRED', 'to is required for a negative delta');
+
+  const self = (other?: Holder) =>
+    Boolean(other && other.holderType === holder.holderType && other.holderId === holder.holderId);
+
+  return db.transaction(async (tx) => {
+    await ensureGoodKind(tx, goodType, 'stack');
+
+    const [stack] = await tx
+      .select()
+      .from(inventoryStacks)
+      .where(
+        and(
+          eq(inventoryStacks.holderType, holder.holderType),
+          eq(inventoryStacks.holderId, holder.holderId),
+          eq(inventoryStacks.goodType, goodType),
+        ),
+      )
+      .for('update');
+    if (!stack) throw notFound(t('not_found.stack', { id: goodType }));
+
+    if (delta > 0) {
+      // Load (with `from`): take the goods out of the source holder's available stock.
+      if (from) {
+        if (self(from)) throw new HttpError(400, 'SOURCE_SELF', 'Source must differ from the holder');
+        const [fromStack] = await tx
+          .select()
+          .from(inventoryStacks)
+          .where(
+            and(
+              eq(inventoryStacks.holderType, from.holderType),
+              eq(inventoryStacks.holderId, from.holderId),
+              eq(inventoryStacks.goodType, goodType),
+            ),
+          )
+          .for('update');
+        if (!fromStack) throw notFound(t('not_found.stack', { id: goodType }));
+        const fromHeld = await heldQuantity(tx, from, goodType);
+        const fromAvailable = fromStack.quantity - fromHeld - fromStack.carried;
+        if (fromAvailable < delta) {
+          throw new HttpError(409, 'INSUFFICIENT_GOODS', t('goods.insufficient', { available: fromAvailable, goodType }));
+        }
+        await tx
+          .update(inventoryStacks)
+          .set({ quantity: sql`${inventoryStacks.quantity} - ${delta}`, updatedAt: new Date() })
+          .where(
+            and(
+              eq(inventoryStacks.holderType, from.holderType),
+              eq(inventoryStacks.holderId, from.holderId),
+              eq(inventoryStacks.goodType, goodType),
+            ),
+          );
+      }
+      // Credit the goods to the holder, marked as carried.
+      const [row] = await tx
+        .update(inventoryStacks)
+        .set({
+          quantity: sql`${inventoryStacks.quantity} + ${delta}`,
+          carried: sql`${inventoryStacks.carried} + ${delta}`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(inventoryStacks.holderType, holder.holderType),
+            eq(inventoryStacks.holderId, holder.holderId),
+            eq(inventoryStacks.goodType, goodType),
+          ),
+        )
+        .returning();
+      if (from) {
+        const [fromAfter] = await tx
+          .select()
+          .from(inventoryStacks)
+          .where(
+            and(
+              eq(inventoryStacks.holderType, from.holderType),
+              eq(inventoryStacks.holderId, from.holderId),
+              eq(inventoryStacks.goodType, goodType),
+            ),
+          )
+          .limit(1);
+        return { source: row, counterparty: fromAfter };
+      }
+      return { source: row };
+    }
+
+    // Drop-off: goods leave the holder entirely (carried and total both decrease).
+    const absDelta = -delta;
+    if (self(to)) throw new HttpError(400, 'DESTINATION_SELF', 'Destination must differ from the source holder');
+    if (stack.carried < absDelta) {
+      throw new HttpError(409, 'INSUFFICIENT_CARRIED', t('goods.carried_insufficient', { carried: stack.carried, needed: absDelta, goodType }));
+    }
+    const [source] = await tx
+      .update(inventoryStacks)
+      .set({
+        quantity: sql`${inventoryStacks.quantity} - ${absDelta}`,
+        carried: sql`${inventoryStacks.carried} - ${absDelta}`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(inventoryStacks.holderType, holder.holderType),
+          eq(inventoryStacks.holderId, holder.holderId),
+          eq(inventoryStacks.goodType, goodType),
+        ),
+      )
+      .returning();
+    const [destination] = await tx
+      .insert(inventoryStacks)
+      .values({ ...to!, goodType, quantity: absDelta })
+      .onConflictDoUpdate({
+        target: [inventoryStacks.holderType, inventoryStacks.holderId, inventoryStacks.goodType],
+        set: { quantity: sql`${inventoryStacks.quantity} + ${absDelta}`, updatedAt: new Date() },
+      })
+      .returning();
+    return { source, counterparty: destination };
   });
 }
 

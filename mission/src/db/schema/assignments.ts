@@ -10,7 +10,16 @@ import { boolean, index, integer, jsonb, pgTable, text, timestamp, unique, uuid 
 import { missions, type RewardComponent } from './missions.js';
 
 /** Lifecycle of an assignee's participation in a mission. */
-export const ASSIGNMENT_STATUSES = ['active', 'completed', 'abandoned', 'expired'] as const;
+export const ASSIGNMENT_STATUSES = [
+  'active',
+  /** Terminal: handed in proportionally to the required-objective progress, then paid. */
+  'partially_completed',
+  'completed',
+  'abandoned',
+  'expired',
+  /** Terminal: a measurement failed permanently (the deliverable no longer exists). */
+  'failed',
+] as const;
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
 
 /** Kinds of assignee (players and NPCs both have Economy wallets and Inventory holdings). */
@@ -29,6 +38,13 @@ export const missionAssignments = pgTable(
     holderType: text('holder_type').$type<AssigneeHolderType>().notNull().default('player'),
     status: text('status').$type<AssignmentStatus>().notNull().default('active'),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * When this assignee must have finished (mission deadline window, capped by the
+     * mission's own `expiresAt`). Past it the assignment expires and stops paying.
+     */
+    deadlineAt: timestamp('deadline_at', { withTimezone: true }),
+    /** Set once the "deadline approaching" notification has been sent (dedup key). */
+    deadlineNotifiedAt: timestamp('deadline_notified_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     /**
      * Reward shares frozen at completion, one entry per mission reward component
@@ -38,6 +54,16 @@ export const missionAssignments = pgTable(
     rewardShares: jsonb('reward_shares').$type<RewardComponent[]>(),
     /** Credits share of the frozen `rewardShares` entry (used by the escrow refund math). */
     rewardAmount: integer('reward_amount'),
+    /**
+     * Weighted share of the required objectives, in basis points (10000 = 100 %). The
+     * default 10000 is a full completion; a partial hand-in freezes its ratio here so a
+     * settlement retry pays the exact same amounts.
+     */
+    /**
+   * Weighted share of the required objectives that was actually completed, in basis
+   * points (10000 = every required objective). Written at settlement; 0 while active.
+   */
+  completionRatio: integer('completion_ratio').notNull().default(0),
     /** True once the economic reward has been credited by the Economy service. */
     rewardSettled: boolean('reward_settled').notNull().default(false),
     /** Idempotency key sent to Economy as the transaction `externalId`. */

@@ -121,14 +121,15 @@ export function zoneMatches(
 
   for (const zone of zones) {
     if (zone.kind === 'system') {
-      if (location.system && location.system === zone.system) return true;
+      // `""` = outside any system; must match exactly (including empty strings).
+      if (location.system === zone.system) return true;
       continue;
     }
 
-    // poi: a declared system on the POI must be present and equal.
+    // poi: a declared system on the POI must match. `""` = outside-system, `null` = unconstrained.
     const poi = poiGeometry[zone.poiId];
     if (!poi) continue; // unknown/deleted POI: fail closed
-    if (poi.system && location.system !== poi.system) continue;
+    if (poi.system !== null && poi.system !== undefined && location.system !== poi.system) continue;
 
     const radius = zone.radiusM ?? poi.radiusM;
     if (radius !== null) {
@@ -243,11 +244,13 @@ export async function assertMissionZone(mission: Mission, playerId: string): Pro
 }
 
 /**
- * Write-time guard: every `poi` zone must reference an existing POI. Checked only when
- * the Inventory integration is configured; an Inventory outage does not block the write
- * (matching stays fail-closed anyway), an unknown id does.
+ * Write-time guard: every `poi` zone must reference an existing POI, and its optional
+ * `radiusM` must not exceed the POI's own radius (a POI point has no radius, so a mission
+ * radius is refused). Checked only when the Inventory integration is configured; an
+ * Inventory outage does not block the write (matching stays fail-closed anyway).
  * @param zones - Zones about to be persisted.
  * @throws 400 `POI_NOT_FOUND` when a referenced POI does not exist.
+ * @throws 400 `POI_RADIUS_EXCEEDED` when the zone radius exceeds the POI's radius.
  */
 export async function assertPoiZonesExist(zones: MissionZone[] | undefined): Promise<void> {
   const ids = poiZoneIds(zones ?? []);
@@ -258,6 +261,18 @@ export async function assertPoiZonesExist(zones: MissionZone[] | undefined): Pro
   } catch {
     return; // outage: unavailable ≠ invalid, matching remains fail-closed
   }
-  const missing = ids.find((id) => !resolved.has(id));
-  if (missing) throw new HttpError(400, 'POI_NOT_FOUND', t('zones.poi_not_found', { id: missing }));
+  for (const zone of zones ?? []) {
+    if (zone.kind !== 'poi') continue;
+    const poi = resolved.get(zone.poiId);
+    if (!poi) throw new HttpError(400, 'POI_NOT_FOUND', t('zones.poi_not_found', { id: zone.poiId }));
+    // P7: a mission radius must not exceed the POI's radius. A POI point (null) refuses any radius.
+    if (zone.radiusM !== undefined) {
+      if (poi.radiusM === null) {
+        throw new HttpError(400, 'POI_RADIUS_EXCEEDED', t('zones.poi_radius_exceeded', { id: zone.poiId }));
+      }
+      if (zone.radiusM > poi.radiusM) {
+        throw new HttpError(400, 'POI_RADIUS_EXCEEDED', t('zones.poi_radius_exceeded', { id: zone.poiId }));
+      }
+    }
+  }
 }

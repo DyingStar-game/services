@@ -1747,6 +1747,78 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
+  /api/internal/players/{playerId}/standing:
+    get:
+      tags: [internal]
+      operationId: internalGetStanding
+      summary: Character standing per domain (empty map when the profile has none)
+      description: >
+        Used by Mission for the `min_standing` prerequisite. Requires the
+        `social:profile:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Standing map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, standing]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  standing:
+                    type: object
+                    additionalProperties: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [internal]
+      operationId: internalAddStanding
+      summary: Apply a signed standing delta on one domain
+      description: >
+        The game server applies mission standing rewards through this route. The score is
+        clamped to [-100000, 100000] per domain. Requires the `social:standing:write`
+        capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain, amount]
+              properties:
+                domain: { type: string, minLength: 1, maxLength: 32 }
+                amount:
+                  type: integer
+                  minimum: -100000
+                  maximum: 100000
+                  description: Signed non-zero delta
+      responses:
+        '200':
+          description: Updated standing map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, domain, standing]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  domain: { type: string }
+                  standing:
+                    type: object
+                    additionalProperties: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /api/internal/players/{playerId}/presence:
     get:
       tags: [internal]
@@ -3283,7 +3355,7 @@ components:
 
     PlayerProfile:
       type: object
-      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
+      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, reputation, standing, playtimeSeconds, rpSheet, createdAt, updatedAt]
       properties:
         playerId: { type: string, format: uuid, description: Keycloak subject (players) or server-assigned id (NPCs) }
         entityType: { $ref: '#/components/schemas/ProfileKind' }
@@ -3293,6 +3365,14 @@ components:
         biography: { type: [string, 'null'] }
         role: { type: [string, 'null'], description: In-game role reported by the game server }
         reputation: { type: integer }
+        standing:
+          type: object
+          description: >
+            Character standing per domain (mission categories), written by the game
+            through the internal standing routes and read by Mission. Distinct from
+            `reputation` (moderation/social score).
+          additionalProperties: { type: integer }
+          default: {}
         playtimeSeconds: { type: integer }
         rpSheet:
           oneOf:

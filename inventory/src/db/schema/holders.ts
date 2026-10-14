@@ -10,7 +10,7 @@
  */
 
 /** Kinds of inventory holders, mirroring the Economy account holder types (+ `warehouse`). */
-export const HOLDER_TYPES = ['player', 'npc', 'corporation', 'system', 'warehouse'] as const;
+export const HOLDER_TYPES = ['player', 'npc', 'corporation', 'political', 'system', 'warehouse'] as const;
 export type HolderType = (typeof HOLDER_TYPES)[number];
 
 /** Minimal holder reference used across the service. */

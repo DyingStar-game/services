@@ -221,6 +221,10 @@ paths:
     patch:
       tags: [me]
       summary: Edit a POI the caller manages (ownership unchanged)
+      description: >
+        Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) is **immutable after
+        creation**; only the internal API may change it. Returns `400 POI_GEOMETRY_READONLY`
+        if any geometry field is present.
       parameters:
         - $ref: '#/components/parameters/poiId'
       requestBody:
@@ -486,6 +490,62 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /api/internal/holders/{holderType}/{holderId}/stacks/{goodType}/carried:
+    post:
+      tags: [internal]
+      summary: Carried-quantity delta (mining deposit / load / drop-off)
+      description: >
+        Adjusts the physically-carried quantity of a stack. Three modes:
+        **Mining deposit** — `delta > 0` without `from`: the goods are created
+        (`quantity += delta`, `carried += delta`).
+        **Load** — `delta > 0` with `from`: take `delta` from `from`'s available stock
+        (`quantity - held - carried`) and credit it to the holder as carried.
+        **Drop-off** — `delta < 0` with `to`: the goods leave the holder entirely
+        (`quantity -= |delta|`, `carried -= |delta|`) and land on `to`.
+        Counterparty mismatches (`from` with `delta < 0`, `to` with `delta > 0`) → 422.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/holderType'
+        - $ref: '#/components/parameters/holderId'
+        - name: goodType
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CarriedDeltaBody' }
+      responses:
+        '201':
+          description: Updated source stack (and counterparty stack when goods moved)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source]
+                properties:
+                  source: { $ref: '#/components/schemas/Stack' }
+                  counterparty:
+                    oneOf:
+                      - $ref: '#/components/schemas/Stack'
+                      - type: 'null'
+                    description: The `from` (load) or `to` (drop-off) stack, when goods moved between holders
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 'Conflict (`INSUFFICIENT_CARRIED`, `INSUFFICIENT_GOODS`)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: 'Counterparty mismatch (`CARRIED_COUNTERPARTY_MISMATCH`, `DESTINATION_REQUIRED`, `DESTINATION_SELF`, `SOURCE_SELF`)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /api/internal/holders/{holderType}/{holderId}/instances:
     post:
       tags: [internal]
@@ -733,6 +793,7 @@ paths:
     patch:
       tags: [internal]
       summary: Edit a POI (geometry, name, visibility …)
+      description: Internal-only: geometry fields (`system`, `scene`, `x`, `y`, `z`, `radiusM`) are editable here.
       security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/poiId'
@@ -740,7 +801,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PoiUpdateBody' }
+            schema: { $ref: '#/components/schemas/PoiInternalUpdateBody' }
       responses:
         '200':
           description: The updated POI
@@ -947,7 +1008,7 @@ components:
         error:
           type: string
           description: Machine-readable code
-          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, NOT_POI_OWNER, POI_ALREADY_SHARED, POI_NOT_SHARED, POI_SELF_SHARE, POI_TRANSFER_SELF, ORG_PERMISSION_REQUIRED, INTERNAL_ERROR]
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, INSUFFICIENT_CARRIED, NOT_POI_OWNER, POI_ALREADY_SHARED, POI_NOT_SHARED, POI_SELF_SHARE, POI_TRANSFER_SELF, POI_SYSTEM_OWNER_FORBIDDEN, POI_GEOMETRY_READONLY, POI_SCENE_SYSTEM_MISMATCH, POI_PARENT_NOT_FOUND, POI_PARENT_CYCLE, INVALID_DELTA, DESTINATION_REQUIRED, DESTINATION_SELF, SOURCE_SELF, CARRIED_COUNTERPARTY_MISMATCH, ORG_PERMISSION_REQUIRED, INTERNAL_ERROR]
         message: { type: string }
         status: { type: integer }
 
@@ -957,8 +1018,8 @@ components:
       description: >
         `warehouse` is a village/city stock managed by the universe simulator; its id is the
         UUID of the persistence game object (POI). Warehouses are only reachable through
-        `/api/internal/*`.
-      enum: [player, npc, corporation, system, warehouse]
+        `/api/internal/*`. `political` is a political entity treasury (commune…federation).
+      enum: [player, npc, corporation, political, system, warehouse]
     GoodKind:
       type: string
       enum: [stack, instance]
@@ -979,7 +1040,12 @@ components:
       enum: [market_order, mission_escrow, supply_order, manual]
     PoiOwnerType:
       type: string
-      enum: [player, npc, corporation, political, system]
+      description: >
+        `mission` is a POI created by a mission builder: it has **no inventory holder** —
+        the creator is recorded in `createdBy`, not as an owner. Mission POIs are
+        `visibility: private` by default and invisible to `/api/me/pois` unless the player
+        created them.
+      enum: [player, npc, corporation, political, system, mission]
     PoiGranteeType:
       type: string
       enum: [player, npc, corporation, political]
@@ -1009,10 +1075,11 @@ components:
       allOf:
         - $ref: '#/components/schemas/Stack'
         - type: object
-          required: [held, available]
+          required: [held, carried, available]
           properties:
-            held: { type: integer, description: Quantity reserved by active holds }
-            available: { type: integer, description: "`quantity - held`, the tradable/consumable part" }
+            held: { type: integer, description: Quantity reserved by active holds (escrow, market orders) — the reservation mechanism, **not** physical carriage }
+            carried: { type: integer, description: "Quantity physically carried by this holder (crates, vehicle cargo). `0` when nothing is being transported." }
+            available: { type: integer, description: "`quantity - held - carried`, the only tradable/consumable part" }
 
     Instance:
       type: object
@@ -1053,6 +1120,19 @@ components:
       properties:
         goodType: { type: string, maxLength: 128 }
         quantity: { type: integer, minimum: 1 }
+
+    CarriedDeltaBody:
+      type: object
+      required: [goodType, delta]
+      properties:
+        goodType: { type: string, maxLength: 128 }
+        delta: { type: integer, description: 'Signed change: `> 0` = fill a crate, `< 0` = drop a crate. Must be non-zero.' }
+        from:
+          allOf: [{ $ref: '#/components/schemas/Holder' }]
+          description: 'Source holder to load from (only with `delta > 0`). Omit for mining (goods are created).'
+        to:
+          allOf: [{ $ref: '#/components/schemas/Holder' }]
+          description: 'Destination holder (only with `delta < 0`).'
 
     RegisterInstanceBody:
       type: object
@@ -1150,26 +1230,31 @@ components:
 
     PoiCreateBody:
       type: object
+      description: >
+        Coordinates are finite numbers in the game's **true universe frame** (identical
+        before and after a server change; never re-projected). `system` + `scene` must be
+        coherent (`scene === system` or `scene.startsWith(system + '/')`). `parentId` must
+        exist and must not form a cycle.
       required: [name, x, y, z]
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { type: string, maxLength: 2000 }
-        system: { type: string, minLength: 1, maxLength: 64 }
+        system: { type: string, maxLength: 64, description: 'Star system; `""` = outside any system (game Place vocabulary); omit for unconstrained' }
         scene: { type: string, minLength: 1, maxLength: 128 }
         parentId: { type: string, format: uuid }
-        x: { type: number }
-        y: { type: number }
-        z: { type: number }
+        x: { type: number, description: Finite coordinate in the true universe frame }
+        y: { type: number, description: Finite coordinate in the true universe frame }
+        z: { type: number, description: Finite coordinate in the true universe frame }
         radiusM: { type: number, minimum: 0, maximum: 1000000 }
         visibility: { $ref: '#/components/schemas/PoiVisibility' }
         metadata: { type: object, additionalProperties: true }
         owner:
           type: object
-          description: 'Organization owning the POI (default: the caller)'
+          description: 'Owner of the POI (default: the caller). `mission` = POI not stored in any inventory.'
           required: [type, id]
           properties:
-            type: { type: string, enum: [corporation, political] }
-            id: { type: string, format: uuid }
+            type: { type: string, enum: [corporation, political, mission] }
+            id: { type: string, format: uuid, description: 'For `mission`, any UUID (the creator is recorded in `createdBy`)' }
 
     PoiInternalCreateBody:
       allOf:
@@ -1186,13 +1271,30 @@ components:
 
     PoiUpdateBody:
       type: object
-      description: Partial patch; at least one field must be present.
+      description: >
+        Partial patch for the player route (`PATCH /api/me/pois/{poiId}`); at least one
+        field must be present. **Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) is
+        immutable after creation** — only the internal API may change it. Returns
+        `400 POI_GEOMETRY_READONLY` if any geometry field is present.
       minProperties: 1
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { type: [string, 'null'], maxLength: 2000 }
-        system: { type: [string, 'null'], minLength: 1, maxLength: 64 }
-        scene: { type: [string, 'null'], minLength: 1, maxLength: 128 }
+        parentId: { type: [string, 'null'], format: uuid }
+        visibility: { $ref: '#/components/schemas/PoiVisibility' }
+        metadata: { type: [object, 'null'], additionalProperties: true }
+
+    PoiInternalUpdateBody:
+      type: object
+      description: >
+        Partial patch for the internal route (`PATCH /api/internal/pois/{poiId}`); geometry
+        fields are editable here (game server / trusted service only).
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        system: { type: [string, 'null'], maxLength: 64, description: 'Star system; `""` = outside any system; `null` = unconstrained' }
+        scene: { type: [string, 'null'], maxLength: 128 }
         parentId: { type: [string, 'null'], format: uuid }
         x: { type: number }
         y: { type: number }

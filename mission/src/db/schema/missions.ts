@@ -7,6 +7,7 @@
  * Inventory/Economy/Social state (`service` kinds), or confirmed by the mission issuer
  * (`issuer` kinds).
  */
+import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /** How a mission came to be. */
@@ -14,24 +15,18 @@ export const MISSION_KINDS = ['dynamic', 'scenario', 'player'] as const;
 export type MissionKind = (typeof MISSION_KINDS)[number];
 
 /**
- * Mission category. Text column validated against this list at creation; extending the
- * game's catalogue is a one-line change here (no migration).
+ * Mission category / standing domain. Text column validated against this list at creation;
+ * extending the game's catalogue is a one-line change here (no migration).
  */
-export const MISSION_CATEGORIES = [
-  'delivery',
-  'transport',
-  'generic',
-  'mining',
-  'farming',
-  'crafting',
-  'construction',
-  'trading',
-  'exploration',
-  'salvage',
-  'combat',
-  'reception',
-] as const;
+export const MISSION_CATEGORIES = ['delivery', 'transport', 'mining', 'exploration', 'divers'] as const;
 export type MissionCategory = (typeof MISSION_CATEGORIES)[number];
+
+/**
+ * Standing domains available for reward components and prerequisite gates.
+ * `general` is derived (RMS of the five categories) and is never granted directly.
+ */
+export const STANDING_DOMAINS = ['general', ...MISSION_CATEGORIES] as const;
+export type StandingDomain = (typeof STANDING_DOMAINS)[number];
 
 /**
  * Who issued the mission. `corporation` ids are opaque (owned by Social); `politics` is a
@@ -76,8 +71,17 @@ export interface RewardItem {
   instanceId?: string;
 }
 
+/** A character standing reward component (domain = a mission category, held by Social). */
+export interface RewardStanding {
+  type: 'standing';
+  /** Standing domain (must be one of the mission categories). */
+  domain: string;
+  /** Signed non-zero delta applied to the player's standing in that domain. */
+  amount: number;
+}
+
 /** One entry of a mission's reward list (also used for frozen per-assignee shares). */
-export type RewardComponent = RewardCredits | RewardItem;
+export type RewardComponent = RewardCredits | RewardItem | RewardStanding;
 
 /** A prerequisite gate evaluated when a player accepts a mission. */
 export interface PrerequisiteSpec {
@@ -120,7 +124,7 @@ export const missions = pgTable(
     title: text('title').notNull(),
     description: text('description'),
     kind: text('kind').$type<MissionKind>().notNull().default('dynamic'),
-    category: text('category').$type<MissionCategory>().notNull().default('generic'),
+    category: text('category').$type<MissionCategory>().notNull().default('divers'),
     issuerType: text('issuer_type').$type<MissionIssuerType>().notNull().default('system'),
     /** Opaque issuer UUID (corporation, city or player); null for the system. */
     issuerId: uuid('issuer_id'),
@@ -181,6 +185,31 @@ export const missions = pgTable(
     scriptId: text('script_id'),
     /** When set and passed, the mission is no longer acceptable nor completable. */
     expiresAt: timestamp('expires_at', { withTimezone: true }),
+    /**
+     * When every required objective reports its target quantity, the mission completes and
+     * settles without waiting for an explicit `complete` call.
+     */
+    autoComplete: boolean('auto_complete').notNull().default(true),
+    /**
+     * Whether an assignee may hand in a partial mission: paid proportionally to the
+     * weighted progress of the required objectives (items are never paid on a partial).
+     */
+    allowPartial: boolean('allow_partial').notNull().default(false),
+    /**
+     * Missions that must be *fully* completed before this one can be accepted (scenario
+     * chains). Empty = standalone mission; validated for unknown ids, self-reference and
+     * cycles at creation time.
+     */
+    requiresMissionIds: uuid('requires_mission_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'`)
+      .$default(() => []),
+    /**
+     * When set, every assignment expires this many hours after acceptance (capped by
+     * `expiresAt`). Null = assignments live as long as the mission.
+     */
+    assignmentDeadlineHours: integer('assignment_deadline_hours'),
     /** Keycloak client id of the creating service, or player id for player-made missions. */
     createdBy: text('created_by'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -217,6 +246,22 @@ export const missionObjectives = pgTable(
     locationTo: jsonb('location_to').$type<Record<string, unknown>>(),
     /** Position in a scenario chain (ascending); independent objectives may all be 0. */
     order: integer('order').notNull().default(0),
+    /**
+     * Weight of this objective in the partial-completion ratio (1 = equal share with any
+     * other default-weighted objective). Required objectives only.
+     */
+    weight: integer('weight').notNull().default(1),
+    /**
+     * Optional objective: never blocks nor is blocked by scenario ordering, and is left
+     * out of the required completion gate and the partial ratio.
+     */
+    isBonus: boolean('is_bonus').notNull().default(false),
+    /**
+     * Extra reward component granted when this bonus objective is completed (a credits
+     * component is added to the credits share, an item component is granted on top of the
+     * mission's own item rewards). Null for a bonus without its own payout.
+     */
+    bonusReward: jsonb('bonus_reward').$type<RewardComponent>(),
     status: text('status').$type<ObjectiveStatus>().notNull().default('pending'),
     /** Progress reported so far, compared against `targetQuantity`. */
     currentProgress: integer('current_progress').notNull().default(0),
@@ -224,6 +269,11 @@ export const missionObjectives = pgTable(
     params: jsonb('params').$type<Record<string, unknown>>(),
     /** Free-form extras owned by the game server (script step, NPC id, ...). */
     payload: jsonb('payload').$type<Record<string, unknown>>(),
+    /**
+     * Service-owned internal state (latched facts like `pickedUpAt`). Contrary to
+     * `payload`, this is written by the service during objective evaluation.
+     */
+    state: jsonb('state').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -232,3 +282,25 @@ export const missionObjectives = pgTable(
 
 export type MissionObjective = typeof missionObjectives.$inferSelect;
 export type NewMissionObjective = typeof missionObjectives.$inferInsert;
+
+/**
+ * Batch player state pushed by the game server via `PUT /api/internal/missions/player-states`.
+ * Used for zone matching and physical objective evaluation (visit, delivery, transport,
+ * passenger). TTL: evaluations use the latest state; a state older than the TTL is treated
+ * as "outside every zone" (fail-closed).
+ */
+export const missionPlayerStates = pgTable('mission_player_states', {
+  playerId: uuid('player_id').primaryKey(),
+  /** Current place in the game world (`{system, scene, x, y, z}`). */
+  place: jsonb('place').$type<{ system?: string; scene?: string; x?: number; y?: number; z?: number }>(),
+  /** True when the player is on foot (not seated in a vehicle). */
+  onFoot: boolean('on_foot').notNull().default(true),
+  /** True when the player is seated in a non-driver seat (passenger). */
+  passenger: boolean('passenger').notNull().default(false),
+  /** Carried goods snapshot: goodType → quantity. */
+  carried: jsonb('carried').$type<Record<string, number>>().notNull().default(sql`'{}'::jsonb`),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type MissionPlayerState = typeof missionPlayerStates.$inferSelect;
+export type NewMissionPlayerState = typeof missionPlayerStates.$inferInsert;

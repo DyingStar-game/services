@@ -4,25 +4,29 @@
  * capability means adding one file here; the pipeline (create → accept → progress →
  * reward) never hardcodes mission rules.
  *
- * Three evaluation modes:
- * - `game`    the game server reports progress (gameplay the services cannot see);
- * - `service` the mission service measures progress against Inventory/Economy/Social
- *             state through the `measure` handler (called by the verify endpoint);
+ * Two evaluation modes:
+ * - `service` the mission service measures progress against Inventory/player-state
+ *             through the `measure` handler (called by the verify endpoint);
  * - `issuer`  the mission creator confirms completion (subjective work, Eco's custom
  *             clause).
+ *
+ * There is deliberately **no** `game` mode: the game server never certifies a mission
+ * objective (the server topology changes constantly, an objective bound to a server is
+ * invalidated at every split). The game only feeds the player-state store and the
+ * inventory; the service decides.
  */
 import type { z } from 'zod';
 
 import type { AssigneeHolderType, MissionCategory, MissionObjective } from '../db/schema/index.js';
 
 /** Who evaluates an objective's progress. */
-export type EvaluationMode = 'game' | 'service' | 'issuer';
+export type EvaluationMode = 'service' | 'issuer';
 
 /** Minimal JSON Schema fragment served by `GET /api/missions/kinds`. */
 export type JsonSchema = Record<string, unknown>;
 
 /**
- * Mission categories a kind is allowed on. `'all'` means every category; the `generic`
+ * Mission categories a kind is allowed on. `'all'` means every category; the `divers`
  * category always bypasses the constraint (catch-all mission type).
  */
 export type KindCategories = readonly MissionCategory[] | 'all';
@@ -59,6 +63,13 @@ export interface ObjectiveKind {
   evaluation: EvaluationMode;
   /** Whether the objective uses `targetQuantity`/`currentProgress` accumulation. */
   quantity: boolean;
+  /**
+   * How `measure()` progress is stored:
+   * - `snapshot` (default): stored = measured (can regress if the holder loses goods);
+   * - `highWater`: stored = max(stored, measured) (never regresses; used for delivery,
+   *   transport and passenger objectives where a completed delivery stays complete).
+   */
+  progress?: 'snapshot' | 'highWater';
   /** Structured params, validated at creation (`mission_objectives.params`). */
   paramsSchema: z.ZodTypeAny;
   /** JSON Schema of `params`, served to mission builders. */

@@ -20,6 +20,7 @@ import {
   deletePoi,
   getPoiView,
   listPlayerPois,
+  MISSION_POI_OWNER_ID,
   requirePlayerRead,
   requirePoi,
   revokeShare,
@@ -82,7 +83,7 @@ meRoutes.get(
   }),
 );
 
-/** POST /pois — Create a POI (own, or for a corporation/political entity the player manages). */
+/** POST /pois — Create a POI (own, corporation/political managed, or mission-only). */
 meRoutes.post(
   '/pois',
   validate(createPoiBody),
@@ -99,6 +100,10 @@ meRoutes.post(
     } else if (owner?.type === 'political') {
       await assertPoliticalManage(player.id, owner.id);
       holder = { ownerType: 'political', ownerId: owner.id };
+    } else if (owner?.type === 'mission') {
+      holder = { ownerType: 'mission', ownerId: MISSION_POI_OWNER_ID };
+      input.createdBy = player.id;
+      input.visibility = 'private';
     }
     res.status(201).json(await createPoi(holder, input));
   }),
@@ -116,7 +121,7 @@ meRoutes.get(
   }),
 );
 
-/** PATCH /pois/:poiId — Edit a POI the player manages (ownership unchanged). */
+/** PATCH /pois/:poiId — Edit a POI the player manages (ownership unchanged). Geometry is immutable. */
 meRoutes.patch(
   '/pois/:poiId',
   validate(poiParams, 'params'),
@@ -125,6 +130,17 @@ meRoutes.patch(
     const player = requirePlayer(req);
     const poi = await requirePoi(req.params.poiId);
     await assertPoiWriteAccess(poi, player.id);
+    // P1: geometry is write-once at creation; only the internal API may change it.
+    const G = ['system', 'scene', 'x', 'y', 'z', 'radiusM'] as const;
+    const touched = G.filter((f) => req.body[f] !== undefined);
+    if (touched.length > 0) {
+      res.status(400).json({
+        error: 'POI_GEOMETRY_READONLY',
+        message: `Geometry fields (${touched.join(', ')}) are immutable after creation; use the internal API`,
+        status: 400,
+      });
+      return;
+    }
     res.json(await updatePoi(poi.id, req.body));
   }),
 );
