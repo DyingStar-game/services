@@ -3396,16 +3396,19 @@ components:
 
     Location:
       type: object
+      description: >
+        Player position, relative to the body named by `scene` (local frame, metres).
+        In open space (`scene: "space"`) the frame is the system itself.
       properties:
-        system: { type: string, maxLength: 64 }
-        scene: { type: string, maxLength: 128 }
+        system: { type: string, maxLength: 64, description: Star system }
+        scene: { type: string, maxLength: 128, description: 'Body or sub-scene; `"space"` = open space (frame of the system)' }
         position:
           type: object
           required: [x, y, z]
           properties:
-            x: { type: number }
-            y: { type: number }
-            z: { type: number }
+            x: { type: number, description: Metres from the centre of the body named by scene }
+            y: { type: number, description: Metres in the frame of the body named by scene }
+            z: { type: number, description: Metres in the frame of the body named by scene }
 
     Presence:
       type: object

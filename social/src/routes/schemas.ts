@@ -107,6 +107,10 @@ export const profilePatchBody = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
+/**
+ * Player location: `position` is metres from the centre of the body named by `scene`
+ * (local frame). `scene: "space"` = open space (frame of the system).
+ */
 export const locationSchema = z.object({
   system: z.string().trim().max(64).optional(),
   scene: z.string().trim().max(128).optional(),
