@@ -8,7 +8,8 @@ dist/
 
 # will have compiled files and executables
 persistence/debug/
-persistence/target/
+# Rust build output, in every service
+target/
 
 persistence/.cargo
 persistence/Cargo.lock
