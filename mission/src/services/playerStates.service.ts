@@ -3,6 +3,9 @@
  * `PUT /api/internal/missions/player-states`. Used for zone matching and physical
  * objective evaluation (visit, delivery, transport, passenger).
  *
+ * `place` carries the player's position **relative to the body named by `scene`**
+ * (local frame, metres; `scene: "space"` = open space, frame of the system).
+ *
  * TTL: evaluations use the latest state; a state older than 30 s is treated as
  * "outside every zone" (fail-closed).
  */

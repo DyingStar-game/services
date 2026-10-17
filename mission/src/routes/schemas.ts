@@ -337,7 +337,7 @@ export const internalAssignBody = z.object({
   holderType: z.enum(ASSIGNEE_HOLDER_TYPES).default('player'),
 });
 
-/** Place in the game world (game universe frame, never re-projected). */
+/** Player position, relative to the body named by `scene` (local frame, metres). */
 export const placeSchema = z
   .object({
     system: z.string().max(64).optional(),

@@ -2,21 +2,25 @@
  * Mission zone matching: a mission's `zones` are matched against the player's presence
  * location (`{system, scene, position}` reported by the game server through Social).
  *
+ * Positions are **relative to the body named by `scene`** (the body's local frame,
+ * metres from its centre). A body orbits and spins, so an absolute triple would be
+ * stale as soon as written; a local triple never drifts. `scene: "space"` is the frame
+ * of the system itself.
+ *
  * Two zone kinds (geometry lives in the Inventory POI registry, not here):
  * - `system`: same system;
- * - `poi`: a POI from Inventory — a zone when a radius applies (the zone's `radiusM`
- *   overrides the POI's), otherwise the POI's scene subtree (prefix match), otherwise
- *   the exact POI coordinates. POIs are resolved through Inventory's internal API
- *   (60 s cache); an unresolved/missing POI never matches (fail-closed, exactly like
- *   an unknown location).
+ * - `poi`: a POI from Inventory. In every branch, **the player's `scene` must be
+ *   compatible with the POI's `scene`** before any coordinate comparison: two scenes
+ *   are compatible when they are equal or one is a segment prefix of the other
+ *   (`tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`, never `tarsis_10`).
+ *   A POI whose scene is `null` never matches (fail-closed: no frame to compare in).
  *
  * Two implementations of the same semantics:
  * - `zoneFilterSql` for the listing (database-side; the resolved geometries are injected
  *   as one jsonb parameter so unresolvable POIs simply never match);
  * - `zoneMatches` for acceptance (fresh presence, fail-closed).
  *
- * An empty zone list is global (available everywhere). `scene` matching is hierarchical:
- * `tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`, never `tarsis_10`.
+ * An empty zone list is global (available everywhere).
  */
 import { sql, type SQL } from 'drizzle-orm';
 
@@ -37,6 +41,17 @@ export interface PoiZoneGeometry {
 
 /** POI id → resolved geometry (missing entry = zone that never matches). */
 export type PoiGeometryMap = Record<string, PoiZoneGeometry>;
+
+/**
+ * Segment-prefix compatibility between two scene paths. True when the scenes are equal
+ * or one is a segment prefix of the other (`tarsis_1` ⟷ `tarsis_1/new-paris`), never a
+ * bare character prefix (`tarsis_1` ⟷ `tarsis_10`). Symmetric: either side may be the
+ * shorter path. A missing or empty scene is never compatible (fail-closed: no frame).
+ */
+export function scenesCompatible(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
 
 /** Squared euclidean distance (NaN-safe: missing coordinates never match). */
 function distanceSquared(
@@ -133,27 +148,19 @@ export function zoneMatches(
 
     const radius = zone.radiusM ?? poi.radiusM;
     if (radius !== null) {
-      // Area: within `radius` of the POI centre (zone override wins over the POI's).
+      // Area: the scene must be compatible before any distance comparison in the shared frame.
+      if (!scenesCompatible(location.scene, poi.scene)) continue;
       const position = location.position;
       if (position && distanceSquared(position, poi.center) <= radius ** 2) return true;
       continue;
     }
     if (poi.scene) {
-      // Scene subtree of the POI (same hierarchical prefix convention as before).
+      // Scene subtree of the POI: the player must be in the POI's scene or below.
       const scene = location.scene;
       if (scene && (scene === poi.scene || scene.startsWith(`${poi.scene}/`))) return true;
       continue;
     }
-    // Plain point: only a player standing exactly on the POI matches.
-    const position = location.position;
-    if (
-      position &&
-      position.x === poi.center.x &&
-      position.y === poi.center.y &&
-      position.z === poi.center.z
-    ) {
-      return true;
-    }
+    // No radius, no scene: fail-closed (no frame to compare in).
   }
   return false;
 }
@@ -196,23 +203,38 @@ export function zoneFilterSql(location: ZoneLocation | null | undefined, poiGeom
           and (
             case
               when (z->>'radiusM') is not null then (
-                (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
-                + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
-                + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
-              ) <= ((z->>'radiusM')::float8) ^ 2
+                (${poi()}->>'scene') is not null
+                and ${scene}::text is not null
+                and (
+                  ${scene}::text = (${poi()}->>'scene')
+                  or left(${scene}::text, length(${poi()}->>'scene') + 1) = (${poi()}->>'scene') || '/'
+                  or left((${poi()}->>'scene'), length(${scene}::text) + 1) = ${scene}::text || '/'
+                )
+                and (
+                  (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
+                  + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
+                  + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
+                ) <= ((z->>'radiusM')::float8) ^ 2
+              )
               when (${poi()}->>'radiusM') is not null then (
-                (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
-                + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
-                + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
-              ) <= ((${poi()}->>'radiusM')::float8) ^ 2
+                (${poi()}->>'scene') is not null
+                and ${scene}::text is not null
+                and (
+                  ${scene}::text = (${poi()}->>'scene')
+                  or left(${scene}::text, length(${poi()}->>'scene') + 1) = (${poi()}->>'scene') || '/'
+                  or left((${poi()}->>'scene'), length(${scene}::text) + 1) = ${scene}::text || '/'
+                )
+                and (
+                  (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
+                  + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
+                  + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
+                ) <= ((${poi()}->>'radiusM')::float8) ^ 2
+              )
               when (${poi()}->>'scene') is not null then (
                 ${scene}::text = (${poi()}->>'scene')
-                or ${scene}::text like (((${poi()}->>'scene')) || '/%')
+                or left(${scene}::text, length(${poi()}->>'scene') + 1) = (${poi()}->>'scene') || '/'
               )
-              else (
-                (${px}::float8, ${py}::float8, ${pz}::float8)
-                = ((${poi()}->'center'->>'x')::float8, (${poi()}->'center'->>'y')::float8, (${poi()}->'center'->>'z')::float8)
-              )
+              else false
             end
           )
         )

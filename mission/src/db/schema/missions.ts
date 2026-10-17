@@ -291,7 +291,7 @@ export type NewMissionObjective = typeof missionObjectives.$inferInsert;
  */
 export const missionPlayerStates = pgTable('mission_player_states', {
   playerId: uuid('player_id').primaryKey(),
-  /** Current place in the game world (`{system, scene, x, y, z}`). */
+  /** Current place: `{system, scene, x, y, z}` — x/y/z relative to the body named by `scene` (local frame, metres). */
   place: jsonb('place').$type<{ system?: string; scene?: string; x?: number; y?: number; z?: number }>(),
   /** True when the player is on foot (not seated in a vehicle). */
   onFoot: boolean('on_foot').notNull().default(true),

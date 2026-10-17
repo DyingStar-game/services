@@ -94,12 +94,12 @@ Un push `reportProgress` sur un kind non-`game` → `409 OBJECTIVE_NOT_PUSHABLE`
 
 **Disponibilité** : la liste joueur ne retourne que les missions **avec au moins une place libre** — une mission prise et pleine **disparaît de la liste des missions dispo**. Statuts par défaut `available` + `active` ; les missions partagées à un groupe ne sont listées que pour ses membres.
 
-**Zones** (`zones[]`, vide = **globale**) : la dispo peut être restreinte à la **position du joueur** — scopes mappés sur le store d'état joueur (`PUT /api/internal/missions/player-states`, TTL 30 s) :
-- `{kind:'system', system}` — même système (`""` = hors système) ;
+**Zones** (`zones[]`, vide = **globale**) : la dispo peut être restreinte à la **position du joueur** — scopes mappés sur le store d'état joueur (`PUT /api/internal/missions/player-states`, TTL 30 s). **Les positions sont relatives au corps nommé par `scene`** (repère local, mètres ; `scene: "space"` = espace ouvert, repère du système) :
+- `{kind:'system', system}` — même système ;
 - `{kind:'poi', poiId, radiusM?}` — **point ou zone du registre POI** d'`inventory` (résolution batch `POST /api/internal/pois/resolve`, cache 60 s) :
-  - POI sans rayon mais avec une `scene` → **sous-arbre de scène** (égalité ou préfixe de segment : `tarsis_1` accepte `tarsis_1/new-paris`, jamais `tarsis_10`) → couvre planète, ville, district, donjon… **Convention jeu : encoder la hiérarchie dans `location.scene`** ;
-  - `radiusM` déclaré sur la **zone** (prioritaire, **borné par le rayon de la POI**) ou sur le **POI** → **aire** : distance euclidienne au centre (unités jeu = mètres supposés) ;
-  - sinon → **point** : position exacte du POI.
+  - **La `scene` du joueur doit être compatible avec la `scene` du POI** avant toute comparaison de coordonnées (égalité ou préfixe de segment : `tarsis_1` ⟷ `tarsis_1/new-paris`, jamais `tarsis_1` ⟷ `tarsis_10`) — sans cette garde, un joueur sur `tarsis_3` matchait un POI sur `tarsis_4` à la même distance locale. Un POI sans `scene` ne matche jamais (échec fermé) ;
+  - `radiusM` déclaré sur la **zone** (prioritaire, **borné par le rayon de la POI**) ou sur le **POI** → **aire** : distance euclidienne au centre dans le repère partagé ;
+  - POI avec `scene` et sans rayon → **sous-arbre de scène** (le joueur doit être dans la scène du POI ou en dessous) → couvre planète, ville, district, donjon… **Convention jeu : encoder la hiérarchie dans `location.scene`**.
 
   Un `system` porté par le POI doit être égal à `location.system`. Un POI inconnu/supprimé → la zone **ne matche jamais** (échec ferme) ; le registre refuse la création d'une zone sur un POI inexistant (`400 POI_NOT_FOUND`) ou avec un rayon supérieur à celui de la POI (`400 POI_RADIUS_EXCEEDED`).
 
