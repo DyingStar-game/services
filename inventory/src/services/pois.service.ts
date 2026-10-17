@@ -201,16 +201,25 @@ export async function listHolderPois(
 /** Reserved owner UUID for mission POIs (the creator is recorded in `createdBy`). */
 export const MISSION_POI_OWNER_ID = '00000000-0000-0000-0000-000000000000';
 
+/** Reserved scene name: open-space frame of the system (the system's own star). */
+export const SPACE_SCENE = 'space';
+
 /**
- * Validates system/scene coherence: when both are declared, the scene root must match
- * the system (`tarsis` / `tarsis_1/new-paris`).
- * @throws 400 `POI_SCENE_SYSTEM_MISMATCH` when the scene root differs from the system.
+ * Validates system/scene coherence: when both are declared, the scene must designate a
+ * location inside the system. A location is inside the system when it is the system
+ * itself (`scene === system`), open space (`scene === SPACE_SCENE`), or a body/sub-scene
+ * in the system (`scene === system + '/' + …` or `scene === system + '_' + …`).
+ * @throws 400 `POI_SCENE_SYSTEM_MISMATCH` when the scene does not belong to the system.
  */
 function assertSceneSystemCoherence(system: string | null | undefined, scene: string | null | undefined): void {
   if (!system || !scene) return;
-  const root = scene.split('/')[0];
-  if (root !== system) {
-    throw new HttpError(400, 'POI_SCENE_SYSTEM_MISMATCH', `Scene "${scene}" does not start with system "${system}"`);
+  if (
+    scene !== system &&
+    scene !== SPACE_SCENE &&
+    !scene.startsWith(`${system}/`) &&
+    !scene.startsWith(`${system}_`)
+  ) {
+    throw new HttpError(400, 'POI_SCENE_SYSTEM_MISMATCH', `Scene "${scene}" does not belong to system "${system}"`);
   }
 }
 

@@ -153,10 +153,11 @@ export const poiHolderParams = z.object({
 
 const poiName = z.string().trim().min(1).max(128);
 const poiDescription = z.string().trim().max(2000);
-/** `""` = outside any system (matches the game's Place vocabulary). */
+/** Star system; always a system name in practice (`""` is legacy). */
 const poiSystem = z.string().trim().max(64);
+/** Body or sub-scene; the reference frame of x/y/z. `"space"` = open space (frame of the system). */
 const poiScene = z.string().trim().min(1).max(128);
-/** Game units, assumed metres (same convention as mission zones). Finite only. */
+/** Metres in the frame of the body named by `scene` (not absolute in the universe). Finite only. */
 const poiCoordinate = z.number().finite();
 const poiRadius = z.number().min(0).max(1_000_000);
 const poiMetadata = z.record(z.string(), z.unknown());

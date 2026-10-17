@@ -1185,18 +1185,21 @@ components:
         ownerId: { type: string, format: uuid }
         name: { type: string, maxLength: 128 }
         description: { type: [string, 'null'], maxLength: 2000 }
-        system: { type: [string, 'null'], maxLength: 64, description: Star system (null = unscoped) }
+        system: { type: [string, 'null'], maxLength: 64, description: 'Star system (null = unscoped); always a system name in practice (`""` is legacy)' }
         scene:
           type: [string, 'null']
           maxLength: 128
-          description: Hierarchical scene path matched by equality or segment prefix (`tarsis_1` matches `tarsis_1/new-paris`, never `tarsis_10`)
+          description: >
+            Body or sub-scene in the system; the reference frame of x/y/z. In open space
+            (`scene: "space"`) the frame is the system itself. Matched by equality or
+            segment prefix (`tarsis_1` matches `tarsis_1/new-paris`, never `tarsis_10`).
         parentId:
           type: [string, 'null']
           format: uuid
           description: Opaque parent object id in Persistence (no cross-service foreign key)
-        x: { type: number, description: Game units (metres assumed) }
-        y: { type: number }
-        z: { type: number }
+        x: { type: number, description: 'Metres from the centre of the body named by `scene` (frame of the body, spins with it; not absolute in the universe)' }
+        y: { type: number, description: Metres in the frame of the body named by scene }
+        z: { type: number, description: Metres in the frame of the body named by scene }
         radiusM:
           type: [number, 'null']
           minimum: 0
@@ -1231,20 +1234,27 @@ components:
     PoiCreateBody:
       type: object
       description: >
-        Coordinates are finite numbers in the game's **true universe frame** (identical
-        before and after a server change; never re-projected). `system` + `scene` must be
-        coherent (`scene === system` or `scene.startsWith(system + '/')`). `parentId` must
-        exist and must not form a cycle.
+        x/y/z are finite, measured in the frame of the body named by `scene`, in metres.
+        Not absolute in the universe: a body orbits and spins, so an absolute triple is
+        stale as soon as it is written. In open space (`scene: "space"`) the frame is the
+        system itself. `system` + `scene` must be coherent: the scene must designate a
+        location inside the system (`scene === system`, `scene === "space"`,
+        `scene.startsWith(system + '/')` or `scene.startsWith(system + '_')`).
+        `parentId` must exist and must not form a cycle.
       required: [name, x, y, z]
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { type: string, maxLength: 2000 }
-        system: { type: string, maxLength: 64, description: 'Star system; `""` = outside any system (game Place vocabulary); omit for unconstrained' }
-        scene: { type: string, minLength: 1, maxLength: 128 }
+        system: { type: string, maxLength: 64, description: 'Star system; always a system name in practice (`""` is legacy); omit for unconstrained' }
+        scene:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: 'Body or sub-scene in the system; the reference frame of x/y/z. `"space"` = open space (frame of the system).'
         parentId: { type: string, format: uuid }
-        x: { type: number, description: Finite coordinate in the true universe frame }
-        y: { type: number, description: Finite coordinate in the true universe frame }
-        z: { type: number, description: Finite coordinate in the true universe frame }
+        x: { type: number, description: Metres from the centre of the body named by scene }
+        y: { type: number, description: Metres in the frame of the body named by scene }
+        z: { type: number, description: Metres in the frame of the body named by scene }
         radiusM: { type: number, minimum: 0, maximum: 1000000 }
         visibility: { $ref: '#/components/schemas/PoiVisibility' }
         metadata: { type: object, additionalProperties: true }
@@ -1288,17 +1298,18 @@ components:
       type: object
       description: >
         Partial patch for the internal route (`PATCH /api/internal/pois/{poiId}`); geometry
-        fields are editable here (game server / trusted service only).
+        fields are editable here (game server / trusted service only). x/y/z are in the
+        frame of the body named by `scene` (metres).
       minProperties: 1
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { type: [string, 'null'], maxLength: 2000 }
-        system: { type: [string, 'null'], maxLength: 64, description: 'Star system; `""` = outside any system; `null` = unconstrained' }
-        scene: { type: [string, 'null'], maxLength: 128 }
+        system: { type: [string, 'null'], maxLength: 64, description: 'Star system; always a system name in practice (`""` is legacy); `null` = unconstrained' }
+        scene: { type: [string, 'null'], maxLength: 128, description: 'Body or sub-scene; `"space"` = open space (frame of the system)' }
         parentId: { type: [string, 'null'], format: uuid }
-        x: { type: number }
-        y: { type: number }
-        z: { type: number }
+        x: { type: number, description: Metres from the centre of the body named by scene }
+        y: { type: number, description: Metres in the frame of the body named by scene }
+        z: { type: number, description: Metres in the frame of the body named by scene }
         radiusM: { type: [number, 'null'], minimum: 0, maximum: 1000000 }
         visibility: { $ref: '#/components/schemas/PoiVisibility' }
         metadata: { type: [object, 'null'], additionalProperties: true }

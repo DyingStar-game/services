@@ -63,11 +63,13 @@ mettre `INTERNAL_DEV_BYPASS=true` et passer `X-Internal-Key: <INTERNAL_API_KEY>`
   `refId` obligatoire sauf pour `manual`). Un hold ne change pas la
   propriété : `available = quantity - held`. La consommation d'un hold (`consume`) transfère
   réellement la propriété ; sa libération (`release`) rend les biens disponibles.
-- **POI** (`inventory_pois`) : point GPS `{x, y, z}` éventuellement entouré d'une zone
-  (`radiusM`), rattaché à une `scene` (préfixe) et/ou un `system`, avec un propriétaire
-  (`player`/`npc`/`corporation`/`political`/`system`) et une visibilité
-  (`private`/`public`). `parentId` est un uuid d'objet persistence opaque (nullable,
-  pas de FK). La table `inventory_poi_shares` ajoute des grants **lecture seule**
+- **POI** (`inventory_pois`) : point GPS `{x, y, z}` mesuré en mètres dans le **repère du
+  corps nommé par `scene`** (pas de triplet absolu : un corps orbite et tourne, donc un
+  repère absolu est périmé dès l'écriture). `scene: "space"` = espace ouvert, repère du
+  système lui-même. `radiusM` élargit le point en zone ; `system` doit être cohérent
+  avec `scene` (le corps doit appartenir au système). Un `parentId` est un uuid d'objet
+  persistence opaque (nullable, pas de FK). `visibility`
+  (`private`/`public`). La table `inventory_poi_shares` ajoute des grants **lecture seule**
   (player/npc/corporation/political) ; le propriétaire reste le seul à écrire.
   Transfert de propriété : `POST /api/me/pois/:poiId/transfer` (ou API interne).
   Lecture : owned ∪ granted ∪ public, plus les lectures `inventory:read` internes.

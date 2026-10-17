@@ -4,11 +4,11 @@
  * political entity or the reserved `system`) and can be shared read-only with other
  * players/entities, or have its ownership transferred.
  *
- * Unlike goods, POIs carry geometry: `x`/`y`/`z` (game units, assumed metres), an optional
- * `system`, an optional hierarchical `scene` path (same prefix convention as mission
- * zones: `tarsis_1` matches `tarsis_1/new-paris`, never `tarsis_10`) and an optional
- * `parentId` pointing at a persistence object (opaque UUID, no foreign key — Persistence
- * is not in this database).
+ * x/y/z are metres measured in the frame of the body named by `scene` (not absolute in
+ * the universe: a body orbits and spins, so an absolute triple is stale as soon as it is
+ * written). `scene` is the parent for matching; `"space"` is the frame of the system
+ * itself. `parentId` is an opaque UUID pointing at a persistence object (no foreign key
+ * — Persistence is not in this database).
  *
  * `radiusM = null` is a plain point; `radiusM >= 0` turns it into a zone. `visibility`
  * lets the game publish a POI to every player without a per-player share.
