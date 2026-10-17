@@ -43,6 +43,8 @@ Environment (see `.env.example`):
 | `ADMIN_BIND` | `0.0.0.0:9400` | Admin REST bind |
 | `ROSTER_PATH` | `config/npcs.yaml` | Roster file loaded at startup |
 | `NAMES_PATH` | `config/names.txt` | Name pool (one per line) |
+| `NPC_ACTIVE_COUNT` | all | How many of the first roster entries run at startup |
+| `SPAWN_STAGGER_MS` | `200` | Delay between two roster spawns |
 | `TICK_INTERVAL_MS` | `200` | Action scheduler tick |
 | `RECONNECT_BACKOFF_INITIAL_MS` | `1000` | WS reconnect backoff start |
 | `RECONNECT_BACKOFF_MAX_MS` | `30000` | WS reconnect backoff cap |
@@ -61,12 +63,45 @@ npcs:
 
 ## Admin REST
 
+Full spec: [`openapi.yaml`](openapi.yaml).
+
 | Method | Path | Body | Result |
 |---|---|---|---|
 | GET | `/healthz` | — | `ok` |
 | GET | `/npcs` | — | `{count, npcs:[{name, actions}]}` |
 | POST | `/npcs` | `NpcSpec` JSON | `201 {name}` |
 | DELETE | `/npcs/{name}` | — | `204` |
+| GET | `/npcs/roster` | — | `{total, target, running}` |
+| PUT | `/npcs/roster/active` | `{"count": 20}` (`null` = all) | `202 {total, target, running}` |
+| POST | `/npcs/roster/scale` | `{"delta": 50}` / `{"delta": -30}` | `202 {total, target, running}` |
+| POST | `/npcs/roster/reload` | — | `202 {total, target, running}` |
+
+### Controlling how many roster NPCs run
+
+The roster stays in memory in file order, with a *target*: the first `target`
+entries should be live. A background reconciler spawns the missing ones in file
+order, `SPAWN_STAGGER_MS` apart, and despawns the excess from the end of the
+roster (last in, first out). The roster endpoints return as soon as the target
+is set; `running` catches up over the following seconds. Scaling again mid-ramp
+takes effect immediately.
+
+- NPCs added with `POST /npcs` are not part of the roster and are never counted
+  or removed by these endpoints.
+- `reload` re-reads `ROSTER_PATH`: entries removed from the file are despawned,
+  new ones are spawned if within the target. A changed entry keeps running on
+  its old spec until it is despawned and respawned.
+
+`scripts/npcctl` wraps these calls (`NPC_ADMIN_URL`, default
+`http://localhost:9400`):
+
+```sh
+scripts/npcctl status      # {"total":300,"target":20,"running":20}
+scripts/npcctl set 20      # first 20 entries
+scripts/npcctl add 50      # 70
+scripts/npcctl remove 30   # 40
+scripts/npcctl set all
+scripts/npcctl reload
+```
 
 Example:
 

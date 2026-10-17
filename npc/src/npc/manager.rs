@@ -1,6 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
-use tokio::sync::{Mutex, oneshot};
+use futures_util::future::join_all;
+use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{info, warn};
 
 use serde::Serialize;
@@ -34,6 +39,40 @@ pub struct NpcScheduleReport {
     pub activity: Option<String>,
 }
 
+/// Roster counts for the admin API.
+#[derive(Debug, Serialize)]
+pub struct RosterStatus {
+    /// Entries in the roster file.
+    pub total: usize,
+    /// How many of the first roster entries should be live.
+    pub target: usize,
+    /// Roster NPCs live right now. Trails `target` while a staggered ramp runs.
+    pub running: usize,
+}
+
+/// The YAML roster, in file order, and how many of its first entries should be
+/// live. Ad-hoc NPCs (`POST /npcs`) are not part of it.
+struct Roster {
+    specs: Vec<NpcSpec>,
+    /// Desired live count. `None` = every entry, including ones a reload adds.
+    target: Option<usize>,
+    /// Bumped on every change, so a reconcile pass notices it went stale.
+    revision: u64,
+}
+
+impl Roster {
+    fn target(&self) -> usize {
+        self.target.map_or(self.specs.len(), |n| n.min(self.specs.len()))
+    }
+
+    /// Target after adding `delta`, clamped to `[0, specs.len()]`.
+    fn scaled(&self, delta: i64) -> usize {
+        (self.target() as i64)
+            .saturating_add(delta)
+            .clamp(0, self.specs.len() as i64) as usize
+    }
+}
+
 /// Owns every live NPC task and the name pool. Cloned via `Arc` everywhere.
 pub struct NpcManager {
     config: Arc<Config>,
@@ -45,6 +84,9 @@ pub struct NpcManager {
     /// election). Maintained on spawn/despawn, read-only from each runtime.
     workforce: Arc<DepotWorkforce>,
     npcs: Mutex<HashMap<String, NpcHandle>>,
+    roster: Mutex<Roster>,
+    /// Wakes the reconciler (see `spawn_reconciler`) after a roster change.
+    reconcile: Notify,
 }
 
 impl NpcManager {
@@ -62,34 +104,163 @@ impl NpcManager {
             }
         };
         Self {
-            config,
             names,
             clock_params,
             planets,
             schedule,
             workforce: Arc::new(DepotWorkforce::new()),
             npcs: Mutex::new(HashMap::new()),
+            roster: Mutex::new(Roster {
+                specs: Vec::new(),
+                target: config.npc_active_count,
+                revision: 0,
+            }),
+            reconcile: Notify::new(),
+            config,
         }
     }
 
-    /// Load `config/npcs.yaml` and spawn every NPC it lists.
-    pub async fn load_roster_file(&self, path: &str) -> Result<()> {
-        let raw = match std::fs::read_to_string(path) {
-            Ok(s) => s,
+    /// (Re)load the roster file. Live roster NPCs whose UUID left the file are
+    /// despawned; the rest is up to the reconciler. NPCs whose entry changed
+    /// keep running on their old spec until they are despawned and respawned.
+    pub async fn reload_roster(&self) -> Result<RosterStatus> {
+        let path = &self.config.roster_path;
+        let specs = match std::fs::read_to_string(path) {
+            Ok(raw) => serde_yaml::from_str::<RosterFile>(&raw)?.npcs,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!(%path, "no roster file; starting empty");
-                return Ok(());
+                info!(%path, "no roster file; roster is empty");
+                Vec::new()
             }
             Err(e) => return Err(NpcError::Io(e)),
         };
-        let roster: RosterFile = serde_yaml::from_str(&raw)?;
-        info!(count = roster.npcs.len(), %path, "loaded roster");
-        for spec in roster.npcs {
-            if let Err(e) = self.spawn(spec).await {
-                warn!(error = %e, "failed to spawn NPC from roster");
+        info!(count = specs.len(), %path, "loaded roster");
+
+        let new_uuids: HashSet<&str> = specs.iter().map(|s| s.uuid.as_str()).collect();
+        let dropped: HashSet<String> = {
+            let mut roster = self.roster.lock().await;
+            let dropped = roster
+                .specs
+                .iter()
+                .filter(|s| !new_uuids.contains(s.uuid.as_str()))
+                .map(|s| s.uuid.clone())
+                .collect();
+            roster.specs = specs;
+            roster.revision += 1;
+            dropped
+        };
+        if !dropped.is_empty() {
+            let running = self.running_by_uuid().await;
+            let names = dropped.iter().filter_map(|u| running.get(u));
+            self.despawn_all(names).await;
+        }
+        self.reconcile.notify_one();
+        Ok(self.roster_status().await)
+    }
+
+    /// Run the first `count` roster entries (`None` = all of them).
+    pub async fn set_roster_target(&self, count: Option<usize>) -> RosterStatus {
+        {
+            let mut roster = self.roster.lock().await;
+            roster.target = count;
+            roster.revision += 1;
+        }
+        self.reconcile.notify_one();
+        self.roster_status().await
+    }
+
+    /// Run `delta` more (or, negative, fewer) roster entries than the target.
+    pub async fn scale_roster(&self, delta: i64) -> RosterStatus {
+        {
+            let mut roster = self.roster.lock().await;
+            roster.target = Some(roster.scaled(delta));
+            roster.revision += 1;
+        }
+        self.reconcile.notify_one();
+        self.roster_status().await
+    }
+
+    pub async fn roster_status(&self) -> RosterStatus {
+        let (total, target, uuids) = {
+            let roster = self.roster.lock().await;
+            let uuids: HashSet<String> = roster.specs.iter().map(|s| s.uuid.clone()).collect();
+            (roster.specs.len(), roster.target(), uuids)
+        };
+        let running = self
+            .npcs
+            .lock()
+            .await
+            .values()
+            .filter(|h| uuids.contains(&h.spec.uuid))
+            .count();
+        RosterStatus { total, target, running }
+    }
+
+    /// Start the background task that keeps the live roster NPCs in line with
+    /// the target. Changes made before it starts are picked up on its first run.
+    pub fn spawn_reconciler(self: &Arc<Self>) {
+        let mgr = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                mgr.reconcile.notified().await;
+                mgr.reconcile_roster().await;
+            }
+        });
+    }
+
+    /// Despawn every live roster NPC past the target, then spawn the missing
+    /// ones in file order, `spawn_stagger_ms` apart. A roster change mid-ramp
+    /// restarts the pass, so scaling down doesn't wait for a ramp to finish.
+    async fn reconcile_roster(&self) {
+        let stagger = Duration::from_millis(self.config.spawn_stagger_ms);
+        'pass: loop {
+            let (specs, target, revision) = {
+                let roster = self.roster.lock().await;
+                (roster.specs.clone(), roster.target(), roster.revision)
+            };
+            let running = self.running_by_uuid().await;
+
+            // Last in, first out: the excess comes off the end of the roster.
+            let excess = specs[target..].iter().rev().filter_map(|s| running.get(&s.uuid));
+            self.despawn_all(excess).await;
+
+            let mut first = true;
+            for spec in &specs[..target] {
+                if running.contains_key(&spec.uuid) {
+                    continue;
+                }
+                if !first {
+                    tokio::time::sleep(stagger).await;
+                }
+                first = false;
+                if self.roster.lock().await.revision != revision {
+                    continue 'pass;
+                }
+                if let Err(e) = self.spawn(spec.clone()).await {
+                    warn!(error = %e, uuid = %spec.uuid, "failed to spawn NPC from roster");
+                }
+            }
+            return;
+        }
+    }
+
+    /// Live NPCs by UUID → name.
+    async fn running_by_uuid(&self) -> HashMap<String, String> {
+        self.npcs
+            .lock()
+            .await
+            .values()
+            .map(|h| (h.spec.uuid.clone(), h.name.clone()))
+            .collect()
+    }
+
+    /// Despawn several NPCs concurrently, logging (not failing on) errors.
+    async fn despawn_all<'a>(&self, names: impl IntoIterator<Item = &'a String>) {
+        let results = join_all(names.into_iter().map(|n| async move { (n, self.despawn(n).await) })).await;
+        for (name, res) in results {
+            if let Err(e) = res {
+                warn!(error = %e, npc = %name, "failed to despawn roster NPC");
             }
         }
-        Ok(())
     }
 
     /// Spawn a new NPC. Returns the assigned name.
@@ -275,5 +446,94 @@ impl NpcManager {
             });
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roster(len: usize, target: Option<usize>) -> Roster {
+        let specs = (0..len)
+            .map(|i| serde_yaml::from_str(&format!("uuid: \"u{i}\"")).unwrap())
+            .collect();
+        Roster { specs, target, revision: 0 }
+    }
+
+    #[test]
+    fn target_is_capped_by_roster_size() {
+        assert_eq!(roster(5, None).target(), 5);
+        assert_eq!(roster(5, Some(3)).target(), 3);
+        assert_eq!(roster(5, Some(50)).target(), 5);
+    }
+
+    #[test]
+    fn scaled_clamps_to_roster_bounds() {
+        let r = roster(10, Some(4));
+        assert_eq!(r.scaled(3), 7);
+        assert_eq!(r.scaled(-3), 1);
+        assert_eq!(r.scaled(50), 10);
+        assert_eq!(r.scaled(-50), 0);
+        assert_eq!(roster(10, None).scaled(-4), 6);
+    }
+
+    fn write_roster(path: &std::path::Path, count: usize) {
+        let mut yaml = String::from("npcs:\n");
+        for i in 0..count {
+            yaml.push_str(&format!("  - name: npc{i}\n    uuid: \"u{i}\"\n"));
+        }
+        std::fs::write(path, yaml).unwrap();
+    }
+
+    async fn live_names(mgr: &NpcManager) -> Vec<String> {
+        let mut names: Vec<String> = mgr.npcs.lock().await.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    // Paused time: the stagger sleeps resolve instantly. Horizon points at a
+    // closed local port, so the runtimes just sit in their reconnect backoff.
+    #[tokio::test(start_paused = true)]
+    async fn reconcile_follows_target_and_reload() {
+        let dir = std::env::temp_dir().join(format!("npc-roster-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("npcs.yaml");
+        write_roster(&path, 5);
+
+        let mut config = Config::from_env();
+        config.horizon_url = "ws://127.0.0.1:1".into();
+        config.roster_path = path.to_string_lossy().into_owned();
+        config.npc_active_count = Some(2);
+        config.spawn_stagger_ms = 100;
+        let mgr = NpcManager::new(
+            Arc::new(config),
+            Arc::new(ClockParams::new(5, 0, None, 1.0)),
+            PlanetCatalogHandle::empty(),
+            Arc::new(Schedule::empty()),
+        );
+
+        mgr.reload_roster().await.unwrap();
+        mgr.reconcile_roster().await;
+        assert_eq!(live_names(&mgr).await, ["npc0", "npc1"]);
+
+        mgr.scale_roster(2).await;
+        mgr.reconcile_roster().await;
+        assert_eq!(live_names(&mgr).await, ["npc0", "npc1", "npc2", "npc3"]);
+
+        mgr.scale_roster(-3).await;
+        mgr.reconcile_roster().await;
+        assert_eq!(live_names(&mgr).await, ["npc0"]);
+
+        mgr.set_roster_target(None).await;
+        mgr.reconcile_roster().await;
+        assert_eq!(mgr.roster_status().await.running, 5);
+
+        // Entries dropped from the file are despawned on reload.
+        write_roster(&path, 3);
+        let status = mgr.reload_roster().await.unwrap();
+        assert_eq!((status.total, status.target, status.running), (3, 3, 3));
+        assert_eq!(live_names(&mgr).await, ["npc0", "npc1", "npc2"]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

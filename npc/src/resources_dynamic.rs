@@ -123,6 +123,14 @@ impl PlanetCatalogHandle {
         }
     }
 
+    /// An empty catalogue (every lookup falls back), without any fetch.
+    #[cfg(test)]
+    pub fn empty() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(PlanetCatalog::default())),
+        }
+    }
+
     /// Rotation period for `planet_key`, or `fallback` when unknown.
     pub async fn rotation_h_or(&self, planet_key: &str, fallback: f64) -> f64 {
         self.inner.read().await.rotation_h_or(planet_key, fallback)

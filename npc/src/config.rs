@@ -11,6 +11,12 @@ pub struct Config {
     pub roster_path: String,
     /// Path to the text file containing the pool of NPC display names.
     pub names_path: String,
+    /// How many of the first roster entries to run at startup. `None` = all of
+    /// them. Changed at runtime through `/npcs/roster/*`.
+    pub npc_active_count: Option<usize>,
+    /// Delay (ms) between two consecutive roster spawns, so ramping up many
+    /// NPCs doesn't open all their Horizon sessions in the same instant.
+    pub spawn_stagger_ms: u64,
     /// Interval (ms) between action-scheduler ticks.
     pub tick_interval_ms: u64,
     /// Settling delay (ms) after a Horizon session is established before the
@@ -62,6 +68,15 @@ impl Config {
 
         let names_path =
             env::var("NAMES_PATH").unwrap_or_else(|_| "config/names.txt".to_string());
+
+        let npc_active_count = env::var("NPC_ACTIVE_COUNT")
+            .ok()
+            .and_then(|v| v.parse().ok());
+
+        let spawn_stagger_ms = env::var("SPAWN_STAGGER_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(200);
 
         let tick_interval_ms = env::var("TICK_INTERVAL_MS")
             .ok()
@@ -129,6 +144,8 @@ impl Config {
             admin_bind,
             roster_path,
             names_path,
+            npc_active_count,
+            spawn_stagger_ms,
             tick_interval_ms,
             action_startup_delay_ms,
             reconnect_backoff_initial_ms,

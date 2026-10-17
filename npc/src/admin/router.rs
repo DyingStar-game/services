@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{Router, routing::{delete, get}};
+use axum::{Router, routing::{delete, get, post, put}};
 use tower_http::trace::TraceLayer;
 
 use crate::npc::manager::NpcManager;
@@ -13,6 +13,10 @@ pub fn build_router(manager: Arc<NpcManager>) -> Router {
         .route("/npcs", get(handlers::list_npcs).post(handlers::create_npc))
         .route("/npcs/schedule", get(handlers::schedule_status))
         .route("/npcs/world", get(handlers::world_status))
+        .route("/npcs/roster", get(handlers::roster_status))
+        .route("/npcs/roster/active", put(handlers::set_roster_active))
+        .route("/npcs/roster/scale", post(handlers::scale_roster))
+        .route("/npcs/roster/reload", post(handlers::reload_roster))
         .route("/npcs/{name}", delete(handlers::delete_npc))
         .layer(TraceLayer::new_for_http())
         .with_state(manager)

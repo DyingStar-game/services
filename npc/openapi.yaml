@@ -1,0 +1,582 @@
+openapi: 3.1.0
+info:
+  title: DyingStar NPC Admin API
+  version: 1.0.0
+  description: >
+    Admin REST API of the NPC service. Each NPC is a Horizon client run inside
+    this process; this API adds and removes them at runtime, controls how many
+    entries of the YAML roster (`ROSTER_PATH`) are live, and exposes debug
+    views of their schedule and world state. Bound on `ADMIN_BIND`
+    (default `0.0.0.0:9400`). No authentication: keep it on an internal
+    network.
+
+servers:
+  - url: http://localhost:9400
+    description: Local development
+
+tags:
+  - name: health
+    description: Liveness
+  - name: npcs
+    description: Live NPCs, roster or ad hoc
+  - name: roster
+    description: >
+      How many of the first roster entries are live. A background reconciler
+      spawns the missing ones in file order, `SPAWN_STAGGER_MS` apart, and
+      despawns the excess from the end of the roster (last in, first out).
+      These endpoints return as soon as the target is set; `running` catches
+      up over the following seconds.
+  - name: debug
+    description: Diagnostics on what each NPC is doing and sees
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: healthz
+      summary: Liveness probe
+      responses:
+        '200':
+          description: The service is up
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: ok
+
+  /npcs:
+    get:
+      tags: [npcs]
+      operationId: listNpcs
+      summary: List live NPCs
+      description: Every live NPC, from the roster and ad hoc alike.
+      responses:
+        '200':
+          description: Live NPCs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NpcList'
+
+    post:
+      tags: [npcs]
+      operationId: createNpc
+      summary: Spawn an ad hoc NPC
+      description: >
+        Spawn an NPC outside the roster. It is never counted or removed by the
+        `/npcs/roster/*` endpoints; remove it with `DELETE /npcs/{name}`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NpcSpec'
+            example:
+              name: Alice
+              uuid: 8af0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+              action_profile: [detect_player_and_greet]
+      responses:
+        '201':
+          description: NPC spawned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name]
+                properties:
+                  name:
+                    type: string
+                    description: Assigned name (drawn from the name pool when the spec has none).
+        '409':
+          description: An NPC with this name is already live
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/InvalidBody'
+
+  /npcs/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: NPC name, as returned by `GET /npcs`.
+        schema:
+          type: string
+    delete:
+      tags: [npcs]
+      operationId: deleteNpc
+      summary: Despawn an NPC
+      description: >
+        Stop an NPC and close its Horizon session. Works on roster NPCs too,
+        but a roster NPC still within the target is respawned on the next
+        roster change (set, scale or reload); lower the target instead.
+      responses:
+        '204':
+          description: NPC despawned
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /npcs/roster:
+    get:
+      tags: [roster]
+      operationId: getRosterStatus
+      summary: Roster counts
+      responses:
+        '200':
+          description: Current roster counts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RosterStatus'
+
+  /npcs/roster/active:
+    put:
+      tags: [roster]
+      operationId: setRosterActive
+      summary: Set how many roster entries run
+      description: >
+        Run the first `count` roster entries. `null` or absent runs all of
+        them, including entries a later reload adds. A count above the roster
+        size runs the whole roster.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetActiveRequest'
+            examples:
+              first20:
+                summary: First 20 entries
+                value: { count: 20 }
+              all:
+                summary: Every entry
+                value: { count: null }
+      responses:
+        '202':
+          $ref: '#/components/responses/RosterAccepted'
+        '422':
+          $ref: '#/components/responses/InvalidBody'
+
+  /npcs/roster/scale:
+    post:
+      tags: [roster]
+      operationId: scaleRoster
+      summary: Run more or fewer roster entries
+      description: >
+        Add `delta` to the current target, clamped to `[0, total]`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScaleRequest'
+            examples:
+              up:
+                summary: 50 more
+                value: { delta: 50 }
+              down:
+                summary: 30 fewer
+                value: { delta: -30 }
+      responses:
+        '202':
+          $ref: '#/components/responses/RosterAccepted'
+        '422':
+          $ref: '#/components/responses/InvalidBody'
+
+  /npcs/roster/reload:
+    post:
+      tags: [roster]
+      operationId: reloadRoster
+      summary: Re-read the roster file
+      description: >
+        Re-read `ROSTER_PATH`. Live NPCs whose UUID left the file are
+        despawned; new entries within the target are spawned. An entry whose
+        content changed keeps running on its old spec until it is despawned
+        and respawned. A missing file empties the roster.
+      responses:
+        '202':
+          $ref: '#/components/responses/RosterAccepted'
+        '400':
+          description: The roster file is not valid YAML or does not match the schema
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /npcs/schedule:
+    get:
+      tags: [debug]
+      operationId: getScheduleStatus
+      summary: Planetary time and scheduled activity per NPC
+      description: >
+        For checking the shift rota as the planetary day drifts against real
+        time.
+      responses:
+        '200':
+          description: One report per live NPC
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, npcs]
+                properties:
+                  count:
+                    type: integer
+                  npcs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NpcScheduleReport'
+
+  /npcs/world:
+    get:
+      tags: [debug]
+      operationId: getWorldStatus
+      summary: What each NPC sees on its workplace
+      description: >
+        FSM status, position and the replicated properties of the workplace
+        object, which every depot behaviour gates on. First stop when an NPC
+        stands idle at its post.
+      responses:
+        '200':
+          description: One report per live NPC
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, npcs]
+                properties:
+                  count:
+                    type: integer
+                  npcs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NpcWorldReport'
+
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Vec3:
+      type: object
+      required: [x, y, z]
+      properties:
+        x: { type: number }
+        y: { type: number }
+        z: { type: number }
+
+    Place:
+      type: object
+      required: [uuid, position]
+      properties:
+        uuid:
+          type: string
+          description: UUID of the place object.
+        planet:
+          type: [string, 'null']
+          description: >
+            Planet key (`internal_name`); resolves the rotation period. Unset
+            = the service default (`PLANET_INTERNAL_NAME`).
+        position:
+          $ref: '#/components/schemas/Vec3'
+
+    TimingOverride:
+      type: object
+      description: >
+        Override of an action's default timing. Unset fields keep the default;
+        `0` on a duration clears it (no restriction).
+      properties:
+        once:
+          type: boolean
+          description: Run at most once per Horizon session.
+        cooldown_ms:
+          type: integer
+          minimum: 0
+          description: Minimum gap between the end of one run and the start of the next.
+        min_interval_ms:
+          type: integer
+          minimum: 0
+          description: Minimum gap between the starts of two runs.
+        timeout_ms:
+          type: integer
+          minimum: 0
+          description: Hard cap on a single run.
+
+    NpcSpec:
+      type: object
+      description: One NPC, as in the roster file or the body of `POST /npcs`.
+      required: [uuid]
+      properties:
+        name:
+          type: [string, 'null']
+          description: Display name. Unset = drawn from the name pool.
+        uuid:
+          type: string
+          description: Stable UUID, used as the JWT `sub` and the Horizon player identity.
+        action_profile:
+          type: array
+          description: Actions the NPC may run. Empty = idle forever.
+          items:
+            type: string
+            examples:
+              - detect_player_and_greet
+              - reception_players
+              - going_to_work
+              - depot_store_reception_to_temp_area
+              - depot_store_item
+              - depot_reception_coordinator
+              - go_to_meal
+              - mandatory_activity
+              - go_home
+              - take_a_walk
+              - go_to_point
+        schedule:
+          type: [string, 'null']
+          description: >
+            Shift pattern from `schedules.yaml` gating actions per planetary
+            hour. Unset = no gating.
+        place_where_work:
+          description: Workplace. Unset = stays in its habitation.
+          oneOf:
+            - $ref: '#/components/schemas/Place'
+            - type: 'null'
+        home:
+          description: Off-shift destination. Unset = the spawn position.
+          oneOf:
+            - $ref: '#/components/schemas/Place'
+            - type: 'null'
+        meal_place:
+          description: Common zone for meals; target of `go_to_meal`.
+          oneOf:
+            - $ref: '#/components/schemas/Place'
+            - type: 'null'
+        mandatory_place:
+          description: Area for mandatory activities; target of `mandatory_activity`.
+          oneOf:
+            - $ref: '#/components/schemas/Place'
+            - type: 'null'
+        action_timing:
+          type: object
+          description: Per-action timing overrides, keyed by action name.
+          additionalProperties:
+            $ref: '#/components/schemas/TimingOverride'
+        depot_store_reception_to_temp_area:
+          oneOf:
+            - type: object
+              properties:
+                boxes_type_allowed:
+                  type: array
+                  description: Accepted box scenes (e.g. `hauling_box.tscn`). Empty disables the action.
+                  items:
+                    type: string
+            - type: 'null'
+        depot_store_item:
+          oneOf:
+            - type: object
+              properties:
+                stand_distance_m:
+                  type: [number, 'null']
+                  description: Metres in front of the shelf face. Default 1.0.
+            - type: 'null'
+        take_a_walk:
+          oneOf:
+            - type: object
+              properties:
+                radius_m:
+                  type: [number, 'null']
+                  description: Radius of the disc each next point is drawn from. Default 100.
+                pause_s:
+                  type: [integer, 'null']
+                  minimum: 0
+                  description: Pause at each reached point. Default 30.
+                max_distance_m:
+                  type: [number, 'null']
+                  description: Max distance from the spawn position. Unset = no limit.
+            - type: 'null'
+
+    NpcList:
+      type: object
+      required: [count, npcs]
+      properties:
+        count:
+          type: integer
+        npcs:
+          type: array
+          items:
+            type: object
+            required: [name, actions]
+            properties:
+              name:
+                type: string
+              actions:
+                type: array
+                description: The NPC's `action_profile`.
+                items:
+                  type: string
+              schedule:
+                type: [string, 'null']
+
+    RosterStatus:
+      type: object
+      required: [total, target, running]
+      properties:
+        total:
+          type: integer
+          description: Entries in the roster file.
+        target:
+          type: integer
+          description: How many of the first roster entries should be live.
+        running:
+          type: integer
+          description: Roster NPCs live right now. Trails `target` while a staggered ramp runs.
+      example:
+        total: 300
+        target: 70
+        running: 42
+
+    SetActiveRequest:
+      type: object
+      properties:
+        count:
+          type: [integer, 'null']
+          minimum: 0
+          description: Entries to run. `null`/absent = all.
+
+    ScaleRequest:
+      type: object
+      required: [delta]
+      properties:
+        delta:
+          type: integer
+          description: Entries to add (positive) or remove (negative).
+
+    NpcStatus:
+      type: string
+      description: The NPC's state-machine status.
+      enum:
+        - Idle
+        - AtHome
+        - GoingToWork
+        - AtWork
+        - OnBreak
+        - Driving
+        - GoingHome
+        - GoingToMeal
+        - AtMeal
+        - GoingToMandatory
+        - DoingMandatory
+        - Walking
+        - WalkPause
+
+    NpcScheduleReport:
+      type: object
+      required: [name, planet, rotation_h, day, hour]
+      properties:
+        name:
+          type: string
+        planet:
+          type: string
+          description: Planet key the clock is resolved for.
+        rotation_h:
+          type: number
+          description: Planet rotation period (hours).
+        schedule:
+          type: [string, 'null']
+        day:
+          type: integer
+          description: Rota day.
+        hour:
+          type: integer
+          description: Planetary hour.
+        activity:
+          description: Scheduled activity now; `null` when the NPC has no schedule.
+          oneOf:
+            - type: string
+              enum: [work, transmission, meal, mandatory, 'off']
+            - type: 'null'
+
+    NpcWorldReport:
+      type: object
+      required: [name, connected, work_uuid]
+      description: >
+        When `connected` is false (off shift, or reconnecting) only `name`,
+        `connected`, `status` and `work_uuid` are present.
+      properties:
+        name:
+          type: string
+        connected:
+          type: boolean
+          description: Whether the NPC has a live Horizon session.
+        status:
+          oneOf:
+            - $ref: '#/components/schemas/NpcStatus'
+            - type: 'null'
+        work_uuid:
+          type: [string, 'null']
+          description: UUID of `place_where_work`.
+        my_uuid:
+          type: string
+        my_parent:
+          type: [string, 'null']
+          description: Object the NPC's position is relative to.
+        my_position:
+          oneOf:
+            - $ref: '#/components/schemas/Vec3'
+            - type: 'null'
+        npc_arrived:
+          type: boolean
+          description: Server-side flag the travel actions wait on.
+        objects_in_view:
+          type: integer
+        players_in_view:
+          type: integer
+        depot:
+          type: object
+          required: [in_view]
+          properties:
+            in_view:
+              type: boolean
+            object_type:
+              type: string
+            props:
+              type: object
+              description: Every replicated property of the workplace object.
+              additionalProperties: true
+
+  responses:
+    RosterAccepted:
+      description: >
+        Target set; the reconciler applies it in the background.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RosterStatus'
+    NotFound:
+      description: No live NPC with this name
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InvalidBody:
+      description: >
+        Body rejected by the JSON extractor (axum): `422` when it doesn't match
+        the schema, `400` when it isn't valid JSON, `415` without
+        `Content-Type: application/json`. The response body is plain text.
+      content:
+        text/plain:
+          schema:
+            type: string
+    InternalError:
+      description: Internal error (e.g. the roster file is unreadable)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

@@ -4,7 +4,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{SeedableRng, rngs::StdRng};
 use tokio::{
     sync::{Mutex, oneshot},
     time,
@@ -127,18 +127,6 @@ pub async fn run(
         None => None,
     };
     info!(npc = %name, planet = %planet_key, rotation_h, schedule = ?pattern, "planetary clock resolved");
-
-    // Random stagger delay (1 000 – 60 000 ms) so NPCs don't all connect at once.
-    let delay_ms = rand::thread_rng().gen_range(1_000u64..=300_000u64);
-    info!(npc = %name, delay_ms, "waiting before initial connect");
-    tokio::select! {
-        biased;
-        _ = &mut stop_rx => {
-            info!(npc = %name, "stop requested during initial delay");
-            return;
-        }
-        _ = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
-    }
 
     let tick = Duration::from_millis(config.tick_interval_ms);
     let startup_delay = Duration::from_millis(config.action_startup_delay_ms);

@@ -78,10 +78,12 @@ async fn main() -> anyhow::Result<()> {
         schedule,
     ));
 
-    // Load roster from YAML (non-fatal if file missing).
-    if let Err(e) = manager.load_roster_file(&config.roster_path).await {
+    // Load roster from YAML (non-fatal if file missing). The reconciler spawns
+    // its first NPC_ACTIVE_COUNT entries, SPAWN_STAGGER_MS apart.
+    if let Err(e) = manager.reload_roster().await {
         tracing::warn!(error = %e, path = %config.roster_path, "Failed to load roster file");
     }
+    manager.spawn_reconciler();
 
     let app = admin::router::build_router(Arc::clone(&manager));
     let listener = TcpListener::bind(&config.admin_bind)

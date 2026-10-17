@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Control how many roster NPCs (config/npcs.yaml) are live, via the admin API.
+#
+#   npcctl status         # {total, target, running}
+#   npcctl set 20         # run the first 20 roster entries
+#   npcctl set all        # run every roster entry
+#   npcctl add 50         # 50 more
+#   npcctl remove 30      # 30 fewer (last spawned go first)
+#   npcctl reload         # re-read the roster file
+#
+# NPC_ADMIN_URL overrides the API base (default http://localhost:9400).
+set -euo pipefail
+
+base="${NPC_ADMIN_URL:-http://localhost:9400}"
+
+usage() {
+    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+}
+
+is_count() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+
+call() {
+    curl -sS --fail-with-body -X "$1" "$base$2" \
+        -H 'Content-Type: application/json' ${3:+-d "$3"}
+    echo
+}
+
+case "${1:-}" in
+    status) call GET /npcs/roster ;;
+    set)
+        if [[ "${2:-}" == all ]]; then call PUT /npcs/roster/active '{"count":null}'
+        elif is_count "${2:-}"; then call PUT /npcs/roster/active "{\"count\":$2}"
+        else usage; fi ;;
+    add)    is_count "${2:-}" || usage; call POST /npcs/roster/scale "{\"delta\":$2}" ;;
+    remove) is_count "${2:-}" || usage; call POST /npcs/roster/scale "{\"delta\":-$2}" ;;
+    reload) call POST /npcs/roster/reload ;;
+    *) usage ;;
+esac

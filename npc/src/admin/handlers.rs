@@ -5,9 +5,16 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{error::Result, npc::{manager::NpcManager, spec::NpcSpec}};
+use crate::{
+    error::Result,
+    npc::{
+        manager::{NpcManager, RosterStatus},
+        spec::NpcSpec,
+    },
+};
 
 pub async fn healthz() -> &'static str {
     "ok"
@@ -53,4 +60,43 @@ pub async fn delete_npc(
 ) -> Result<StatusCode> {
     mgr.despawn(&name).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn roster_status(State(mgr): State<Arc<NpcManager>>) -> Json<RosterStatus> {
+    Json(mgr.roster_status().await)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetActive {
+    /// How many of the first roster entries to run; `null`/absent = all.
+    #[serde(default)]
+    pub count: Option<usize>,
+}
+
+/// Spawning is staggered in the background: the response carries the new
+/// target, and `running` catches up over the following seconds.
+pub async fn set_roster_active(
+    State(mgr): State<Arc<NpcManager>>,
+    Json(body): Json<SetActive>,
+) -> (StatusCode, Json<RosterStatus>) {
+    (StatusCode::ACCEPTED, Json(mgr.set_roster_target(body.count).await))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Scale {
+    /// Roster entries to add (positive) or remove (negative).
+    pub delta: i64,
+}
+
+pub async fn scale_roster(
+    State(mgr): State<Arc<NpcManager>>,
+    Json(body): Json<Scale>,
+) -> (StatusCode, Json<RosterStatus>) {
+    (StatusCode::ACCEPTED, Json(mgr.scale_roster(body.delta).await))
+}
+
+pub async fn reload_roster(
+    State(mgr): State<Arc<NpcManager>>,
+) -> Result<(StatusCode, Json<RosterStatus>)> {
+    Ok((StatusCode::ACCEPTED, Json(mgr.reload_roster().await?)))
 }
