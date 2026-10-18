@@ -83,7 +83,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `owns_items` (prérequis) | mining, delivery, transport |
 
 **Kinds d'objectifs** (registre `src/kinds/objectives/`) — 2 modes d'évaluation :
-- **`service`** — le service mesure contre l'état du joueur (présence + biens portés) via **`POST /:missionId/verify`** : `visit` (présence dans le POI, latché), `deliver_material` (biens `carried` dans la zone de livraison, high-water mark), `transport` (latch `pickedUpAt` + livraison, high-water mark), `transport_passenger` (passager dans le POI, high-water mark), `owns_items` (instantané inventaire, peut régresser) ;
+- **`service`** — le service mesure contre l'état du joueur (présence + biens portés) via **`POST /:missionId/verify`** : `visit` (présence dans le POI, latché), `deliver_material` (biens `carried` dans la zone de livraison, high-water mark ; `scope: 'all'` **cumule tous les assignés actifs actuellement dans la cible**, un porteur hors cible ne compte pas — idempotent, la somme globale est recalculée à chaque mesure), `transport` (latch `pickedUpAt` + livraison, high-water mark), `transport_passenger` (passager dans le POI, high-water mark), `owns_items` (instantané inventaire, peut régresser) ;
 - **`issuer`** — le créateur confirme : `manual` (`POST /:missionId/objectives/:objectiveId/confirm`, réservé au créateur ; le jeu confirme via l'API interne).
 
 **Sémantique high-water mark** : `visit`, `deliver_material`, `transport` et `transport_passenger` ne régressent jamais — `progress = max(stored, measured)`. Une livraison partielle reste créditée (`allowPartial: true` paie le ratio en crédits) et l'auto-complétion se déclenche à 100 %.

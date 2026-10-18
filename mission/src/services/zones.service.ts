@@ -55,6 +55,20 @@ export function scenesCompatible(a: string | null | undefined, b: string | null 
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
+/**
+ * Converts a player-state `place` (`{system, scene, x, y, z}`) into the shape
+ * `zoneMatches` understands. A `place` without coordinates yields a `null` position,
+ * which the radius branch treats as "no position" (never matches a radius).
+ */
+export function placeToLocation(
+  place: { system?: string; scene?: string; x?: number; y?: number; z?: number } | null | undefined,
+): ZoneLocation | null {
+  if (!place) return null;
+  const { system, scene, x, y, z } = place;
+  const position = x !== undefined && y !== undefined && z !== undefined ? { x, y, z } : null;
+  return { system, scene, position };
+}
+
 /** Squared euclidean distance (NaN-safe: missing coordinates never match). */
 function distanceSquared(
   a: { x: number; y: number; z: number },
