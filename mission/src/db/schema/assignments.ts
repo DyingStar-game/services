@@ -22,6 +22,9 @@ export const ASSIGNMENT_STATUSES = [
 ] as const;
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
 
+/** The only status that counts as "a player has committed to this mission". */
+export const ACTIVE_ASSIGNMENT_STATUS = 'active';
+
 /** Kinds of assignee (players and NPCs both have Economy wallets and Inventory holdings). */
 export const ASSIGNEE_HOLDER_TYPES = ['player', 'npc'] as const;
 export type AssigneeHolderType = (typeof ASSIGNEE_HOLDER_TYPES)[number];

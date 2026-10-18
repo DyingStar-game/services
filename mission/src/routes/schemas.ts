@@ -337,6 +337,11 @@ export const internalAssignBody = z.object({
   holderType: z.enum(ASSIGNEE_HOLDER_TYPES).default('player'),
 });
 
+/** POI ids whose "in use by a mission" status is being asked about (Inventory lock). */
+export const poiUsageBody = z
+  .object({ poiIds: z.array(uuidSchema).min(1).max(200) })
+  .strict();
+
 /** Player position, relative to the body named by `scene` (local frame, metres). */
 export const placeSchema = z
   .object({

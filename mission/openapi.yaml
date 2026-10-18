@@ -1170,6 +1170,49 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /api/internal/poi-usage:
+    post:
+      tags: [internal]
+      summary: Which POIs are locked by a mission with an active assignee
+      description: >
+        Inventory calls this before letting a player move a POI (`PATCH /api/me/pois/{poiId}`).
+        A POI referenced by a mission whose assignment is **active** may not move, so the
+        destination of an accepted contract never changes under the acceptor's feet. A mission
+        created but never accepted (or whose only assignments are terminal) does not lock.
+        Both references count: an availability zone (`missions.zones[].poiId`) and an objective
+        target (`params.zone.poiId`, plus `params.source.poiId` for `transport`).
+        Requires the `mission:read` service role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [poiIds]
+              properties:
+                poiIds:
+                  type: array
+                  maxItems: 200
+                  items: { type: string, format: uuid }
+            example:
+              poiIds: ["3f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"]
+      responses:
+        '200':
+          description: >
+            Map of `poiId` → mission ids locking it. A POI absent from the map is free to move.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: array
+                  items: { type: string, format: uuid }
+              example:
+                "3f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d":
+                  - "9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d"
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
 components:
   securitySchemes:
     bearerAuth:

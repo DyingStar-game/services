@@ -34,6 +34,7 @@ import { settleMissionRewards } from '../services/rewards.service.js';
 import { runExpirySweep } from '../scheduler.js';
 import { getInternalMissionDetail } from '../services/detail.service.js';
 import { upsertPlayerStates } from '../services/playerStates.service.js';
+import { findPoisInUse } from '../services/poiUsage.service.js';
 import {
   createMissionBody,
   eventBody,
@@ -45,6 +46,7 @@ import {
   objectiveParams,
   playerIdParams,
   playerStatesBody,
+  poiUsageBody,
   settleBody,
   shareBody,
   internalVerifyBody,
@@ -292,5 +294,23 @@ internalRoutes.get(
       limit,
       offset,
     });
+  }),
+);
+
+// ── POI usage (Inventory lock) ───────────────────────────────────────────────
+
+/**
+ * POST /poi-usage — Which of the given POIs are referenced by a mission with at least one
+ * **active** assignment. Called by Inventory before it lets a player move a POI: a POI in
+ * use cannot move, so the destination of an accepted contract never changes under the
+ * acceptor's feet (`POI_IN_USE`).
+ */
+internalRoutes.post(
+  '/poi-usage',
+  requireServiceRole(SERVICE_ROLES.missionRead),
+  validate(poiUsageBody),
+  asyncHandler(async (req, res) => {
+    const usage = await findPoisInUse(req.body.poiIds);
+    res.json(Object.fromEntries(usage));
   }),
 );

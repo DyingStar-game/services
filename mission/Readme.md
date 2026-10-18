@@ -267,12 +267,14 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/internal/missions/:missionId/complete` `{playerId, force?, settle?, partial?}` | `mission:complete` | Compléter tous les participants (revérifie ; `force` pour outrepasser, `partial` pour une remise proportionnelle) |
 | POST | `/api/internal/missions/:missionId/settle` `{playerId}` | `mission:complete` | Rejouer le règlement des composants non réglés (idempotent) |
 | GET | `/api/internal/players/:playerId/missions` | `mission:read` | Assignations d'un joueur (+ mission) |
+| POST | `/api/internal/poi-usage` `{poiIds[]}` | `mission:read` | **Verrou POI** : quels POI sont référencés par une mission à assignation **active** (zone `params.zone`, + `params.source` pour `transport`) → `{poiId: missionIds[]}` ; utilisé par Inventory avant de laisser déplacer un POI (`POI_IN_USE`) |
 
 **Auth de service** : le garde est monté sur le préfixe (`app.use('/api/internal', serviceAuth, …)`), donc toute route ajoutée ici reste protégée. Le token doit venir d'un des clients `INTERNAL_SERVICE_CLIENTS` (`azp`), viser `OIDC_SERVICE_AUDIENCE`, puis détenir le rôle de capacité de la route — sinon `403 SERVICE_FORBIDDEN`/`FORBIDDEN`. Un token joueur ne peut jamais avoir un `azp` de service : c'est la garantie de non-contournement.
 
 ### Configuration Keycloak requise
 - Client de service `svc-game` (serveur de jeu) autorisé dans `INTERNAL_SERVICE_CLIENTS`, avec les rôles `mission:read`, `mission:write`, `mission:progress`, `mission:complete`.
 - Client de service `svc-universesimulator` (simulateur d'univers, missions de transport/minage au nom d'une fédération) autorisé dans `INTERNAL_SERVICE_CLIENTS`, avec `mission:read`, `mission:write` **et `mission:escrow:politics`**.
+- Client de service `svc-inventory` (registre POI, verrouillage des déplacements de POI) autorisé dans `INTERNAL_SERVICE_CLIENTS`, avec le rôle **`mission:read`**.
 
 | Rôle de service | Accorde |
 |---|---|
