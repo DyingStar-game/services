@@ -15,6 +15,8 @@ import { getHolderInventory, getStack } from '../services/inventory.service.js';
 import {
   assertCorporationManage,
   assertPoliticalManage,
+  assertPoiGeometryEditable,
+  assertPoiNotInUse,
   assertPoiWriteAccess,
   createPoi,
   deletePoi,
@@ -90,6 +92,9 @@ meRoutes.post(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { owner, ...input } = req.body;
+    // The acting player is always recorded: geometry stays editable by whoever placed the
+    // POI, for their own, their corporation's or a mission's POIs alike.
+    input.createdBy = player.id;
     let holder: { ownerType: PoiOwnerType; ownerId: string } = {
       ownerType: 'player',
       ownerId: player.id,
@@ -102,7 +107,6 @@ meRoutes.post(
       holder = { ownerType: 'political', ownerId: owner.id };
     } else if (owner?.type === 'mission') {
       holder = { ownerType: 'mission', ownerId: MISSION_POI_OWNER_ID };
-      input.createdBy = player.id;
       input.visibility = 'private';
     }
     res.status(201).json(await createPoi(holder, input));
@@ -121,7 +125,16 @@ meRoutes.get(
   }),
 );
 
-/** PATCH /pois/:poiId — Edit a POI the player manages (ownership unchanged). Geometry is immutable. */
+/**
+ * PATCH /pois/:poiId — Edit a POI the player manages (ownership unchanged).
+ *
+ * Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) may be corrected **by the player
+ * who created the POI**, or by a member managing an organization POI: the criterion is the
+ * creator because the same player can create a POI of their own, of their corporation or of
+ * a mission, and in all three cases they are the one who placed it. It is refused while the
+ * POI is the destination of a mission someone has accepted (`400 POI_IN_USE`), so a
+ * contract's delivery radius never moves under the acceptor's feet.
+ */
 meRoutes.patch(
   '/pois/:poiId',
   validate(poiParams, 'params'),
@@ -130,16 +143,11 @@ meRoutes.patch(
     const player = requirePlayer(req);
     const poi = await requirePoi(req.params.poiId);
     await assertPoiWriteAccess(poi, player.id);
-    // P1: geometry is write-once at creation; only the internal API may change it.
     const G = ['system', 'scene', 'x', 'y', 'z', 'radiusM'] as const;
     const touched = G.filter((f) => req.body[f] !== undefined);
     if (touched.length > 0) {
-      res.status(400).json({
-        error: 'POI_GEOMETRY_READONLY',
-        message: `Geometry fields (${touched.join(', ')}) are immutable after creation; use the internal API`,
-        status: 400,
-      });
-      return;
+      assertPoiGeometryEditable(poi, player.id);
+      await assertPoiNotInUse(poi.id);
     }
     res.json(await updatePoi(poi.id, req.body));
   }),

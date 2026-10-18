@@ -26,6 +26,7 @@ import {
 import { t } from '../i18n/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
+import { isMissionConfigured, isPoiInUse } from './mission.client.js';
 import { authorizeAction, isSocialConfigured } from './social.client.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -565,4 +566,49 @@ export async function requirePoi(poiId: string): Promise<InventoryPoi> {
   const poi = await getPoi(poiId);
   if (!poi) throw notFound(t('not_found.poi', { id: poiId }));
   return poi;
+}
+
+/**
+ * Requires that a POI's geometry may be moved. The criterion is the **creator**, not the
+ * owner: a player can create a POI of their own, of their corporation or of a mission, and
+ * in all three cases they are the one who placed it. An organization POI stays editable by
+ * a member holding `inventory:poi:manage`, whoever created it. A system POI never moves.
+ *
+ * Call after {@link assertPoiWriteAccess}, which has already established that the caller
+ * manages the POI in the ordinary sense (owner, org manager, or mission creator).
+ * @param poi - POI about to be moved.
+ * @param playerId - Acting player.
+ * @throws 403 `NOT_POI_OWNER` when the caller neither created the POI nor manages an org.
+ */
+export function assertPoiGeometryEditable(poi: InventoryPoi, playerId: string): void {
+  if (poi.ownerType === 'system') {
+    throw new HttpError(403, 'POI_SYSTEM_OWNER_FORBIDDEN', t('poi.system_owner'));
+  }
+  const creator = poi.createdBy === playerId;
+  const managesOrg = poi.ownerType === 'corporation' || poi.ownerType === 'political';
+  if (!creator && !managesOrg) {
+    throw new HttpError(403, 'NOT_POI_OWNER', t('poi.not_owner'));
+  }
+}
+
+/**
+ * Requires that a POI is not referenced by a mission someone has accepted: a destination
+ * may not change under the acceptor's feet.
+ *
+ * Fails **closed**: when the Mission integration is not configured the lock is inert
+ * (nothing is known to be in use), but any error — outage, timeout, non-2xx — refuses the
+ * move rather than let a contract's destination change during an incident.
+ * @param poiId - POI about to be moved.
+ * @throws 400 `POI_IN_USE` when the POI is the target of a mission with an active assignee.
+ * @throws 503 `POI_IN_USE_CHECK_FAILED` when the check itself could not be performed.
+ */
+export async function assertPoiNotInUse(poiId: string): Promise<void> {
+  if (!isMissionConfigured()) return;
+  let inUse: boolean;
+  try {
+    inUse = await isPoiInUse(poiId);
+  } catch {
+    throw new HttpError(503, 'POI_IN_USE_CHECK_FAILED', t('poi.in_use_check_failed'));
+  }
+  if (inUse) throw new HttpError(400, 'POI_IN_USE', t('poi.in_use'));
 }

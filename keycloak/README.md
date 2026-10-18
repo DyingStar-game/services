@@ -122,6 +122,9 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 > and `inventory:read` on
 > `inventory-api` (objectives `owns_items` / `deliver_material` / `transport` / `transport_passenger`,
 > zone POI resolution).
+> The inventory service (`svc-inventory`) needs `mission:read` on
+> `mission-api` (`POST /api/internal/poi-usage`): before it may move a POI's geometry it asks
+> Mission which POIs are the destination of a mission someone has accepted.
 > The chat auth adapter (`svc-chat`, chart `textchat`) is read-only on `social-api` and needs
 > exactly four roles: `social:profile:read` (friendship probe for DM topics),
 > `social:group:read`, `social:corporation:read` and `social:sanctions:read` (mutes/bans).

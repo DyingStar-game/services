@@ -222,9 +222,14 @@ paths:
       tags: [me]
       summary: Edit a POI the caller manages (ownership unchanged)
       description: >
-        Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) is **immutable after
-        creation**; only the internal API may change it. Returns `400 POI_GEOMETRY_READONLY`
-        if any geometry field is present.
+        Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) may be corrected **by the
+        player who created the POI**, or by a member holding the organization's manage
+        permission: the criterion is the creator, because the same player can create a POI
+        of their own, of their corporation or of a mission, and in all three cases they are
+        the one who placed it. It is refused (`400 POI_IN_USE`) while the POI is the
+        destination of a mission someone has accepted. A moved geometry is still validated
+        for system/scene coherence. Non-geometry fields (name, description, visibility,
+        metadata, shares) are unaffected by any of this.
       parameters:
         - $ref: '#/components/parameters/poiId'
       requestBody:
@@ -238,11 +243,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Poi' }
-        '400': { $ref: '#/components/responses/ValidationError' }
+        '400':
+          description: >
+            Validation error, incoherent `system`/`scene` (`POI_SCENE_SYSTEM_MISMATCH`), or
+            the POI is the destination of a mission someone has accepted (`POI_IN_USE`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/PoiForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '503': { $ref: '#/components/responses/SocialUnavailable' }
+        '503': { $ref: '#/components/responses/MissionUnavailable' }
     delete:
       tags: [me]
       summary: Delete a POI the caller manages (shares cascade)
@@ -1000,6 +1011,15 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
 
+    MissionUnavailable:
+      description: >
+        The Mission service could not be consulted about whether a POI is the destination
+        of a mission someone has accepted (`MISSION_NOT_CONFIGURED`, `MISSION_LOOKUP_FAILED`,
+        `MISSION_AUTH_FAILED`). The move is refused rather than allowed through.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
   schemas:
     Error:
       type: object
@@ -1008,7 +1028,7 @@ components:
         error:
           type: string
           description: Machine-readable code
-          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, INSUFFICIENT_CARRIED, NOT_POI_OWNER, POI_ALREADY_SHARED, POI_NOT_SHARED, POI_SELF_SHARE, POI_TRANSFER_SELF, POI_SYSTEM_OWNER_FORBIDDEN, POI_GEOMETRY_READONLY, POI_SCENE_SYSTEM_MISMATCH, POI_PARENT_NOT_FOUND, POI_PARENT_CYCLE, INVALID_DELTA, DESTINATION_REQUIRED, DESTINATION_SELF, SOURCE_SELF, CARRIED_COUNTERPARTY_MISMATCH, ORG_PERMISSION_REQUIRED, INTERNAL_ERROR]
+          examples: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, SERVICE_FORBIDDEN, NOT_CORPORATION_MEMBER, NOT_FOUND, CONFLICT, INSUFFICIENT_GOODS, INSUFFICIENT_CARRIED, NOT_POI_OWNER, POI_ALREADY_SHARED, POI_NOT_SHARED, POI_SELF_SHARE, POI_TRANSFER_SELF, POI_SYSTEM_OWNER_FORBIDDEN, POI_IN_USE, POI_IN_USE_CHECK_FAILED, POI_SCENE_SYSTEM_MISMATCH, POI_PARENT_NOT_FOUND, POI_PARENT_CYCLE, INVALID_DELTA, DESTINATION_REQUIRED, DESTINATION_SELF, SOURCE_SELF, CARRIED_COUNTERPARTY_MISMATCH, ORG_PERMISSION_REQUIRED, INTERNAL_ERROR]
         message: { type: string }
         status: { type: integer }
 
@@ -1283,14 +1303,21 @@ components:
       type: object
       description: >
         Partial patch for the player route (`PATCH /api/me/pois/{poiId}`); at least one
-        field must be present. **Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) is
-        immutable after creation** — only the internal API may change it. Returns
-        `400 POI_GEOMETRY_READONLY` if any geometry field is present.
+        field must be present. **Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) may
+        be moved by the POI's creator** (or by a member managing an organization POI), and
+        only when the POI is not the destination of a mission someone has accepted.
+        Non-geometry fields are editable by anyone who manages the POI.
       minProperties: 1
       properties:
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { type: [string, 'null'], maxLength: 2000 }
+        system: { type: [string, 'null'], maxLength: 64, description: 'Star system; always a system name in practice (`""` is legacy); `null` = unconstrained' }
+        scene: { type: [string, 'null'], maxLength: 128, description: 'Body or subtree in whose local frame `x`/`y`/`z` are expressed' }
         parentId: { type: [string, 'null'], format: uuid }
+        x: { type: number, description: 'Metres, in the frame of the body named by `scene`' }
+        y: { type: number, description: 'Metres, in the frame of the body named by `scene`' }
+        z: { type: number, description: 'Metres, in the frame of the body named by `scene`' }
+        radiusM: { type: [number, 'null'], minimum: 0, description: 'Reach radius; `null`/`0` = point POI (scene subtree)' }
         visibility: { $ref: '#/components/schemas/PoiVisibility' }
         metadata: { type: [object, 'null'], additionalProperties: true }
 
