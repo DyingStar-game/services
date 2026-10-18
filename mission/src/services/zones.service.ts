@@ -14,6 +14,8 @@
  *   are compatible when they are equal or one is a segment prefix of the other
  *   (`tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`, never `tarsis_10`).
  *   A POI whose scene is `null` never matches (fail-closed: no frame to compare in).
+ *   The POI's own `radiusM` is the only radius that exists — a zone carries none of its
+ *   own, so availability and an objective's target share the same disc.
  *
  * Two implementations of the same semantics:
  * - `zoneFilterSql` for the listing (database-side; the resolved geometries are injected
@@ -146,7 +148,8 @@ export function zoneMatches(
     if (!poi) continue; // unknown/deleted POI: fail closed
     if (poi.system !== null && poi.system !== undefined && location.system !== poi.system) continue;
 
-    const radius = zone.radiusM ?? poi.radiusM;
+    // The POI's own radius is the only one that exists: a zone carries no radius (§3.4).
+    const radius = poi.radiusM;
     if (radius !== null) {
       // Area: the scene must be compatible before any distance comparison in the shared frame.
       if (!scenesCompatible(location.scene, poi.scene)) continue;
@@ -202,20 +205,6 @@ export function zoneFilterSql(location: ZoneLocation | null | undefined, poiGeom
           and (${poi()}->>'system' is null or ${poi()}->>'system' = ${system}::text)
           and (
             case
-              when (z->>'radiusM') is not null then (
-                (${poi()}->>'scene') is not null
-                and ${scene}::text is not null
-                and (
-                  ${scene}::text = (${poi()}->>'scene')
-                  or left(${scene}::text, length(${poi()}->>'scene') + 1) = (${poi()}->>'scene') || '/'
-                  or left((${poi()}->>'scene'), length(${scene}::text) + 1) = ${scene}::text || '/'
-                )
-                and (
-                  (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
-                  + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
-                  + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
-                ) <= ((z->>'radiusM')::float8) ^ 2
-              )
               when (${poi()}->>'radiusM') is not null then (
                 (${poi()}->>'scene') is not null
                 and ${scene}::text is not null
@@ -266,13 +255,12 @@ export async function assertMissionZone(mission: Mission, playerId: string): Pro
 }
 
 /**
- * Write-time guard: every `poi` zone must reference an existing POI, and its optional
- * `radiusM` must not exceed the POI's own radius (a POI point has no radius, so a mission
- * radius is refused). Checked only when the Inventory integration is configured; an
- * Inventory outage does not block the write (matching stays fail-closed anyway).
+ * Write-time guard: every `poi` zone must reference an existing POI. There is no radius
+ * check left — a zone carries no radius of its own, it inherits the POI's wholesale.
+ * Checked only when the Inventory integration is configured; an Inventory outage does not
+ * block the write (matching stays fail-closed anyway).
  * @param zones - Zones about to be persisted.
  * @throws 400 `POI_NOT_FOUND` when a referenced POI does not exist.
- * @throws 400 `POI_RADIUS_EXCEEDED` when the zone radius exceeds the POI's radius.
  */
 export async function assertPoiZonesExist(zones: MissionZone[] | undefined): Promise<void> {
   const ids = poiZoneIds(zones ?? []);
@@ -285,16 +273,8 @@ export async function assertPoiZonesExist(zones: MissionZone[] | undefined): Pro
   }
   for (const zone of zones ?? []) {
     if (zone.kind !== 'poi') continue;
-    const poi = resolved.get(zone.poiId);
-    if (!poi) throw new HttpError(400, 'POI_NOT_FOUND', t('zones.poi_not_found', { id: zone.poiId }));
-    // P7: a mission radius must not exceed the POI's radius. A POI point (null) refuses any radius.
-    if (zone.radiusM !== undefined) {
-      if (poi.radiusM === null) {
-        throw new HttpError(400, 'POI_RADIUS_EXCEEDED', t('zones.poi_radius_exceeded', { id: zone.poiId }));
-      }
-      if (zone.radiusM > poi.radiusM) {
-        throw new HttpError(400, 'POI_RADIUS_EXCEEDED', t('zones.poi_radius_exceeded', { id: zone.poiId }));
-      }
+    if (!resolved.get(zone.poiId)) {
+      throw new HttpError(400, 'POI_NOT_FOUND', t('zones.poi_not_found', { id: zone.poiId }));
     }
   }
 }

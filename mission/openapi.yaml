@@ -1403,32 +1403,30 @@ components:
         One availability zone, matched against the player's place reported by the game
         server via the player-state store (`PUT /api/internal/missions/player-states`).
         A `system` zone matches the star system. A `poi` zone references a point of
-        interest in the Inventory service: in every branch, the player's `scene` must
-        be **compatible** with the POI's `scene` (equal or one is a segment prefix of
-        the other: `tarsis_1` matches `tarsis_1/new-paris`, never `tarsis_10`); a POI
-        whose scene is `null` never matches (fail-closed: no frame to compare in).
-        A radius (declared on the zone, **must not exceed the POI's own radius**;
-        a POI point refuses any radius → `POI_RADIUS_EXCEEDED`) matches the area around
-        the POI centre; a POI with a scene and no radius matches its hierarchical scene
-        subtree. A POI that cannot be resolved never matches (fail-closed), and creating
-        a zone on an unknown POI is rejected with `POI_NOT_FOUND`.
+        interest in the Inventory service and inherits its geometry **wholesale**: a zone
+        carries **no radius of its own** (the POI is the only geometric source, so
+        availability and an objective's target share the same disc). In every branch, the
+        player's `scene` must be **compatible** with the POI's `scene` (equal or one is a
+        segment prefix of the other: `tarsis_1` matches `tarsis_1/new-paris`, never
+        `tarsis_10`); a POI whose scene is `null` never matches (fail-closed: no frame to
+        compare in). A POI with a `radius` matches the area around its centre; a POI with
+        a scene and no radius matches its hierarchical scene subtree. A POI that cannot be
+        resolved never matches (fail-closed), and creating a zone on an unknown POI is
+        rejected with `POI_NOT_FOUND`.
         Coordinates are metres in the local frame of the body named by `scene`.
       oneOf:
         - type: object
           required: [kind, system]
+          additionalProperties: false
           properties:
             kind: { const: system }
             system: { type: string, maxLength: 64, description: Star system }
         - type: object
           required: [kind, poiId]
+          additionalProperties: false
           properties:
             kind: { const: poi }
             poiId: { type: string, format: uuid, description: POI id owned by the Inventory service }
-            radiusM:
-              type: number
-              minimum: 0
-              maximum: 1000000
-              description: Optional tighter radius (metres); **must not exceed the POI's own radius** (refused on a POI point)
 
     Mission:
       type: object

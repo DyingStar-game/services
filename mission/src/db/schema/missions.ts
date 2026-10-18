@@ -99,16 +99,14 @@ export type ItemEscrowStatus = (typeof ITEM_ESCROW_STATUSES)[number];
  * Where a mission is available, matched against the player's presence location
  * (`{system, scene, position}` reported by the game server):
  * - `system`: same system;
- * - `poi`: inside a POI from the Inventory registry — a zone when the POI carries a
- *   `radiusM` (or the zone overrides it), otherwise the POI's scene subtree, otherwise
- *   the exact POI coordinates. POIs are resolved through Inventory's internal API; a
- *   missing POI never matches (fail-closed, like an unknown location).
+ * - `poi`: inside a POI from the Inventory registry — the POI's area when it carries a
+ *   `radiusM`, otherwise its scene subtree. A zone carries **no radius of its own**: the
+ *   POI is the only geometric source. POIs are resolved through Inventory's internal
+ *   API; a missing POI never matches (fail-closed, like an unknown location).
  * Geometry (scenes, areas) only lives in POIs now; an empty `zones` array means the
  * mission is available everywhere (global).
  */
-export type MissionZone =
-  | { kind: 'system'; system: string }
-  | { kind: 'poi'; poiId: string; radiusM?: number };
+export type MissionZone = { kind: 'system'; system: string } | { kind: 'poi'; poiId: string };
 
 /** Player location subset used for zone matching (from Social's presence). */
 export interface ZoneLocation {

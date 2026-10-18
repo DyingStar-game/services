@@ -63,13 +63,13 @@ async function call(
 
 // ── Geometry fixtures ──────────────────────────────────────────────────────────
 
-/** POI on `tarsis_3`, 3 km from its centre, zone radius 5 km. */
+/** POI on `tarsis_3`, 3 km from its centre, radius 5 km. */
 const poiTarsis3 = { system: 'tarsis', scene: 'tarsis_3', x: 3000, y: 0, z: 0, radiusM: 5000 };
-/** POI on `tarsis_4`, 3 km from its centre, zone radius 5 km. */
+/** POI on `tarsis_4`, 3 km from its centre, radius 5 km. */
 const poiTarsis4 = { system: 'tarsis', scene: 'tarsis_4', x: 3000, y: 0, z: 0, radiusM: 5000 };
 /** POI on `tarsis_1`, scene-subtree (no radius). */
 const poiTarsis1 = { system: 'tarsis', scene: 'tarsis_1', x: 0, y: 0, z: 0, radiusM: null };
-/** POI in open space of `tarsis`, zone radius 5 km. */
+/** POI in open space of `tarsis`, radius 5 km. */
 const poiSpace = { system: 'tarsis', scene: 'space', x: 1_000_000, y: 0, z: 0, radiusM: 5000 };
 /** POI with no scene (fail-closed). */
 const poiNoScene = { system: 'tarsis', scene: null, x: 0, y: 0, z: 0, radiusM: null };
@@ -92,9 +92,9 @@ const stateTarsis3 = { system: 'tarsis', scene: 'tarsis_3', x: 3000, y: 0, z: 0 
 const stateTarsis4 = { system: 'tarsis', scene: 'tarsis_4', x: 3000, y: 0, z: 0 };
 const stateSpace = { system: 'tarsis', scene: 'space', x: 1_000_000, y: 0, z: 0 };
 
-/** Builds a poi zone with a radius. */
-function zone(poiId: string, radiusM: number) {
-  return { kind: 'poi' as const, poiId, radiusM };
+/** Builds a poi zone (no radius: a zone inherits the POI's). */
+function zone(poiId: string) {
+  return { kind: 'poi' as const, poiId };
 }
 
 /** Builds a geometry map from POI id → geometry (converts flat x/y/z to `center`). */
@@ -142,8 +142,9 @@ describe('zoneMatches', () => {
   });
 
   it('test 2: same scene, same offset, small radius → match', () => {
-    const zones = [zone(POI_TARSIS_3, 100)];
-    const geometry = geo([POI_TARSIS_3, poiTarsis3]);
+    // The radius is the POI's own (a zone carries none of its own).
+    const zones = [zone(POI_TARSIS_3)];
+    const geometry = geo([POI_TARSIS_3, { ...poiTarsis3, radiusM: 100 }]);
     expect(zoneMatches(zones, placeTarsis3, geometry)).toBe(true);
   });
 
@@ -166,45 +167,45 @@ describe('zoneMatches', () => {
   });
 
   it('test 5: null place → no match', () => {
-    const zones = [zone(POI_TARSIS_3, 5000)];
+    const zones = [zone(POI_TARSIS_3)];
     const geometry = geo([POI_TARSIS_3, poiTarsis3]);
     expect(zoneMatches(zones, null, geometry)).toBe(false);
     expect(zoneMatches(zones, undefined, geometry)).toBe(false);
   });
 
   it('test 6: POI system "" vs player system "tarsis" → no match', () => {
-    const zones = [zone(POI_TARSIS_3, 5000)];
+    const zones = [zone(POI_TARSIS_3)];
     const geometry = geo([POI_TARSIS_3, { ...poiTarsis3, system: '' }]);
     expect(zoneMatches(zones, placeTarsis3, geometry)).toBe(false);
   });
 
   it('test 7: player re-pushed at the same place → match is stable', () => {
-    const zones = [zone(POI_TARSIS_3, 5000)];
+    const zones = [zone(POI_TARSIS_3)];
     const geometry = geo([POI_TARSIS_3, poiTarsis3]);
     expect(zoneMatches(zones, placeTarsis3, geometry)).toBe(true);
     expect(zoneMatches(zones, placeTarsis3, geometry)).toBe(true); // same input, same result
   });
 
   it('space POI vs player in space → match', () => {
-    const zones = [zone(POI_SPACE, 5000)];
+    const zones = [zone(POI_SPACE)];
     const geometry = geo([POI_SPACE, poiSpace]);
     expect(zoneMatches(zones, placeSpace, geometry)).toBe(true);
   });
 
   it('space POI vs player on a body → no match', () => {
-    const zones = [zone(POI_SPACE, 5000)];
+    const zones = [zone(POI_SPACE)];
     const geometry = geo([POI_SPACE, poiSpace]);
     expect(zoneMatches(zones, placeTarsis3, geometry)).toBe(false);
   });
 
   it('body POI vs player in space → no match', () => {
-    const zones = [zone(POI_TARSIS_3, 5000)];
+    const zones = [zone(POI_TARSIS_3)];
     const geometry = geo([POI_TARSIS_3, poiTarsis3]);
     expect(zoneMatches(zones, placeSpace, geometry)).toBe(false);
   });
 
   it('POI without scene → fail-closed (never matches)', () => {
-    const radiusZones = [zone(POI_NO_SCENE, 5000)];
+    const radiusZones = [zone(POI_NO_SCENE)];
     const geometry = geo([POI_NO_SCENE, poiNoScene]);
     expect(zoneMatches(radiusZones, placeTarsis3, geometry)).toBe(false);
 
@@ -242,13 +243,13 @@ describe('zoneFilterSql', () => {
   });
 
   it('test 1 (SQL): same offset on different bodies → no match', async () => {
-    await insertMission('on tarsis_4', [zone(POI_TARSIS_4, 5000)]);
+    await insertMission('on tarsis_4', [zone(POI_TARSIS_4)]);
     const ids = await listing(placeTarsis3, geo([POI_TARSIS_4, poiTarsis4]));
     expect(ids).toHaveLength(0);
   });
 
-  it('test 2 (SQL): same scene, same offset, small radius → match', async () => {
-    await insertMission('on tarsis_3', [zone(POI_TARSIS_3, 100)]);
+  it('test 2 (SQL): same scene, same offset → match (radius is the POI\'s own)', async () => {
+    await insertMission('on tarsis_3', [zone(POI_TARSIS_3)]);
     const ids = await listing(placeTarsis3, geo([POI_TARSIS_3, poiTarsis3]));
     expect(ids).toHaveLength(1);
   });
@@ -266,19 +267,19 @@ describe('zoneFilterSql', () => {
   });
 
   it('test 5 (SQL): null place → no match', async () => {
-    await insertMission('zoned', [zone(POI_TARSIS_3, 5000)]);
+    await insertMission('zoned', [zone(POI_TARSIS_3)]);
     const ids = await listing(null, geo([POI_TARSIS_3, poiTarsis3]));
     expect(ids).toHaveLength(0);
   });
 
   it('test 6 (SQL): POI system "" vs player system "tarsis" → no match', async () => {
-    await insertMission('outside', [zone(POI_TARSIS_3, 5000)]);
+    await insertMission('outside', [zone(POI_TARSIS_3)]);
     const ids = await listing(placeTarsis3, geo([POI_TARSIS_3, { ...poiTarsis3, system: '' }]));
     expect(ids).toHaveLength(0);
   });
 
   it('space POI (SQL): player in space → match; player on body → no match', async () => {
-    await insertMission('space zone', [zone(POI_SPACE, 5000)]);
+    await insertMission('space zone', [zone(POI_SPACE)]);
     const geometry = geo([POI_SPACE, poiSpace]);
     expect(await listing(placeSpace, geometry)).toHaveLength(1);
     expect(await listing(placeTarsis3, geometry)).toHaveLength(0);
@@ -315,7 +316,7 @@ describe('end-to-end zone matching', () => {
     // Create a mission zoned on the tarsis_3 POI.
     const { status: createStatus, body: created } = await call('/api/internal/missions', 'POST', {
       title: 'Planet-locked mission',
-      zones: [zone(POI_TARSIS_3, 5000)],
+      zones: [zone(POI_TARSIS_3)],
       objectives: [{ type: 'manual', title: 'Explore', targetQuantity: 1 }],
     });
     expect(createStatus).toBe(201);
@@ -343,7 +344,7 @@ describe('end-to-end zone matching', () => {
 
     const { body: created } = await call('/api/internal/missions', 'POST', {
       title: 'Space mission',
-      zones: [zone(POI_SPACE, 5000)],
+      zones: [zone(POI_SPACE)],
       objectives: [{ type: 'manual', title: 'Explore space', targetQuantity: 1 }],
     });
     const missionId = created.mission.id as string;
@@ -358,5 +359,22 @@ describe('end-to-end zone matching', () => {
     social.getPlayerPresence.mockResolvedValue({ location: placeSpace });
     const { status: ok } = await call(`/api/missions/${missionId}/accept`, 'POST');
     expect(ok).toBe(201);
+  });
+
+  it('a zone may not carry a radius of its own (the POI is the only source)', async () => {
+    const res = await call('/api/internal/missions', 'POST', {
+      title: 'Zoned with a radius',
+      zones: [{ kind: 'poi', poiId: POI_TARSIS_3, radiusM: 100 }],
+      objectives: [{ type: 'manual', title: 'Explore', targetQuantity: 1 }],
+    });
+    expect(res.status).toBe(400);
+
+    // The same zone without a radius is accepted.
+    const ok = await call('/api/internal/missions', 'POST', {
+      title: 'Zoned without a radius',
+      zones: [zone(POI_TARSIS_3)],
+      objectives: [{ type: 'manual', title: 'Explore', targetQuantity: 1 }],
+    });
+    expect(ok.status).toBe(201);
   });
 });

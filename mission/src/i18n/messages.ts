@@ -68,7 +68,6 @@ export const en = {
   'treasury.no_treasury_permission': 'Requires an office with the manage_treasury permission (or the head)',
   // ── zones ──
   'zones.poi_not_found': 'POI {id} does not exist',
-  'zones.poi_radius_exceeded': 'Zone radius on POI {id} exceeds the POI\'s own radius',
 } as const;
 
 /** Keys of the construction-time catalog (typed from the English source). */
@@ -126,7 +125,6 @@ export const fr: Record<MessageKey, string> = {
   'treasury.no_treasury_permission': 'Nécessite un office avec la permission manage_treasury (ou le chef)',
   // ── zones ──
   'zones.poi_not_found': "Le POI {id} n'existe pas",
-  'zones.poi_radius_exceeded': 'Le rayon de la zone sur le POI {id} dépasse le rayon de la POI',
 };
 
 /**

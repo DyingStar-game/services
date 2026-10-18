@@ -96,12 +96,14 @@ Un push `reportProgress` sur un kind non-`game` → `409 OBJECTIVE_NOT_PUSHABLE`
 
 **Zones** (`zones[]`, vide = **globale**) : la dispo peut être restreinte à la **position du joueur** — scopes mappés sur le store d'état joueur (`PUT /api/internal/missions/player-states`, TTL 30 s). **Les positions sont relatives au corps nommé par `scene`** (repère local, mètres ; `scene: "space"` = espace ouvert, repère du système) :
 - `{kind:'system', system}` — même système ;
-- `{kind:'poi', poiId, radiusM?}` — **point ou zone du registre POI** d'`inventory` (résolution batch `POST /api/internal/pois/resolve`, cache 60 s) :
+- `{kind:'poi', poiId}` — **point ou zone du registre POI** d'`inventory` (résolution batch `POST /api/internal/pois/resolve`, cache 60 s). La zone **hérite intégralement de la géométrie du POI** : elle n'a **aucun rayon propre**, le POI est la seule source de vérité géométrique ;
   - **La `scene` du joueur doit être compatible avec la `scene` du POI** avant toute comparaison de coordonnées (égalité ou préfixe de segment : `tarsis_1` ⟷ `tarsis_1/new-paris`, jamais `tarsis_1` ⟷ `tarsis_10`) — sans cette garde, un joueur sur `tarsis_3` matchait un POI sur `tarsis_4` à la même distance locale. Un POI sans `scene` ne matche jamais (échec fermé) ;
-  - `radiusM` déclaré sur la **zone** (prioritaire, **borné par le rayon de la POI**) ou sur le **POI** → **aire** : distance euclidienne au centre dans le repère partagé ;
+  - POI avec un **rayon** → **aire** : distance euclidienne au centre dans le repère partagé ;
   - POI avec `scene` et sans rayon → **sous-arbre de scène** (le joueur doit être dans la scène du POI ou en dessous) → couvre planète, ville, district, donjon… **Convention jeu : encoder la hiérarchie dans `location.scene`**.
 
-  Un `system` porté par le POI doit être égal à `location.system`. Un POI inconnu/supprimé → la zone **ne matche jamais** (échec ferme) ; le registre refuse la création d'une zone sur un POI inexistant (`400 POI_NOT_FOUND`) ou avec un rayon supérieur à celui de la POI (`400 POI_RADIUS_EXCEEDED`).
+  ⚠️ **Conséquence** : la zone de disponibilité d'une mission et la cible de ses objectifs `poi` sont **le même disque** — on ne peut plus les découpler (le rayon d'une zone est rejeté, `radiusM` n'existe plus sur `MissionZone`).
+
+  Un `system` porté par le POI doit être égal à `location.system`. Un POI inconnu/supprimé → la zone **ne matche jamais** (échec ferme) ; le registre refuse la création d'une zone sur un POI inexistant (`400 POI_NOT_FOUND`).
 
 Filtrée au **listing** (SQL, géométries POI injectées en jsonb ; joueur sans position = ne voit que les globales ; panne Social **ou** inventory = idem, fail-safe) **et à l'acceptation** (`403 OUT_OF_ZONE`, échec ferme). Zéro coût Social/inventory pour les missions globales. `zones` est **modifiable via l'API interne uniquement** (le jeu re-zone un event en direct ; sans impact séquestre).
 

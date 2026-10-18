@@ -137,8 +137,8 @@ const zoneSystem = z.string().trim().max(64);
 
 /**
  * One availability zone, matched against the player's presence location. Geometry
- * (scenes, areas) lives in the Inventory POI registry: a `poi` zone references a POI,
- * with an optional `radiusM` that must not exceed the POI's own radius.
+ * (scenes, areas) lives in the Inventory POI registry: a `poi` zone references a POI and
+ * inherits its geometry wholesale — a zone carries no radius of its own.
  */
 export const missionZoneSchema = z.union([
   z.object({ kind: z.literal('system'), system: zoneSystem }).strict(),
@@ -146,8 +146,6 @@ export const missionZoneSchema = z.union([
     .object({
       kind: z.literal('poi'),
       poiId: z.string().uuid(),
-      /** Optional tighter radius; must not exceed the POI's radius (validated at creation). */
-      radiusM: z.number().min(0).max(1_000_000).optional(),
     })
     .strict(),
 ]);
