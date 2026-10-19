@@ -21,6 +21,8 @@ const { missionAssignments, missionObjectives, missions, missionPlayerStates } =
 const inventory = await import('../src/services/inventory.client.js');
 const { deliverMaterialKind } = await import('../src/kinds/objectives/deliverMaterial.js');
 const { visitKind } = await import('../src/kinds/objectives/visit.js');
+const { transportKind } = await import('../src/kinds/objectives/transport.js');
+const { missionKindsCatalog } = await import('../src/kinds/index.js');
 
 const POI = '3f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
 const MISSION = '11111111-1111-4111-8111-111111111111';
@@ -195,5 +197,24 @@ describe("deliver_material scope: 'all'", () => {
         scope: 'everyone',
       }),
     ).toThrow();
+  });
+});
+
+describe('transport summary names its quantity (tests 25-26)', () => {
+  it('mentions {targetQuantity}, like the two other quantity kinds (test 25)', () => {
+    const { objectiveKinds } = missionKindsCatalog();
+    const quantityKinds = objectiveKinds.filter((kind) => kind.quantity);
+
+    // A quantity kind whose summary omits the placeholder leaves the client a field
+    // outside the sentence it renders as the objective title.
+    expect(quantityKinds.map((kind) => kind.kind).sort()).toEqual(['deliver_material', 'owns_items', 'transport']);
+    for (const kind of quantityKinds) {
+      expect(kind.summary, `${kind.kind} must mention {targetQuantity}`).toContain('{targetQuantity}');
+    }
+  });
+
+  it('keeps both languages of transport on the same placeholders (test 26)', () => {
+    const placeholders = (text: string) => [...text.matchAll(/\{[a-zA-Z]+\}/g)].map(([m]) => m).sort();
+    expect(placeholders(transportKind.summary.fr)).toEqual(placeholders(transportKind.summary.en));
   });
 });

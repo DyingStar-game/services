@@ -73,8 +73,8 @@ export const transportKind: ObjectiveKind = {
   },
   name: { en: 'Transport', fr: 'Transport' },
   summary: {
-    en: 'Pick up {goodType} at {source.poiId} then deliver to {zone.poiId} (two-phase, high-water mark)',
-    fr: "Charger {goodType} au POI {source.poiId} puis livrer au POI {zone.poiId} (deux phases, high-water mark)",
+    en: 'Pick up {targetQuantity} of {goodType} at {source.poiId} then deliver to {zone.poiId} (two-phase, high-water mark)',
+    fr: "Charger {targetQuantity} de {goodType} au POI {source.poiId} puis livrer au POI {zone.poiId} (deux phases, high-water mark)",
   },
   categories: ['transport', 'delivery', 'mining'],
   async measure(ctx: MeasureContext): Promise<number> {
