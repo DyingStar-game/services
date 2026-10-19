@@ -22,8 +22,10 @@ export type {
   EvaluationMode,
   JsonSchema,
   KindCategories,
+  MeasureContext,
   MessageText,
   ObjectiveKind,
+  PrefetchedPlayerState,
   PrerequisiteContext,
   PrerequisiteKind,
 } from './types.js';
@@ -68,6 +70,23 @@ export const PREREQUISITE_KINDS: ReadonlyMap<string, PrerequisiteKind> = new Map
 export function getObjectiveKind(kind: string): ObjectiveKind | undefined {
   return OBJECTIVE_KINDS.get(kind);
 }
+
+/**
+ * Kind names evaluated by the service (`measure`), used to filter `mission_objectives`
+ * rows in SQL when selecting what the auto-measure has to look at.
+ */
+export const SERVICE_OBJECTIVE_TYPES: readonly string[] = OBJECTIVE_KIND_LIST.filter(
+  (k) => k.evaluation === 'service',
+).map((k) => k.kind);
+
+/**
+ * Kind names whose `measure()` issues a remote (HTTP) read. The auto-measure budgets
+ * these: they cost a round trip per assignee, unlike the state-based kinds which read
+ * preloaded player states.
+ */
+export const REMOTE_OBJECTIVE_TYPES: readonly string[] = OBJECTIVE_KIND_LIST.filter(
+  (k) => k.remoteRead,
+).map((k) => k.kind);
 
 /** Looks up a prerequisite kind, or undefined when unknown. */
 export function getPrerequisiteKind(kind: string): PrerequisiteKind | undefined {

@@ -1,18 +1,13 @@
 import { z } from 'zod';
 
-import { eq } from 'drizzle-orm';
-import { db } from '../../db/connection.js';
-import { missionPlayerStates } from '../../db/schema/index.js';
-import { resolvePois, type PoiGeometry } from '../../services/inventory.client.js';
+import { resolvePois } from '../../services/inventory.client.js';
 import { zoneMatches, type PoiGeometryMap } from '../../services/zones.service.js';
 import type { MeasureContext, ObjectiveKind } from '../types.js';
+import { isStateFresh, loadPlayerState, stateLocation } from './playerState.js';
 
 const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
 
 const paramsSchema = z.object({ zone: poiZone }).strict();
-
-/** Player-state TTL in seconds: a state older than this counts as "outside every zone". */
-const STATE_TTL_MS = 30_000;
 
 async function resolveVisitPois(poiId: string): Promise<PoiGeometryMap> {
   try {
@@ -67,16 +62,12 @@ export const visitKind: ObjectiveKind = {
   async measure(ctx: MeasureContext): Promise<number> {
     const { zone } = paramsSchema.parse(ctx.objective.params ?? {});
 
-    const [state] = await db
-      .select()
-      .from(missionPlayerStates)
-      .where(eq(missionPlayerStates.playerId, ctx.playerId))
-      .limit(1);
+    const state = await loadPlayerState(ctx, ctx.playerId);
     if (!state) return 0;
-    if (Date.now() - state.receivedAt.getTime() > STATE_TTL_MS) return 0; // stale: outside every zone
+    if (!isStateFresh(state)) return 0; // stale: outside every zone
     if (!state.place) return 0;
 
-    const location = { system: state.place.system, scene: state.place.scene, position: state.place.x !== undefined ? { x: state.place.x, y: state.place.y!, z: state.place.z! } : null };
+    const location = stateLocation(state);
     const geometry = await resolveVisitPois(zone.poiId);
     return zoneMatches([zone], location, geometry) ? 1 : 0;
   },

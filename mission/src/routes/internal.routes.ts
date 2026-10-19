@@ -7,6 +7,7 @@
 import { Router, type IRouter } from 'express';
 import { t } from '../i18n/index.js';
 
+import { env } from '../config/env.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { HttpError } from '../lib/httpError.js';
 import { assertServiceRole, requireService, requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
@@ -17,6 +18,7 @@ import {
   getAssignment,
   listAssignmentsForPlayer,
   listMissionsByIds,
+  measureActiveAssignmentsForPlayers,
   verifyPlayerObjectives,
 } from '../services/assignments.service.js';
 import {
@@ -189,6 +191,10 @@ internalRoutes.post(
  * PUT /missions/player-states — Batch player state push from the game server.
  * Used for zone matching and physical objective evaluation (visit, delivery, transport,
  * passenger). States older than 30s are treated as "outside every zone".
+ *
+ * The push is also what drives the measurement of the `service` objectives
+ * (`MISSION_AUTO_MEASURE`): it is the only signal that a player's place or carried goods
+ * changed, so without it a `visit` would need an explicit `/verify` to progress.
  */
 internalRoutes.put(
   '/missions/player-states',
@@ -197,6 +203,15 @@ internalRoutes.put(
   asyncHandler(async (req, res) => {
     const { count } = await upsertPlayerStates(req.body.players);
     res.json({ updated: count });
+    // Deliberately not awaited: the push is a heartbeat, and a measurement must never
+    // delay it. The pass is fail-soft (logs and swallows its own errors).
+    if (env.mission.autoMeasure) {
+      measureActiveAssignmentsForPlayers(
+        req.body.players.map((player: { playerId: string }) => player.playerId),
+      ).catch((err) => {
+        console.error('[auto-measure] unhandled rejection', err);
+      });
+    }
   }),
 );
 

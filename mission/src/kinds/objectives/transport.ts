@@ -2,10 +2,11 @@ import { z } from 'zod';
 
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/connection.js';
-import { missionObjectives, missionPlayerStates } from '../../db/schema/index.js';
+import { missionObjectives } from '../../db/schema/index.js';
 import { getStack, resolvePois } from '../../services/inventory.client.js';
 import { zoneMatches, type PoiGeometryMap } from '../../services/zones.service.js';
 import type { MeasureContext, ObjectiveKind } from '../types.js';
+import { isStateFresh, loadPlayerState, stateLocation } from './playerState.js';
 
 const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
 
@@ -19,9 +20,6 @@ const paramsSchema = z
     zone: poiZone,
   })
   .strict();
-
-/** Player-state TTL in seconds. */
-const STATE_TTL_MS = 30_000;
 
 async function resolveZonePois(poiId: string): Promise<PoiGeometryMap> {
   try {
@@ -51,6 +49,7 @@ export const transportKind: ObjectiveKind = {
   evaluation: 'service',
   quantity: true,
   progress: 'highWater',
+  remoteRead: true,
   paramsSchema,
   paramsJsonSchema: {
     type: 'object',
@@ -80,21 +79,12 @@ export const transportKind: ObjectiveKind = {
   categories: ['transport', 'delivery', 'mining'],
   async measure(ctx: MeasureContext): Promise<number> {
     const { goodType, source, zone } = paramsSchema.parse(ctx.objective.params ?? {});
-    const state = await db
-      .select()
-      .from(missionPlayerStates)
-      .where(eq(missionPlayerStates.playerId, ctx.playerId))
-      .limit(1)
-      .then((rows) => rows[0]);
+    const state = await loadPlayerState(ctx, ctx.playerId);
     if (!state) return 0;
-    if (Date.now() - state.receivedAt.getTime() > STATE_TTL_MS) return 0; // stale
+    if (!isStateFresh(state)) return 0; // stale
     if (!state.place) return 0;
 
-    const location = {
-      system: state.place.system,
-      scene: state.place.scene,
-      position: state.place.x !== undefined ? { x: state.place.x, y: state.place.y!, z: state.place.z! } : null,
-    };
+    const location = stateLocation(state);
 
     // Phase 1: latch pickedUpAt when the assignee is at the source POI with goods carried.
     const stateObj = (ctx.objective.state ?? {}) as Record<string, unknown>;

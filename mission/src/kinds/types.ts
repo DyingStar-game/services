@@ -22,6 +22,19 @@ import type { AssigneeHolderType, MissionCategory, MissionObjective } from '../d
 /** Who evaluates an objective's progress. */
 export type EvaluationMode = 'service' | 'issuer';
 
+/**
+ * A player-state row, preloaded by the caller. Kinds read it through
+ * `loadPlayerState()` instead of issuing one SELECT per objective.
+ */
+export interface PrefetchedPlayerState {
+  playerId: string;
+  place: { system?: string; scene?: string; x?: number; y?: number; z?: number } | null;
+  onFoot: boolean;
+  passenger: boolean;
+  carried: Record<string, number>;
+  receivedAt: Date;
+}
+
 /** Minimal JSON Schema fragment served by `GET /api/missions/kinds`. */
 export type JsonSchema = Record<string, unknown>;
 
@@ -46,6 +59,13 @@ export interface MeasureContext {
   missionId: string;
   /** The objective row (params, target and current progress). */
   objective: MissionObjective;
+  /**
+   * Batch measurement only: player states preloaded in one SELECT. Kinds read it through
+   * `loadPlayerState()`, which falls back to the database on a miss (a passenger's state
+   * is usually not in the batch) and, when the cache is absent at all, always reads the
+   * database — so a single-objective measurement is never slower than before.
+   */
+  stateCache?: ReadonlyMap<string, PrefetchedPlayerState | null>;
 }
 
 /** Context handed to prerequisite checks at acceptance time. */
@@ -70,6 +90,13 @@ export interface ObjectiveKind {
    *   transport and passenger objectives where a completed delivery stays complete).
    */
   progress?: 'snapshot' | 'highWater';
+  /**
+   * `measure()` issues a remote read (an Inventory/Economy HTTP call) rather than a local
+   * database one. The auto-measure triggered by player-state pushes budgets these: a
+   * remote read costs an HTTP round trip per assignee, so the number served per push is
+   * capped and spread over successive pushes. Purely informational for the catalogue.
+   */
+  remoteRead?: boolean;
   /** Structured params, validated at creation (`mission_objectives.params`). */
   paramsSchema: z.ZodTypeAny;
   /** JSON Schema of `params`, served to mission builders. */

@@ -64,6 +64,8 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `MISSION_PLAYER_DEFAULT_TTL_HOURS` | Durée de vie par défaut d'une mission **joueur** en heures (défaut `72`) — bornée par `expiresAt`/`expiresInHours` |
 | `MISSION_MAX_ACTIVE_ASSIGNMENTS` | Assignations actives simultanées max par joueur (défaut `5`, 0 = illimité ; PNJ exclus) |
 | `MISSION_EXPIRE_INTERVAL_SECONDS` | Intervalle du balayage d'expiration **intégré** en secondes — **`0` par défaut (désactivé)** : en Kubernetes l'expiration est une **commande** (CronJob appelant `POST /api/internal/missions/expire`), le service ne tourne aucun timer ; renseigner une valeur positive réactive le balayage in-process (dev monoposte) |
+| `MISSION_AUTO_MEASURE` | Mesurer les objectifs `service` **à chaque push d'état** (défaut `true`) — `false` = contrat historique (seul `/verify` mesure, rien n'avance sinon) |
+| `MISSION_AUTO_MEASURE_REMOTE_BUDGET` | Mesures **distantes** (Inventory/Economy, HTTP par assigné) max par passe de mesure (défaut `100`) ; l'ordre tourne et le reste passe au push suivant |
 
 ## Fonctionnement
 
@@ -83,8 +85,20 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `owns_items` (prérequis) | mining, delivery, transport |
 
 **Kinds d'objectifs** (registre `src/kinds/objectives/`) — 2 modes d'évaluation :
-- **`service`** — le service mesure contre l'état du joueur (présence + biens portés) via **`POST /:missionId/verify`** : `visit` (présence dans le POI, latché), `deliver_material` (biens `carried` dans la zone de livraison, high-water mark ; `scope: 'all'` **cumule tous les assignés actifs actuellement dans la cible**, un porteur hors cible ne compte pas — idempotent, la somme globale est recalculée à chaque mesure), `transport` (latch `pickedUpAt` + livraison, high-water mark), `transport_passenger` (passager dans le POI, high-water mark), `owns_items` (instantané inventaire, peut régresser) ;
-- **`issuer`** — le créateur confirme : `manual` (`POST /:missionId/objectives/:objectiveId/confirm`, réservé au créateur ; le jeu confirme via l'API interne).
+- **`service`** — le service mesure contre l'état du joueur (présence + biens portés), **automatiquement à chaque push d'état** (voir « Mesure automatique » ci-dessous) ou sur demande via `POST /:missionId/verify` : `visit` (présence dans le POI, latché), `deliver_material` (biens `carried` dans la zone de livraison, high-water mark ; `scope: 'all'` **cumule tous les assignés actifs actuellement dans la cible**, un porteur hors cible ne compte pas — idempotent, la somme globale est recalculée à chaque mesure), `transport` (latch `pickedUpAt` + livraison, high-water mark), `transport_passenger` (passager dans le POI, high-water mark), `owns_items` (instantané inventaire, peut régresser) ;
+- **`issuer`** — le créateur confirme : `manual` (`POST /:missionId/objectives/:objectiveId/confirm`, réservé au créateur ; le jeu confirme via l'API interne). **Jamais mesuré automatiquement** : c'est le seul objectif qui exige une action humaine.
+
+**Mesure automatique** (`MISSION_AUTO_MEASURE`, défaut `true`) : le push `PUT /api/internal/missions/player-states` est le **seul** signal qu'un lieu ou des biens portés ont changé — il déclenche donc lui-même la mesure des objectifs `service`, puis l'auto-complétion si tous les requis sont faits. Sans lui, un `visit` n'avançait jamais : il fallait un `/verify` explicite. Le push répond d'abord (c'est un battement de cœur, sa latence n'est pas critique), la passe tourne ensuite en **best-effort** : une erreur de mesure est loguée et avalée, le push échoue jamais à cause d'elle.
+
+Conçue pour rester nulle quand rien ne se passe, ce qui est le cas courant :
+
+- une seule requête indexée (`mission_assignments_player_idx`) dit si l'un des joueurs du batch a une assignation active — sinon **la passe s'arrête là** ;
+- sinon, une requête charge les objectifs et **une seule** précharge tous les états du batch : les kinds `visit` / `transport_passenger` ne font alors **aucune** requête ;
+- les lectures **distantes** (Inventory/Economy, un aller-retour HTTP par assigné : `owns_items`, `transport`, `deliver_material`) sont **bornées** à `MISSION_AUTO_MEASURE_REMOTE_BUDGET` (défaut 100) par passe, et l'ordre tourne entre les passes — un millier de joueurs ne monopolise jamais un push. Le budget non dépensé est repris au push suivant ;
+- un objectif `highWater` **déjà complété** n'est plus jamais remesuré (impossible qu'il régresse), et une mission dont tous les objectifs sont faits ou `manual` n'est pas touchée ;
+- deux passes ne se chevauchent jamais (`completeMission` réglerait deux fois).
+
+`POST /:missionId/verify` reste **inchangé** : c'est la re-mesure explicite (immédiateté, filet si `MISSION_AUTO_MEASURE=false`, point d'entrée historique). Une mesure de plus est neutre grâce au high-water mark.
 
 **Sémantique high-water mark** : `visit`, `deliver_material`, `transport` et `transport_passenger` ne régressent jamais — `progress = max(stored, measured)`. Une livraison partielle reste créditée (`allowPartial: true` paie le ratio en crédits) et l'auto-complétion se déclenche à 100 %.
 
@@ -173,7 +187,7 @@ Erreurs typées : `403 NOT_CORPORATION_MEMBER` (visibilité corporation hors cor
 
 ## Gameplay (cycles de vie avancés)
 
-**Complétion automatique** (`autoComplete`, défaut `true`) : dès que **tous les objectifs requis** sont faits (push `reportProgress` ou `verify`), la mission se complète et se règle **d'elle-même** — la réponse porte `completed: true` et l'assignation passe `completed`. Avec `autoComplete: false`, le jeu ou le joueur appelle `POST /:missionId/complete`.
+**Complétion automatique** (`autoComplete`, défaut `true`) : dès que **tous les objectifs requis** sont faits (mesure automatique du push, `verify`, ou `confirm` sur les objectifs `issuer`), la mission se complète et se règle **d'elle-même** — la réponse porte `completed: true` et l'assignation passe `completed`. Avec `autoComplete: false`, le jeu ou le joueur appelle `POST /:missionId/complete`.
 
 **Objectifs bonus** (`isBonus: true`) : hors du gate de complétion, de l'ordre scénarisé **et** du ratio partiel. Un objectif bonus peut porter un **`bonusReward`** (1 composant) accordé **en plus** de la récompense de base, **uniquement sur une complétion totale** (jamais sur un partiel) ; les crédits bonus s'additionnent au composant crédits unique, les items bonus sont ajoutés à la liste. Une mission doit garder **au moins un objectif non-bonus** (`400 MISSING_REQUIRED_OBJECTIVE`) ; un `bonusReward` sur un objectif non-bonus est refusé (`400 BONUS_REWARD_WITHOUT_BONUS`).
 

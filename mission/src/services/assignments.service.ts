@@ -2,7 +2,7 @@
  * Player assignments: accepting a mission, reporting objective progress, completing
  * (which settles the reward) and abandoning.
  */
-import { and, asc, count, desc, eq, inArray, isNull, lte } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { env } from '../config/env.js';
@@ -10,6 +10,7 @@ import { db } from '../db/connection.js';
 import {
   missionAssignments,
   missionObjectives,
+  missionPlayerStates,
   missions,
   type AssigneeHolderType,
   type AssignmentStatus,
@@ -19,7 +20,7 @@ import {
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
-import { getObjectiveKind } from '../kinds/index.js';
+import { getObjectiveKind, type PrefetchedPlayerState } from '../kinds/index.js';
 import {
   allRequiredObjectivesCompleted,
   countActiveAssignments,
@@ -269,28 +270,58 @@ export async function acceptMission(
 }
 
 /**
+ * Whether an objective still has something to measure: it is a `service` one, and it is
+ * not a completed high-water mark (whose progress is `max(stored, measured)` and
+ * therefore cannot regress — measuring it again can only reproduce the stored value).
+ * @param objective - Objective row.
+ */
+function isServiceMeasurable(objective: MissionObjective): boolean {
+  const kindDef = getObjectiveKind(objective.type);
+  if (!kindDef || kindDef.evaluation !== 'service' || !kindDef.measure) return false;
+  if (kindDef.progress !== 'highWater') return true; // snapshots can regress, always measure
+  return !(objective.status === 'completed' && objective.currentProgress >= objective.targetQuantity);
+}
+
+/** Options for one measurement pass. */
+export interface MeasureOptions {
+  /**
+   * Player states preloaded by the caller (one SELECT for a whole batch). The state-based
+   * kinds then issue no query at all, which is what keeps the auto-measure cheap.
+   */
+  stateCache?: ReadonlyMap<string, PrefetchedPlayerState | null>;
+  /**
+   * Remaining budget of remote (Inventory/Economy HTTP) measurements. Remote objectives
+   * are skipped — progress untouched, picked up by the next pass — once it is exhausted.
+   * Left undefined, every objective is measured (`/verify`, and the re-measure that
+   * precedes a payout, must not be throttled).
+   */
+  remoteBudget?: { remaining: number };
+}
+
+/**
  * Measures every `service` objective of the mission against external state (Inventory,
  * player-states, ...) and persists the result. Scenario-locked objectives are skipped.
  *
  * Snapshot kinds (`owns_items`) may regress: spending the goods lowers the stored progress,
  * which is why completion re-runs this measurement before paying. High-water kinds
  * (`visit`, `deliver_material`, `transport`, `transport_passenger`) never regress: stored
- * progress is `max(stored, measured)`.
+ * progress is `max(stored, measured)` — so a completed one is never measured again.
  * @param mission - Mission being measured.
  * @param assignment - Assignee whose holder state is measured.
  * @param objectives - Current objectives of the mission.
+ * @param opts - Optional batch context (preloaded states, remote-read budget).
  * @returns The objective list with measurements merged in.
  */
 async function measureServiceObjectives(
   mission: Mission,
   assignment: MissionAssignment,
   objectives: MissionObjective[],
+  opts: MeasureOptions = {},
 ): Promise<MissionObjective[]> {
   const now = new Date();
   const result: MissionObjective[] = [];
   for (const objective of objectives) {
-    const kindDef = getObjectiveKind(objective.type);
-    if (!kindDef || kindDef.evaluation !== 'service' || !kindDef.measure) {
+    if (!isServiceMeasurable(objective)) {
       result.push(objective);
       continue;
     }
@@ -298,12 +329,26 @@ async function measureServiceObjectives(
       result.push(objective);
       continue;
     }
+    const kindDef = getObjectiveKind(objective.type);
+    if (!kindDef?.measure) {
+      result.push(objective);
+      continue;
+    }
+    // Budget the remote reads: they are the only cost that scales with the player count.
+    if (kindDef.remoteRead && opts.remoteBudget) {
+      if (opts.remoteBudget.remaining <= 0) {
+        result.push(objective);
+        continue;
+      }
+      opts.remoteBudget.remaining -= 1;
+    }
 
     const measured = await kindDef.measure({
       playerId: assignment.playerId,
       holderType: assignment.holderType,
       missionId: mission.id,
       objective,
+      stateCache: opts.stateCache,
     });
     const raw = Math.max(0, Math.min(measured, objective.targetQuantity));
     // High-water: progress never regresses (a completed delivery stays complete).
@@ -351,6 +396,135 @@ export async function verifyPlayerObjectives(
     return { objectives: measured, allComplete: true, completed: true };
   }
   return { objectives: measured, allComplete, completed: false };
+}
+
+/**
+ * True while a pass is running. `completeMission` is not reentrant — it settles the
+ * rewards — so two overlapping pushes must never both complete the same mission.
+ *
+ * A push arriving while one runs therefore does not start another: its states are already
+ * stored by the upsert, and the next push measures them.
+ */
+let autoMeasureInFlight = false;
+
+/** Where the next pass starts, so a large batch is served across successive pushes. */
+let autoMeasureRotation = 0;
+
+/** Mission statuses whose assignments may still make progress. */
+const OPEN_MISSION_STATUSES = ['available', 'active'] as const;
+
+/** Rotates a list so successive passes serve different tails first. */
+function rotated<T>(items: T[], offset: number): T[] {
+  if (items.length <= 1 || offset === 0) return items;
+  const start = offset % items.length;
+  return [...items.slice(start), ...items.slice(0, start)];
+}
+
+/**
+ * Measures the `service` objectives of every active assignment held by the given players
+ * and completes the missions that just became fully done — the automatic counterpart of
+ * {@link verifyPlayerObjectives}, driven by the player-state push instead of an explicit
+ * call. This is what makes a `visit` or a delivery progress by itself.
+ *
+ * Built to stay cheap when nothing happens, which is the common case:
+ * - one indexed SELECT finds whether any of these players holds an active assignment;
+ * - when none does, the pass stops there and nothing else runs;
+ * - otherwise one SELECT loads the objectives and one preloads the whole batch of player
+ *   states, so the state-based kinds (`visit`, `transport_passenger`) cost no query;
+ * - remote reads (Inventory/Economy) are budgeted per pass and the order rotates, so a
+ *   thousand players sharing the push channel cannot make one pass monopolise the budget.
+ *
+ * Fail-soft by design: a measurement or completion error is logged and swallowed — the
+ * push that triggered the pass must never fail because of it, and the next push retries.
+ * @param playerIds - Players whose state was just upserted.
+ */
+export async function measureActiveAssignmentsForPlayers(playerIds: string[]): Promise<void> {
+  if (playerIds.length === 0 || autoMeasureInFlight) return;
+  autoMeasureInFlight = true;
+  try {
+    await autoMeasurePass(playerIds);
+  } catch (err) {
+    console.error('[auto-measure] pass failed', err);
+  } finally {
+    autoMeasureInFlight = false;
+  }
+}
+
+/** One {@link measureActiveAssignmentsForPlayers} pass. */
+async function autoMeasurePass(playerIds: string[]): Promise<void> {
+  const now = new Date();
+  const rows = await db
+    .select({ assignment: missionAssignments, mission: missions })
+    .from(missionAssignments)
+    .innerJoin(missions, eq(missions.id, missionAssignments.missionId))
+    .where(
+      and(
+        inArray(missionAssignments.playerId, playerIds),
+        eq(missionAssignments.status, 'active'),
+        inArray(missions.status, [...OPEN_MISSION_STATUSES]),
+        // An expired mission is swept by the expiry command; do not keep measuring it.
+        or(isNull(missions.expiresAt), gt(missions.expiresAt, now)),
+      ),
+    );
+  if (rows.length === 0) return;
+
+  const missionIds = [...new Set(rows.map((row) => row.mission.id))];
+  const objectives = await db
+    .select()
+    .from(missionObjectives)
+    .where(inArray(missionObjectives.missionId, missionIds));
+  // Nothing left to measure anywhere: every objective is either completed (high-water)
+  // or waits for its issuer — the usual state of a mission already handed in.
+  if (!objectives.some(isServiceMeasurable)) return;
+
+  const objectivesByMission = new Map<string, MissionObjective[]>();
+  for (const objective of objectives) {
+    const list = objectivesByMission.get(objective.missionId);
+    if (list) list.push(objective);
+    else objectivesByMission.set(objective.missionId, [objective]);
+  }
+
+  // One SELECT for the whole batch: players with no state are recorded as known-absent
+  // so the kinds do not re-query them one by one.
+  const involvedPlayers = [...new Set(rows.map((row) => row.assignment.playerId))];
+  const stateRows = await db
+    .select()
+    .from(missionPlayerStates)
+    .where(inArray(missionPlayerStates.playerId, involvedPlayers));
+  const found = new Map(stateRows.map((row) => [row.playerId, row as PrefetchedPlayerState | null]));
+  const stateCache = new Map<string, PrefetchedPlayerState | null>(
+    involvedPlayers.map((playerId) => [playerId, found.get(playerId) ?? null]),
+  );
+
+  const budgetSize = Math.max(0, env.mission.autoMeasureRemoteBudget);
+  const start = autoMeasureRotation % rows.length;
+  autoMeasureRotation = (start + budgetSize) % rows.length;
+  const budget = { remaining: budgetSize };
+  const completed = new Set<string>();
+
+  for (const row of rotated(rows, start)) {
+    // `completeMission` closes the whole mission, so the other assignees of the same
+    // mission have nothing left to measure.
+    if (completed.has(row.mission.id)) continue;
+    const missionObjectivesList = objectivesByMission.get(row.mission.id) ?? [];
+    if (!missionObjectivesList.some(isServiceMeasurable)) continue;
+    try {
+      const measured = await measureServiceObjectives(row.mission, row.assignment, missionObjectivesList, {
+        stateCache,
+        remoteBudget: budget,
+      });
+      if (!row.mission.autoComplete || !allRequiredObjectivesCompleted(measured)) continue;
+      await completeMission(row.mission.id, row.assignment.playerId);
+      completed.add(row.mission.id);
+    } catch (err) {
+      console.error(
+        '[auto-measure] mission %s player %s failed: %s',
+        row.mission.id,
+        row.assignment.playerId,
+        err,
+      );
+    }
+  }
 }
 
 /** Result of completing a mission (single- or multi-player). */

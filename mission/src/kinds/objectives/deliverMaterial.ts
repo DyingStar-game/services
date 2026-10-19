@@ -8,6 +8,7 @@ import { getStack } from '../../services/inventory.client.js';
 import { resolvePois } from '../../services/inventory.client.js';
 import { placeToLocation, zoneMatches, type PoiGeometryMap } from '../../services/zones.service.js';
 import type { MeasureContext, ObjectiveKind } from '../types.js';
+import { STATE_TTL_MS, isStateFresh, loadPlayerState } from './playerState.js';
 
 const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
 
@@ -26,9 +27,6 @@ const paramsSchema = z
     scope: z.enum(['assignee', 'all']).default('assignee'),
   })
   .strict();
-
-/** Player-state TTL in seconds: a state older than this counts as "outside every zone". */
-const STATE_TTL_MS = 30_000;
 
 async function resolveZonePois(poiId: string): Promise<PoiGeometryMap> {
   try {
@@ -102,6 +100,7 @@ export const deliverMaterialKind: ObjectiveKind = {
   evaluation: 'service',
   quantity: true,
   progress: 'highWater',
+  remoteRead: true,
   paramsSchema,
   paramsJsonSchema: {
     type: 'object',
@@ -144,13 +143,9 @@ export const deliverMaterialKind: ObjectiveKind = {
     }
 
     // Check the assignee is currently inside the delivery POI.
-    const [state] = await db
-      .select()
-      .from(missionPlayerStates)
-      .where(eq(missionPlayerStates.playerId, ctx.playerId))
-      .limit(1);
+    const state = await loadPlayerState(ctx, ctx.playerId);
     if (!state) return 0;
-    if (Date.now() - state.receivedAt.getTime() > STATE_TTL_MS) return 0; // stale
+    if (!isStateFresh(state)) return 0; // stale
     const location = placeToLocation(state.place);
     if (!location || !zoneMatches([zone], location, geometry)) return 0;
 

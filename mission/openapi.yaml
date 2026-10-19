@@ -453,6 +453,11 @@ paths:
         **high-water mark** (progress never regresses). `owns_items` reads Inventory and
         may regress. Auto-completes the mission when every required objective is done.
         The player can only verify their own assignment.
+
+        This is the **explicit** re-measure: with `MISSION_AUTO_MEASURE` (the default) the
+        player-state push already measures on its own, so calling this is only needed for
+        an immediate answer, or when auto-measure is disabled. Calling it on top of an
+        automatic measurement is harmless (the high-water mark makes it a no-op).
       parameters:
         - $ref: '#/components/parameters/MissionId'
       responses:
@@ -795,6 +800,16 @@ paths:
         (every ~10s). States older than **30s** are treated as "outside every zone"
         (fail-closed). Used for zone matching (`zones[]`) and physical objective
         evaluation (`visit`, `deliver_material`, `transport`, `transport_passenger`).
+
+        With `MISSION_AUTO_MEASURE` (the default) this push is also what **drives the
+        measurement** of the `service` objectives: it is the only signal that a player's
+        place or carried goods changed, so a `visit` or a delivery progresses without
+        anyone calling `/verify`. The response is sent first — the push is a heartbeat and
+        must not wait for measurements — and the pass runs best-effort: a measurement
+        error is logged and swallowed, never fails the push, and is retried on the next
+        one. Its cost is bounded (one indexed query when none of the pushed players holds
+        an active assignment, one state query for the whole batch, and a per-pass budget
+        on remote Inventory/Economy reads).
       requestBody:
         required: true
         content:
@@ -982,6 +997,9 @@ paths:
         for the given holder. Physical objectives (`visit`, `deliver_material`,
         `transport`, `transport_passenger`) read the player-state store and use a
         **high-water mark**. `owns_items` reads Inventory and may regress.
+
+        The explicit re-measure: with `MISSION_AUTO_MEASURE` (the default) the
+        player-state push measures on its own, so this is an on-demand re-check.
       parameters:
         - $ref: '#/components/parameters/MissionId'
       requestBody:

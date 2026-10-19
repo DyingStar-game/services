@@ -19,6 +19,7 @@ export const ownsItemsKind: ObjectiveKind = {
   kind: 'owns_items',
   evaluation: 'service',
   quantity: true,
+  remoteRead: true,
   paramsSchema,
   paramsJsonSchema: {
     type: 'object',

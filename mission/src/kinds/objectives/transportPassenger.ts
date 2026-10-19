@@ -1,11 +1,9 @@
 import { z } from 'zod';
 
-import { eq } from 'drizzle-orm';
-import { db } from '../../db/connection.js';
-import { missionPlayerStates } from '../../db/schema/index.js';
 import { resolvePois } from '../../services/inventory.client.js';
 import { zoneMatches, type PoiGeometryMap } from '../../services/zones.service.js';
 import type { MeasureContext, ObjectiveKind } from '../types.js';
+import { isStateFresh, loadPlayerState, stateLocation } from './playerState.js';
 
 const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
 
@@ -17,9 +15,6 @@ const paramsSchema = z
     zone: poiZone,
   })
   .strict();
-
-/** Player-state TTL in seconds. */
-const STATE_TTL_MS = 30_000;
 
 async function resolveZonePois(poiId: string): Promise<PoiGeometryMap> {
   try {
@@ -74,22 +69,14 @@ export const transportPassengerKind: ObjectiveKind = {
     const { passengerId, zone } = paramsSchema.parse(ctx.objective.params ?? {});
 
     // Read the passenger's state (not the driver's).
-    const [state] = await db
-      .select()
-      .from(missionPlayerStates)
-      .where(eq(missionPlayerStates.playerId, passengerId))
-      .limit(1);
+    const state = await loadPlayerState(ctx, passengerId);
     if (!state) return 0;
-    if (Date.now() - state.receivedAt.getTime() > STATE_TTL_MS) return 0; // stale
+    if (!isStateFresh(state)) return 0; // stale
     if (!state.place) return 0;
     if (state.onFoot) return 0; // passenger must be seated
     if (!state.passenger) return 0; // must be a passenger, not the driver
 
-    const location = {
-      system: state.place.system,
-      scene: state.place.scene,
-      position: state.place.x !== undefined ? { x: state.place.x, y: state.place.y!, z: state.place.z! } : null,
-    };
+    const location = stateLocation(state);
     const geometry = await resolveZonePois(zone.poiId);
     return zoneMatches([zone], location, geometry) ? 1 : 0;
   },

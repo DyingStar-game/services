@@ -97,5 +97,19 @@ export const env = {
      * own. Set a positive value to re-enable the in-process sweep (single-node dev).
      */
     expireIntervalSeconds: int('MISSION_EXPIRE_INTERVAL_SECONDS', 0),
+    /**
+     * Measure `service` objectives automatically on every player-state push, instead of
+     * waiting for an explicit `/verify` call. The push is the only signal that a player's
+     * place or carried goods changed, so this is what makes a `visit` or delivery
+     * progress by itself. Off = the historical contract (only `/verify` measures).
+     */
+    autoMeasure: bool('MISSION_AUTO_MEASURE', true),
+    /**
+     * Upper bound on remote (Inventory/Economy HTTP) measurements served by one
+     * auto-measure run. Every remote read costs one HTTP round trip per assignee, so at a
+     * thousand players the bound is what keeps the run bounded; remaining players are
+     * served by the next push (the run order rotates, so nobody is starved).
+     */
+    autoMeasureRemoteBudget: int('MISSION_AUTO_MEASURE_REMOTE_BUDGET', 100),
   },
 };
