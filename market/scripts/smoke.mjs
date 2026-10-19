@@ -78,6 +78,20 @@ console.log('\n# catalog');
   const list = await req('GET', '/api/internal/catalog', undefined, internal);
   check('catalog contains the entry', list.json.some((e) => e.goodType === GOOD), true);
 
+  // Seeded by migration 0001_seed_catalog: a fresh database must not serve an empty list.
+  const SEEDED = ['ore.gold', 'ore.iron', 'ore.cryptonite'];
+  check(
+    'catalog is seeded with the three tradable ores',
+    SEEDED.every((g) => list.json.some((e) => e.goodType === g)),
+    true,
+  );
+  const gold = list.json.find((e) => e.goodType === 'ore.gold');
+  check(
+    'seeded entry carries the fields the client reads',
+    [gold?.kind, gold?.unit, gold?.displayName, gold?.enabled],
+    ['stack', 'litre', 'Gold', true],
+  );
+
   const badKind = await req('PUT', `/api/internal/catalog/${GOOD}`, { kind: 'nonsense' }, internal);
   check('invalid kind rejected', [badKind.status, badKind.json.error], [400, 'VALIDATION_ERROR']);
 }
