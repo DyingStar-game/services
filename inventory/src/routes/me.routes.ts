@@ -75,7 +75,7 @@ meRoutes.get(
 
 // ── POIs ─────────────────────────────────────────────────────────────────────
 
-/** GET /pois?limit=&offset= — POIs of the player's own scope (owned, granted, public). */
+/** GET /pois?limit=&offset= — POIs of the player's own scope (owned, granted, public; never a mission POI). */
 meRoutes.get(
   '/pois',
   validate(limitQuery, 'query'),
@@ -113,7 +113,7 @@ meRoutes.post(
   }),
 );
 
-/** GET /pois/:poiId — One POI with its shares (owned, granted or public). */
+/** GET /pois/:poiId — One POI with its shares (owned, granted, public, or a mission POI read by id). */
 meRoutes.get(
   '/pois/:poiId',
   validate(poiParams, 'params'),

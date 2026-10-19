@@ -169,7 +169,11 @@ paths:
     get:
       tags: [me]
       summary: POIs of the caller's scope (owned, granted, public)
-      description: Owned POIs ∪ read-only grants held by the caller ∪ POIs published `public`.
+      description: >
+        Owned POIs ∪ read-only grants held by the caller ∪ POIs published `public`.
+        Mission POIs **never** appear here — their holder is the mission, not the player,
+        even when the caller created them. The game reads one by id instead, see
+        `GET /api/me/pois/{poiId}`.
       parameters:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/offset'
@@ -206,7 +210,12 @@ paths:
   /api/me/pois/{poiId}:
     get:
       tags: [me]
-      summary: One POI with its shares (owned, granted or public)
+      summary: One POI with its shares (owned, granted, public, or a mission POI by id)
+      description: >
+        A mission POI is readable by **any** player, not only by its creator: a mission
+        names its point by id, and mission POIs never appear in `GET /api/me/pois`, so this
+        read is how the client shows the named point on the map. The id is an unguessable
+        UUID and the row carries a name and coordinates only.
       parameters:
         - $ref: '#/components/parameters/poiId'
       responses:
@@ -1063,8 +1072,9 @@ components:
       description: >
         `mission` is a POI created by a mission builder: it has **no inventory holder** —
         the creator is recorded in `createdBy`, not as an owner. Mission POIs are
-        `visibility: private` by default and invisible to `/api/me/pois` unless the player
-        created them.
+        `visibility: private` by default and **never** appear in `GET /api/me/pois`, even
+        for their creator; they are readable by id, by any player, through
+        `GET /api/me/pois/{poiId}`.
       enum: [player, npc, corporation, political, system, mission]
     PoiGranteeType:
       type: string

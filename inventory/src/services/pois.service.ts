@@ -86,6 +86,11 @@ function grantedTo(granteeType: PoiGranteeType, granteeId: string) {
 
 /**
  * A POI of the player's own scope: owned, granted to them, or public.
+ *
+ * Mission POIs (`ownerType: 'mission'`) are deliberately absent even when the player
+ * created them: their holder is the mission, not the player, they are temporary, and a
+ * destination zone is not a marker the player placed. Since they never appear in a list,
+ * the game reads one by id instead — see {@link canReadAsPlayer}.
  * @param playerId - Player id.
  * @param limit - Page size.
  * @param offset - Rows to skip.
@@ -94,7 +99,6 @@ function grantedTo(granteeType: PoiGranteeType, granteeId: string) {
 export async function listPlayerPois(playerId: string, limit: number, offset: number): Promise<Page<InventoryPoi>> {
   const condition = or(
     and(eq(inventoryPois.ownerType, 'player'), eq(inventoryPois.ownerId, playerId)),
-    and(eq(inventoryPois.ownerType, 'mission'), eq(inventoryPois.createdBy, playerId)),
     eq(inventoryPois.visibility, 'public'),
     grantedTo('player', playerId),
   );
@@ -505,7 +509,13 @@ function hasPlayerShare(poiId: string, playerId: string): Promise<boolean> {
 
 /**
  * Whether a player may read a POI through the `/api/me/pois` scope: they own it, they
- * hold a grant, it is public, or they manage the organization owning it.
+ * hold a grant, it is public, they manage the organization owning it, or it belongs to a
+ * mission.
+ *
+ * A mission POI is readable by **any** player, not only by its creator: since it never
+ * appears in `listPlayerPois`, this read is the only way for the client to display the
+ * named point a mission refers to. The id is an unguessable UUID and the row carries
+ * nothing but a name and coordinates.
  * @param poi - POI.
  * @param playerId - Acting player.
  * @returns True when readable.
@@ -513,7 +523,8 @@ function hasPlayerShare(poiId: string, playerId: string): Promise<boolean> {
 export async function canReadAsPlayer(poi: InventoryPoi, playerId: string): Promise<boolean> {
   if (poi.visibility === 'public') return true;
   if (poi.ownerType === 'player' && poi.ownerId === playerId) return true;
-  if (poi.ownerType === 'mission' && poi.createdBy === playerId) return true;
+  // Mission POI: never in a list, so readable by id by any player.
+  if (poi.ownerType === 'mission') return true;
   if (await hasPlayerShare(poi.id, playerId)) return true;
   if (poi.ownerType === 'corporation' || poi.ownerType === 'political') {
     try {

@@ -264,3 +264,78 @@ describe('PATCH /api/me/pois/:poiId — geometry is editable by its creator', ()
     expect(body.name).toBe('Renamed');
   });
 });
+
+describe('GET /api/me/pois — a mission POI is not a player place (tests 21-24)', () => {
+  beforeEach(() => {
+    missionClient.inUse.clear();
+    missionClient.fail = false;
+    socialClient.allow = false;
+  });
+
+  /** Creates a POI (optionally for a non-player holder) and returns the response body. */
+  async function create(owner?: Record<string, unknown>, playerId: string = PLAYER): Promise<any> {
+    const { status, body } = await call(
+      '/api/me/pois',
+      'POST',
+      {
+        name: 'Mission zone',
+        system: 'tarsis',
+        scene: 'tarsis_3',
+        x: 10,
+        y: 20,
+        z: 30,
+        ...(owner ? { owner } : {}),
+      },
+      playerId,
+    );
+    expect(status).toBe(201);
+    return body;
+  }
+
+  /** Ids returned by the caller's own POI list. */
+  async function listedIds(playerId: string): Promise<string[]> {
+    const { status, body } = await call('/api/me/pois?limit=50', 'GET', undefined, playerId);
+    expect(status).toBe(200);
+    return body.items.map((poi: { id: string }) => poi.id);
+  }
+
+  it('keeps a mission POI out of the list of the player who created it (test 21)', async () => {
+    const own = await create();
+    const mission = await create({ type: 'mission', id: OTHER });
+    expect(mission.ownerType).toBe('mission');
+    expect(mission.createdBy).toBe(PLAYER);
+
+    const ids = await listedIds(PLAYER);
+    expect(ids).toContain(own.id); // control: the list itself still works
+    expect(ids).not.toContain(mission.id);
+  });
+
+  it('keeps a mission POI out of every player list, whoever created it (test 22)', async () => {
+    // Created by OTHER: under the old scope it landed in OTHER own list too.
+    const theirs = await create({ type: 'mission', id: PLAYER }, OTHER);
+    expect(theirs.createdBy).toBe(OTHER);
+    expect(await listedIds(OTHER)).not.toContain(theirs.id);
+    expect(await listedIds(PLAYER)).not.toContain(theirs.id);
+  });
+
+  it('reads a mission POI by id for its creator and for anyone else (test 23)', async () => {
+    const mission = await create({ type: 'mission', id: OTHER });
+
+    const byCreator = await call(`/api/me/pois/${mission.id}`, 'GET', undefined, PLAYER);
+    expect(byCreator.status).toBe(200);
+    expect(byCreator.body.id).toBe(mission.id);
+    expect(byCreator.body.name).toBe('Mission zone');
+
+    // The whole point: the client shows a mission point it did not create.
+    const byStranger = await call(`/api/me/pois/${mission.id}`, 'GET', undefined, OTHER);
+    expect(byStranger.status).toBe(200);
+    expect(byStranger.body.id).toBe(mission.id);
+    expect(byStranger.body.name).toBe('Mission zone');
+  });
+
+  it('leaves an ordinary player POI in the creator list only (test 24)', async () => {
+    const own = await create();
+    expect(await listedIds(PLAYER)).toContain(own.id);
+    expect(await listedIds(OTHER)).not.toContain(own.id);
+  });
+});
