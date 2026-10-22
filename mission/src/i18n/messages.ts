@@ -45,6 +45,8 @@ export const en = {
   'corp.reserved': 'This mission is reserved to the corporation members',
   'corp.not_member_create': 'You are not a member of this corporation',
   'corp.not_member_manage': 'This mission belongs to a corporation you are not a member of',
+  // ── scenario chain ──
+  'mission.chain_incomplete': 'Complete {count} prior mission(s) first',
   // ── group sharing ──
   'share.blocked': 'A mission with active assignees cannot be shared',
   'share.unblocked': 'A mission with active assignees cannot be unshared',
@@ -55,11 +57,10 @@ export const en = {
   'economy.credit_failed': 'Economy credit failed ({status}): {message}',
   'economy.debit_failed': 'Economy debit failed ({status}): {message}',
   // ── prerequisite details ──
-  'prereq.detail.balance': 'balance {balance} < {amount} {currency}',
   'prereq.detail.owns': '{scope} {itemId}: {held} < {quantity}',
   'prereq.detail.no_profile': 'profile not found',
   'prereq.detail.reputation': 'reputation {reputation} < {min}',
-  'prereq.detail.not_corp': 'not a member of corporation {corporationId}',
+  'prereq.detail.standing': 'standing {standing} < {min} ({domain})',
   // ── organization treasuries (corporation / political entity funding) ──
   'treasury.not_corp_member': 'You are not a member of the corporation funding this mission',
   'treasury.no_corp_permission': 'Requires the CEO role or the manage_corporation permission',
@@ -101,6 +102,8 @@ export const fr: Record<MessageKey, string> = {
   'corp.reserved': 'Cette mission est réservée aux membres de la corporation',
   'corp.not_member_create': "Vous n'êtes pas membre de cette corporation",
   'corp.not_member_manage': "Cette mission appartient à une corporation dont vous n'êtes pas membre",
+  // ── chaînage de scénario ──
+  'mission.chain_incomplete': 'Terminez d\'abord {count} mission(s) préalable(s)',
   // ── group sharing ──
   'share.blocked': 'Une mission avec des assignés actifs ne peut pas être partagée',
   'share.unblocked': 'Une mission avec des assignés actifs ne peut pas être retirée du partage',
@@ -111,11 +114,10 @@ export const fr: Record<MessageKey, string> = {
   'economy.credit_failed': "Échec du crédit Economy ({status}) : {message}",
   'economy.debit_failed': "Échec du débit Economy ({status}) : {message}",
   // ── prerequisite details ──
-  'prereq.detail.balance': 'solde {balance} < {amount} {currency}',
   'prereq.detail.owns': '{scope} {itemId} : {held} < {quantity}',
   'prereq.detail.no_profile': 'profil introuvable',
   'prereq.detail.reputation': 'réputation {reputation} < {min}',
-  'prereq.detail.not_corp': 'pas membre de la corporation {corporationId}',
+  'prereq.detail.standing': 'standing {standing} < {min} ({domain})',
   // ── organization treasuries (corporation / political entity funding) ──
   'treasury.not_corp_member': 'Vous n\'êtes pas membre de la corporation qui finance cette mission',
   'treasury.no_corp_permission': 'Nécessite le rôle CEO ou la permission manage_corporation',

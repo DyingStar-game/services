@@ -15,11 +15,14 @@ import { getHolderInventory, getStack } from '../services/inventory.service.js';
 import {
   assertCorporationManage,
   assertPoliticalManage,
+  assertPoiGeometryEditable,
+  assertPoiNotInUse,
   assertPoiWriteAccess,
   createPoi,
   deletePoi,
   getPoiView,
   listPlayerPois,
+  MISSION_POI_OWNER_ID,
   requirePlayerRead,
   requirePoi,
   revokeShare,
@@ -72,7 +75,7 @@ meRoutes.get(
 
 // ── POIs ─────────────────────────────────────────────────────────────────────
 
-/** GET /pois?limit=&offset= — POIs of the player's own scope (owned, granted, public). */
+/** GET /pois?limit=&offset= — POIs of the player's own scope (owned, granted, public; never a mission POI). */
 meRoutes.get(
   '/pois',
   validate(limitQuery, 'query'),
@@ -82,13 +85,16 @@ meRoutes.get(
   }),
 );
 
-/** POST /pois — Create a POI (own, or for a corporation/political entity the player manages). */
+/** POST /pois — Create a POI (own, corporation/political managed, or mission-only). */
 meRoutes.post(
   '/pois',
   validate(createPoiBody),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { owner, ...input } = req.body;
+    // The acting player is always recorded: geometry stays editable by whoever placed the
+    // POI, for their own, their corporation's or a mission's POIs alike.
+    input.createdBy = player.id;
     let holder: { ownerType: PoiOwnerType; ownerId: string } = {
       ownerType: 'player',
       ownerId: player.id,
@@ -99,12 +105,15 @@ meRoutes.post(
     } else if (owner?.type === 'political') {
       await assertPoliticalManage(player.id, owner.id);
       holder = { ownerType: 'political', ownerId: owner.id };
+    } else if (owner?.type === 'mission') {
+      holder = { ownerType: 'mission', ownerId: MISSION_POI_OWNER_ID };
+      input.visibility = 'private';
     }
     res.status(201).json(await createPoi(holder, input));
   }),
 );
 
-/** GET /pois/:poiId — One POI with its shares (owned, granted or public). */
+/** GET /pois/:poiId — One POI with its shares (owned, granted, public, or a mission POI read by id). */
 meRoutes.get(
   '/pois/:poiId',
   validate(poiParams, 'params'),
@@ -116,7 +125,16 @@ meRoutes.get(
   }),
 );
 
-/** PATCH /pois/:poiId — Edit a POI the player manages (ownership unchanged). */
+/**
+ * PATCH /pois/:poiId — Edit a POI the player manages (ownership unchanged).
+ *
+ * Geometry (`system`, `scene`, `x`, `y`, `z`, `radiusM`) may be corrected **by the player
+ * who created the POI**, or by a member managing an organization POI: the criterion is the
+ * creator because the same player can create a POI of their own, of their corporation or of
+ * a mission, and in all three cases they are the one who placed it. It is refused while the
+ * POI is the destination of a mission someone has accepted (`400 POI_IN_USE`), so a
+ * contract's delivery radius never moves under the acceptor's feet.
+ */
 meRoutes.patch(
   '/pois/:poiId',
   validate(poiParams, 'params'),
@@ -125,6 +143,12 @@ meRoutes.patch(
     const player = requirePlayer(req);
     const poi = await requirePoi(req.params.poiId);
     await assertPoiWriteAccess(poi, player.id);
+    const G = ['system', 'scene', 'x', 'y', 'z', 'radiusM'] as const;
+    const touched = G.filter((f) => req.body[f] !== undefined);
+    if (touched.length > 0) {
+      assertPoiGeometryEditable(poi, player.id);
+      await assertPoiNotInUse(poi.id);
+    }
     res.json(await updatePoi(poi.id, req.body));
   }),
 );

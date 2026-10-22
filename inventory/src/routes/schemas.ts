@@ -99,6 +99,30 @@ export const consumeHoldBody = z.object({
   to: z.object({ holderType: z.enum(HOLDER_TYPES), holderId: uuidSchema }),
 });
 
+/**
+ * Carried-quantity delta. `delta > 0` fills a crate (optional `from`: load from another
+ * holder's available stock; without `from`: the goods are created, e.g. mining).
+ * `delta < 0` drops a crate in a delivery zone (`to` is required).
+ */
+export const carriedDeltaBody = z
+  .object({
+    goodType,
+    delta: z.number().int().refine((v) => v !== 0, { message: 'delta must be non-zero' }),
+    /** Source holder to load from (only for `delta > 0`). */
+    from: z.object({ holderType: z.enum(HOLDER_TYPES), holderId: uuidSchema }).optional(),
+    /** Destination holder (only for `delta < 0`). */
+    to: z.object({ holderType: z.enum(HOLDER_TYPES), holderId: uuidSchema }).optional(),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.delta > 0 && v.to) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['to'], message: 'to is only valid with a negative delta' });
+    }
+    if (v.delta < 0 && v.from) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['from'], message: 'from is only valid with a positive delta' });
+    }
+  });
+
 export const holdIdParams = z.object({ holdId: uuidSchema });
 
 /**
@@ -129,10 +153,12 @@ export const poiHolderParams = z.object({
 
 const poiName = z.string().trim().min(1).max(128);
 const poiDescription = z.string().trim().max(2000);
-const poiSystem = z.string().trim().min(1).max(64);
+/** Star system; always a system name in practice (`""` is legacy). */
+const poiSystem = z.string().trim().max(64);
+/** Body or sub-scene; the reference frame of x/y/z. `"space"` = open space (frame of the system). */
 const poiScene = z.string().trim().min(1).max(128);
-/** Game units, assumed metres (same convention as mission zones). */
-const poiCoordinate = z.number();
+/** Metres in the frame of the body named by `scene` (not absolute in the universe). Finite only. */
+const poiCoordinate = z.number().finite();
 const poiRadius = z.number().min(0).max(1_000_000);
 const poiMetadata = z.record(z.string(), z.unknown());
 
@@ -164,8 +190,8 @@ export const createPoiBody = z.object({
   radiusM: poiRadius.optional(),
   visibility: z.enum(POI_VISIBILITIES).optional(),
   metadata: poiMetadata.optional(),
-  /** Organization owning the created POI (default: the caller). */
-  owner: z.object({ type: z.enum(['corporation', 'political']), id: uuidSchema }).optional(),
+  /** Owner of the created POI (default: the caller). `mission` = POI not stored in any inventory. */
+  owner: z.object({ type: z.enum(['corporation', 'political', 'mission']), id: uuidSchema }).optional(),
 });
 
 /** Creation body on the internal API: the owner is always explicit. */

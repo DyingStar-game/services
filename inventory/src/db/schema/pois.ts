@@ -4,11 +4,11 @@
  * political entity or the reserved `system`) and can be shared read-only with other
  * players/entities, or have its ownership transferred.
  *
- * Unlike goods, POIs carry geometry: `x`/`y`/`z` (game units, assumed metres), an optional
- * `system`, an optional hierarchical `scene` path (same prefix convention as mission
- * zones: `tarsis_1` matches `tarsis_1/new-paris`, never `tarsis_10`) and an optional
- * `parentId` pointing at a persistence object (opaque UUID, no foreign key — Persistence
- * is not in this database).
+ * x/y/z are metres measured in the frame of the body named by `scene` (not absolute in
+ * the universe: a body orbits and spins, so an absolute triple is stale as soon as it is
+ * written). `scene` is the parent for matching; `"space"` is the frame of the system
+ * itself. `parentId` is an opaque UUID pointing at a persistence object (no foreign key
+ * — Persistence is not in this database).
  *
  * `radiusM = null` is a plain point; `radiusM >= 0` turns it into a zone. `visibility`
  * lets the game publish a POI to every player without a per-player share.
@@ -27,10 +27,10 @@ import {
 } from 'drizzle-orm/pg-core';
 
 /** Who can own a POI (wider than the goods holders: political entities appear here). */
-export const POI_OWNER_TYPES = ['player', 'npc', 'corporation', 'political', 'system'] as const;
+export const POI_OWNER_TYPES = ['player', 'npc', 'corporation', 'political', 'system', 'mission'] as const;
 export type PoiOwnerType = (typeof POI_OWNER_TYPES)[number];
 
-/** Who a POI can be shared with (ownership targets are the owner types, minus `system`). */
+/** Who a POI can be shared with (the owner types minus `system` and `mission`). */
 export const POI_GRANTEE_TYPES = ['player', 'npc', 'corporation', 'political'] as const;
 export type PoiGranteeType = (typeof POI_GRANTEE_TYPES)[number];
 
@@ -59,6 +59,8 @@ export const inventoryPois = pgTable(
     radiusM: doublePrecision('radius_m'),
     visibility: text('visibility').$type<PoiVisibility>().notNull().default('private'),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    /** Who created the POI (audit); distinct from owner: a mission POI is not stored in its creator's inventory. */
+    createdBy: uuid('created_by'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -69,7 +71,7 @@ export const inventoryPois = pgTable(
     index('inventory_pois_visibility_idx').on(t.visibility),
     check(
       'inventory_pois_owner_type_valid',
-      sql`${t.ownerType} in ('player','npc','corporation','political','system')`,
+      sql`${t.ownerType} in ('player','npc','corporation','political','system','mission')`,
     ),
     check('inventory_pois_radius_valid', sql`${t.radiusM} is null or ${t.radiusM} >= 0`),
     check(

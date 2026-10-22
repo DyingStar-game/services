@@ -8,6 +8,27 @@
       "when": 1791321407443,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791924775839,
+      "tag": "0001_mission_gameplay",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792008580813,
+      "tag": "0002_player_states_and_divers",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792181380813,
+      "tag": "0003_zone_radius_on_poi",
+      "breakpoints": true
     }
   ]
 }

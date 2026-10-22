@@ -44,9 +44,12 @@ routes joueur sans Keycloak : `AUTH_DEV_BYPASS=true` + `X-Player-Id` / `X-Player
 
 ## Modèle
 
-- **Catalogue** (`market_catalog`) : liste des `goodType` échangeables, poussée par le
-  serveur de jeu (`PUT /api/internal/catalog/:goodType`). La **nature** (fongible/instance)
-  y est autoritative.
+- **Catalogue** (`market_catalog`) : liste des `goodType` échangeables. **Amorcé par la
+  migration `0001_seed_catalog`** (les 3 minerais échangeables, miroir de
+  `inventory.inventory_good_types`, qui fait autorité sur `good_type` et `kind`) pour qu'un
+  dépôt vierge ne serve jamais `GET /api/market/catalog → []`. **Poussé par le serveur de
+  jeu** (`PUT /api/internal/catalog/:goodType`), qui reste autoritaire : son upsert écrase
+  l'amorçage. La **nature** (fongible/instance) y est autoritative.
 - **Ordres** (`market_orders`) : carnet. `sell` (fongible ou instance), `buy` (fongible
   uniquement). Matching immédiat : un achat croise le meilleur `sell` (prix le plus bas), une
   vente croise le meilleur `buy` (prix le plus haut) dès que les prix se croisent ; le trade

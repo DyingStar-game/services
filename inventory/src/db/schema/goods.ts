@@ -47,15 +47,19 @@ export const inventoryStacks = pgTable(
     holderId: uuid('holder_id').notNull(),
     goodType: text('good_type').notNull(),
     quantity: bigint('quantity', { mode: 'number' }).notNull().default(0),
+    /** Physically carried quantity (e.g. crates in a player's hold), distinct from holds. */
+    carried: bigint('carried', { mode: 'number' }).notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.holderType, t.holderId, t.goodType] }),
     check('inventory_stacks_quantity_positive', sql`${t.quantity} >= 0`),
+    check('inventory_stacks_carried_positive', sql`${t.carried} >= 0`),
+    check('inventory_stacks_carried_bounded', sql`${t.carried} <= ${t.quantity}`),
     index('inventory_stacks_holder_idx').on(t.holderType, t.holderId),
     check(
       'inventory_stacks_holder_type_valid',
-      sql`${t.holderType} in ('player','npc','corporation','system','warehouse')`,
+      sql`${t.holderType} in ('player','npc','corporation','political','system','warehouse')`,
     ),
   ],
 );

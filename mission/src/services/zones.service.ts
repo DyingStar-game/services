@@ -2,21 +2,27 @@
  * Mission zone matching: a mission's `zones` are matched against the player's presence
  * location (`{system, scene, position}` reported by the game server through Social).
  *
+ * Positions are **relative to the body named by `scene`** (the body's local frame,
+ * metres from its centre). A body orbits and spins, so an absolute triple would be
+ * stale as soon as written; a local triple never drifts. `scene: "space"` is the frame
+ * of the system itself.
+ *
  * Two zone kinds (geometry lives in the Inventory POI registry, not here):
  * - `system`: same system;
- * - `poi`: a POI from Inventory — a zone when a radius applies (the zone's `radiusM`
- *   overrides the POI's), otherwise the POI's scene subtree (prefix match), otherwise
- *   the exact POI coordinates. POIs are resolved through Inventory's internal API
- *   (60 s cache); an unresolved/missing POI never matches (fail-closed, exactly like
- *   an unknown location).
+ * - `poi`: a POI from Inventory. In every branch, **the player's `scene` must be
+ *   compatible with the POI's `scene`** before any coordinate comparison: two scenes
+ *   are compatible when they are equal or one is a segment prefix of the other
+ *   (`tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`, never `tarsis_10`).
+ *   A POI whose scene is `null` never matches (fail-closed: no frame to compare in).
+ *   The POI's own `radiusM` is the only radius that exists — a zone carries none of its
+ *   own, so availability and an objective's target share the same disc.
  *
  * Two implementations of the same semantics:
  * - `zoneFilterSql` for the listing (database-side; the resolved geometries are injected
  *   as one jsonb parameter so unresolvable POIs simply never match);
  * - `zoneMatches` for acceptance (fresh presence, fail-closed).
  *
- * An empty zone list is global (available everywhere). `scene` matching is hierarchical:
- * `tarsis_1` matches `tarsis_1` and `tarsis_1/new-paris`, never `tarsis_10`.
+ * An empty zone list is global (available everywhere).
  */
 import { sql, type SQL } from 'drizzle-orm';
 
@@ -37,6 +43,31 @@ export interface PoiZoneGeometry {
 
 /** POI id → resolved geometry (missing entry = zone that never matches). */
 export type PoiGeometryMap = Record<string, PoiZoneGeometry>;
+
+/**
+ * Segment-prefix compatibility between two scene paths. True when the scenes are equal
+ * or one is a segment prefix of the other (`tarsis_1` ⟷ `tarsis_1/new-paris`), never a
+ * bare character prefix (`tarsis_1` ⟷ `tarsis_10`). Symmetric: either side may be the
+ * shorter path. A missing or empty scene is never compatible (fail-closed: no frame).
+ */
+export function scenesCompatible(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+/**
+ * Converts a player-state `place` (`{system, scene, x, y, z}`) into the shape
+ * `zoneMatches` understands. A `place` without coordinates yields a `null` position,
+ * which the radius branch treats as "no position" (never matches a radius).
+ */
+export function placeToLocation(
+  place: { system?: string; scene?: string; x?: number; y?: number; z?: number } | null | undefined,
+): ZoneLocation | null {
+  if (!place) return null;
+  const { system, scene, x, y, z } = place;
+  const position = x !== undefined && y !== undefined && z !== undefined ? { x, y, z } : null;
+  return { system, scene, position };
+}
 
 /** Squared euclidean distance (NaN-safe: missing coordinates never match). */
 function distanceSquared(
@@ -121,38 +152,32 @@ export function zoneMatches(
 
   for (const zone of zones) {
     if (zone.kind === 'system') {
-      if (location.system && location.system === zone.system) return true;
+      // `""` = outside any system; must match exactly (including empty strings).
+      if (location.system === zone.system) return true;
       continue;
     }
 
-    // poi: a declared system on the POI must be present and equal.
+    // poi: a declared system on the POI must match. `""` = outside-system, `null` = unconstrained.
     const poi = poiGeometry[zone.poiId];
     if (!poi) continue; // unknown/deleted POI: fail closed
-    if (poi.system && location.system !== poi.system) continue;
+    if (poi.system !== null && poi.system !== undefined && location.system !== poi.system) continue;
 
-    const radius = zone.radiusM ?? poi.radiusM;
+    // The POI's own radius is the only one that exists: a zone carries no radius (§3.4).
+    const radius = poi.radiusM;
     if (radius !== null) {
-      // Area: within `radius` of the POI centre (zone override wins over the POI's).
+      // Area: the scene must be compatible before any distance comparison in the shared frame.
+      if (!scenesCompatible(location.scene, poi.scene)) continue;
       const position = location.position;
       if (position && distanceSquared(position, poi.center) <= radius ** 2) return true;
       continue;
     }
     if (poi.scene) {
-      // Scene subtree of the POI (same hierarchical prefix convention as before).
+      // Scene subtree of the POI: the player must be in the POI's scene or below.
       const scene = location.scene;
       if (scene && (scene === poi.scene || scene.startsWith(`${poi.scene}/`))) return true;
       continue;
     }
-    // Plain point: only a player standing exactly on the POI matches.
-    const position = location.position;
-    if (
-      position &&
-      position.x === poi.center.x &&
-      position.y === poi.center.y &&
-      position.z === poi.center.z
-    ) {
-      return true;
-    }
+    // No radius, no scene: fail-closed (no frame to compare in).
   }
   return false;
 }
@@ -194,24 +219,25 @@ export function zoneFilterSql(location: ZoneLocation | null | undefined, poiGeom
           and (${poi()}->>'system' is null or ${poi()}->>'system' = ${system}::text)
           and (
             case
-              when (z->>'radiusM') is not null then (
-                (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
-                + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
-                + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
-              ) <= ((z->>'radiusM')::float8) ^ 2
               when (${poi()}->>'radiusM') is not null then (
-                (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
-                + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
-                + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
-              ) <= ((${poi()}->>'radiusM')::float8) ^ 2
+                (${poi()}->>'scene') is not null
+                and ${scene}::text is not null
+                and (
+                  ${scene}::text = (${poi()}->>'scene')
+                  or left(${scene}::text, length(${poi()}->>'scene') + 1) = (${poi()}->>'scene') || '/'
+                  or left((${poi()}->>'scene'), length(${scene}::text) + 1) = ${scene}::text || '/'
+                )
+                and (
+                  (${px}::float8 - (${poi()}->'center'->>'x')::float8) ^ 2
+                  + (${py}::float8 - (${poi()}->'center'->>'y')::float8) ^ 2
+                  + (${pz}::float8 - (${poi()}->'center'->>'z')::float8) ^ 2
+                ) <= ((${poi()}->>'radiusM')::float8) ^ 2
+              )
               when (${poi()}->>'scene') is not null then (
                 ${scene}::text = (${poi()}->>'scene')
-                or ${scene}::text like (((${poi()}->>'scene')) || '/%')
+                or left(${scene}::text, length(${poi()}->>'scene') + 1) = (${poi()}->>'scene') || '/'
               )
-              else (
-                (${px}::float8, ${py}::float8, ${pz}::float8)
-                = ((${poi()}->'center'->>'x')::float8, (${poi()}->'center'->>'y')::float8, (${poi()}->'center'->>'z')::float8)
-              )
+              else false
             end
           )
         )
@@ -243,9 +269,10 @@ export async function assertMissionZone(mission: Mission, playerId: string): Pro
 }
 
 /**
- * Write-time guard: every `poi` zone must reference an existing POI. Checked only when
- * the Inventory integration is configured; an Inventory outage does not block the write
- * (matching stays fail-closed anyway), an unknown id does.
+ * Write-time guard: every `poi` zone must reference an existing POI. There is no radius
+ * check left — a zone carries no radius of its own, it inherits the POI's wholesale.
+ * Checked only when the Inventory integration is configured; an Inventory outage does not
+ * block the write (matching stays fail-closed anyway).
  * @param zones - Zones about to be persisted.
  * @throws 400 `POI_NOT_FOUND` when a referenced POI does not exist.
  */
@@ -258,6 +285,10 @@ export async function assertPoiZonesExist(zones: MissionZone[] | undefined): Pro
   } catch {
     return; // outage: unavailable ≠ invalid, matching remains fail-closed
   }
-  const missing = ids.find((id) => !resolved.has(id));
-  if (missing) throw new HttpError(400, 'POI_NOT_FOUND', t('zones.poi_not_found', { id: missing }));
+  for (const zone of zones ?? []) {
+    if (zone.kind !== 'poi') continue;
+    if (!resolved.get(zone.poiId)) {
+      throw new HttpError(400, 'POI_NOT_FOUND', t('zones.poi_not_found', { id: zone.poiId }));
+    }
+  }
 }

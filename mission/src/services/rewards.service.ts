@@ -11,7 +11,7 @@
  * are escrowed (held) at mission creation and consumed at settlement, otherwise the goods
  * come from the system faucet. This service never mints item ownership.
  */
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -20,6 +20,7 @@ import {
   missions,
   type Mission,
   type MissionAssignment,
+  type MissionObjective,
   type RewardComponent,
   type RewardItem,
 } from '../db/schema/index.js';
@@ -32,6 +33,49 @@ import {
   transferInstance,
   transferStack,
 } from './inventory.client.js';
+import { addStanding } from './social.client.js';
+
+/** Completion ratio of a full hand-in, in basis points (10000 = every required objective). */
+export const RATIO_FULL = 10000;
+
+/**
+ * Extra reward components carried by the bonus objectives of a mission that are already
+ * completed. Bonus rewards are only granted on a full hand-in (never on a partial one).
+ * @param objectives - All objectives of the mission.
+ * @returns The bonus components, in objective order.
+ */
+export function bonusComponents(objectives: MissionObjective[]): RewardComponent[] {
+  return objectives.flatMap((objective) =>
+    objective.isBonus && objective.status === 'completed' && objective.bonusReward ? [objective.bonusReward] : [],
+  );
+}
+
+/**
+ * Folds bonus components into a reward list: a credits bonus tops up the single credits
+ * component (settlement handles exactly one of them), an item bonus is appended.
+ * @param base - The mission's own reward components.
+ * @param bonuses - Components granted by completed bonus objectives.
+ * @returns The merged list.
+ */
+export function mergeBonusComponents(
+  base: RewardComponent[] | null,
+  bonuses: RewardComponent[],
+): RewardComponent[] {
+  const merged: RewardComponent[] = [...(base ?? [])];
+  for (const bonus of bonuses) {
+    if (bonus.type === 'credits') {
+      const existing = merged.find(
+        (component): component is Extract<RewardComponent, { type: 'credits' }> => component.type === 'credits',
+      );
+      if (existing) {
+        existing.amount += bonus.amount;
+        continue;
+      }
+    }
+    merged.push(bonus);
+  }
+  return merged;
+}
 
 /** Outcome of a settlement attempt. */
 export interface SettlementResult {
@@ -45,7 +89,9 @@ export interface SettlementResult {
 
 /** `settledComponents` key of a reward component. */
 export function componentKey(component: RewardComponent): string {
-  return component.type === 'credits' ? 'credits' : `item:${component.itemId}`;
+  if (component.type === 'credits') return 'credits';
+  if (component.type === 'standing') return `standing:${component.domain}`;
+  return `item:${component.itemId}`;
 }
 
 function isItemComponent(component: RewardComponent): component is RewardItem {
@@ -55,6 +101,13 @@ function isItemComponent(component: RewardComponent): component is RewardItem {
 /** Item components of a mission, in reward-list order (aligned with `escrowItemHoldIds`). */
 export function itemComponents(rewards: RewardComponent[] | null): RewardItem[] {
   return (rewards ?? []).filter(isItemComponent);
+}
+
+/** Standing components of a mission (domain deltas held by Social), in reward-list order. */
+export function standingComponents(rewards: RewardComponent[] | null): Extract<RewardComponent, { type: 'standing' }>[] {
+  return (rewards ?? []).filter(
+    (component): component is Extract<RewardComponent, { type: 'standing' }> => component.type === 'standing',
+  );
 }
 
 /**
@@ -83,25 +136,44 @@ export function splitReward(total: number, participants: MissionAssignment[]): M
 /**
  * Freezes one assignee's share of every reward component at completion time, so a
  * settlement retry credits/transfers the exact same amounts. Unique-instance components
- * are not split (single assignee by validation).
+ * are not split (single assignee by validation); standing components are never split
+ * either (each participant gets the full delta) and never granted on a partial hand-in.
+ *
+ * A partial hand-in (`ratioBp` < 10000) freezes a proportional credits share and no item
+ * or standing component at all: goods are never paid against a partial completion, and
+ * the bonus components of the mission are left out as well.
  * @param mission - The mission (its `rewards` components).
  * @param assignment - The assignee being completed.
  * @param participants - Every active assignee sharing the mission.
+ * @param opts.ratioBp - Weighted progress actually completed, in basis points (default 10000).
+ * @param opts.bonusComponents - Extra components granted by completed bonus objectives.
  * @returns The frozen shares for this assignee.
  */
 export function freezeShares(
   mission: Mission,
   assignment: MissionAssignment,
   participants: MissionAssignment[],
+  opts: { ratioBp?: number; bonusComponents?: RewardComponent[] } = {},
 ): RewardComponent[] {
-  return (mission.rewards ?? []).map((component) => {
+  const ratioBp = opts.ratioBp ?? RATIO_FULL;
+  const partial = ratioBp < RATIO_FULL;
+  const components: RewardComponent[] = partial
+    ? [...(mission.rewards ?? [])]
+    : mergeBonusComponents(mission.rewards, opts.bonusComponents ?? []);
+  return components.flatMap((component): RewardComponent[] => {
     if (component.type === 'credits') {
       const shares = splitReward(component.amount, participants);
-      return { ...component, amount: shares.get(assignment.id) ?? 0 };
+      const share = shares.get(assignment.id) ?? 0;
+      const amount = partial ? Math.floor((share * ratioBp) / RATIO_FULL) : share;
+      return amount > 0 ? [{ ...component, amount }] : [];
     }
-    if (component.instanceId) return component;
+    if (partial) return [];
+    // Standing is personal and never split: each participant receives the full delta.
+    if (component.type === 'standing') return [component];
+    if (component.instanceId) return [component];
     const shares = splitReward(component.quantity, participants);
-    return { ...component, quantity: shares.get(assignment.id) ?? 0 };
+    const share = shares.get(assignment.id) ?? 0;
+    return share > 0 ? [{ ...component, quantity: share }] : [];
   });
 }
 
@@ -209,8 +281,16 @@ async function grantItemComponent(
 /** True when every reward component of the assignment has been settled. */
 export function isAssignmentFullySettled(mission: Mission, assignment: MissionAssignment): boolean {
   if (!assignment.rewardSettled) return false;
+  // A partial hand-in never pays items or standing: there is nothing left beyond credits.
+  if (assignment.completionRatio < RATIO_FULL) return true;
   const settled = new Set(assignment.settledComponents);
-  return itemComponents(mission.rewards).every((component) => settled.has(componentKey(component)));
+  // Standing is personal: NPC assignees never receive it, so their settlement is complete
+  // as soon as credits (and items, if any) are paid.
+  const goods = (mission.rewards ?? []).filter(
+    (component): component is Extract<RewardComponent, { type: 'item' } | { type: 'standing' }> =>
+      component.type === 'item' || (component.type === 'standing' && assignment.holderType === 'player'),
+  );
+  return goods.every((component) => settled.has(componentKey(component)));
 }
 
 /**
@@ -231,6 +311,7 @@ export async function settleAssignment(
 ): Promise<SettlementResult> {
   const credits = (mission.rewards ?? []).find((component): component is Extract<RewardComponent, { type: 'credits' }> => component.type === 'credits');
   const items = itemComponents(mission.rewards);
+  const standings = standingComponents(mission.rewards);
   if (isAssignmentFullySettled(mission, assignment)) {
     return { settled: true, skipped: false, reason: 'already_settled', assignment };
   }
@@ -270,7 +351,12 @@ export async function settleAssignment(
   }
 
   // ── Item components ──
-  if (items.length > 0 && !opts.force && !env.mission.rewardAutoSettle) {
+  // Goods are never paid against a partial hand-in: the credits share was already scaled
+  // at freeze time, and there is nothing left to transfer.
+  if (current.completionRatio < RATIO_FULL) {
+    return { settled: true, skipped: false, reason: 'partial_settled', assignment: current };
+  }
+  if ((items.length > 0 || standings.length > 0) && !opts.force && !env.mission.rewardAutoSettle) {
     return { settled: false, skipped: true, reason: 'auto_settle_disabled', assignment: current };
   }
   const settled = new Set(current.settledComponents);
@@ -297,6 +383,39 @@ export async function settleAssignment(
     }
   }
 
+  // ── Standing components ──
+  // NPC assignees have no character standing: the domain delta is simply skipped.
+  if (current.holderType === 'npc') {
+    return { settled: true, skipped: false, reason: 'settled', assignment: current };
+  }
+  // Standing is read from the frozen share (never split): each participant gets the full
+  // delta declared on the mission.
+  const standingOutcomes = { ...((current.rewardDetails?.standing as Record<string, unknown> | undefined) ?? {}) };
+  for (const component of standings) {
+    const key = componentKey(component);
+    if (settled.has(key)) continue;
+    if (!(await claimItemComponent(current.id, key))) continue;
+    const frozen = current.rewardShares?.find((c) => c.type === 'standing' && c.domain === component.domain);
+    const amount = frozen?.type === 'standing' ? frozen.amount : component.amount;
+    try {
+      const map = await addStanding(current.playerId, component.domain, amount);
+      standingOutcomes[component.domain] = { amount, standing: map };
+      await mergeDetails(current.id, { standing: { ...standingOutcomes } });
+      settled.add(key);
+    } catch (err) {
+      await releaseItemClaim(current.id, key);
+      standingOutcomes[component.domain] = {
+        error: err instanceof HttpError ? err.code : 'SOCIAL_STANDING_FAILED',
+        message: (err as Error).message,
+        at: new Date().toISOString(),
+      };
+      await mergeDetails(current.id, { standing: { ...standingOutcomes } });
+      // Social errors (auth, unavailable, …) are wrapped so callers always see a standing
+      // settlement failure; the claim was released, so the component stays retryable.
+      throw new HttpError(502, 'SOCIAL_STANDING_FAILED', (err as Error).message);
+    }
+  }
+
   return { settled: true, skipped: false, reason: 'settled', assignment: current };
 }
 
@@ -314,7 +433,12 @@ export async function settleMissionRewards(
   const completed = await db
     .select()
     .from(missionAssignments)
-    .where(and(eq(missionAssignments.missionId, mission.id), eq(missionAssignments.status, 'completed')))
+    .where(
+      and(
+        eq(missionAssignments.missionId, mission.id),
+        inArray(missionAssignments.status, ['completed', 'partially_completed']),
+      ),
+    )
     .orderBy(asc(missionAssignments.acceptedAt), asc(missionAssignments.id));
 
   const settlements: SettlementResult[] = [];
@@ -327,13 +451,16 @@ export async function settleMissionRewards(
   }
 
   const allSettled = settlements.every((s) => s.settled);
-  if (mission.escrowStatus === 'held' && allSettled) {
+  // A partial hand-in leaves a remainder (and ungranted item holds): the escrow is not
+  // claimed, the caller refunds the remainder through `refundEscrow`.
+  const hasPartial = completed.some((assignment) => assignment.status === 'partially_completed');
+  if (mission.escrowStatus === 'held' && allSettled && !hasPartial) {
     await db
       .update(missions)
       .set({ escrowStatus: 'claimed', updatedAt: new Date() })
       .where(and(eq(missions.id, mission.id), eq(missions.escrowStatus, 'held')));
   }
-  if (mission.escrowItemStatus === 'held' && allSettled) {
+  if (mission.escrowItemStatus === 'held' && allSettled && !hasPartial) {
     await db
       .update(missions)
       .set({ escrowItemStatus: 'claimed', updatedAt: new Date() })

@@ -99,11 +99,21 @@ async function fetchInternal<T>(path: string): Promise<T> {
 
 /** POSTs a JSON body to a Social internal endpoint and returns the parsed body. */
 async function postInternal<T>(path: string, body: unknown): Promise<T> {
+  return sendInternal<T>(path, 'POST', body);
+}
+
+/** PATCHes a JSON body to a Social internal endpoint and returns the parsed body. */
+async function patchInternal<T>(path: string, body: unknown): Promise<T> {
+  return sendInternal<T>(path, 'PATCH', body);
+}
+
+/** Sends a JSON request (POST/PATCH) to a Social internal endpoint. */
+async function sendInternal<T>(path: string, method: string, body: unknown): Promise<T> {
   if (!env.social.apiUrl) {
     throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
   }
   const res = await fetch(`${env.social.apiUrl}${path}`, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
     body: JSON.stringify(body),
   });
@@ -226,6 +236,8 @@ export interface PlayerProfileInfo {
   playerId: string;
   displayName?: string;
   reputation: number;
+  /** Character standing per domain (mission categories), when present. */
+  standing?: Record<string, number>;
   [key: string]: unknown;
 }
 
@@ -236,6 +248,36 @@ export interface PlayerProfileInfo {
  */
 export async function getPlayerProfile(playerId: string): Promise<PlayerProfileInfo | null> {
   return fetchInternal<PlayerProfileInfo | null>(`/api/internal/players/${playerId}`);
+}
+
+/** Character standing map (domain → score) as held by Social. */
+export type StandingMap = Record<string, number>;
+
+/**
+ * A player's character standing per domain (empty map when the profile has none).
+ * @param playerId - Player id.
+ * @returns Domain → score.
+ */
+export async function getStanding(playerId: string): Promise<StandingMap> {
+  const res = await fetchInternal<{ playerId: string; standing: StandingMap }>(
+    `/api/internal/players/${playerId}/standing`,
+  );
+  return res.standing ?? {};
+}
+
+/**
+ * Applies a signed standing delta on one domain (used to grant mission standing rewards).
+ * @param playerId - Player id.
+ * @param domain - Standing domain (mission category).
+ * @param amount - Signed non-zero delta.
+ * @returns The updated standing map.
+ */
+export async function addStanding(playerId: string, domain: string, amount: number): Promise<StandingMap> {
+  const res = await patchInternal<{ playerId: string; domain: string; standing: StandingMap }>(
+    `/api/internal/players/${playerId}/standing`,
+    { domain, amount },
+  );
+  return res.standing ?? {};
 }
 
 /** Presence of a player as reported by the game server (Social internal API). */

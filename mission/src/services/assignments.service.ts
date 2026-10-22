@@ -2,13 +2,15 @@
  * Player assignments: accepting a mission, reporting objective progress, completing
  * (which settles the reward) and abandoning.
  */
-import { and, count, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
+import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
 import {
   missionAssignments,
   missionObjectives,
+  missionPlayerStates,
   missions,
   type AssigneeHolderType,
   type AssignmentStatus,
@@ -18,21 +20,29 @@ import {
 } from '../db/schema/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
-import { getObjectiveKind } from '../kinds/index.js';
+import { getObjectiveKind, type PrefetchedPlayerState } from '../kinds/index.js';
 import {
-  allObjectivesCompleted,
-  assertObjectiveUnlocked,
+  allRequiredObjectivesCompleted,
   countActiveAssignments,
   isObjectiveLocked,
   listObjectives,
   markMissionActive,
+  refundEscrow,
   requireMission,
-  requireObjective,
   requireOpenMission,
+  requiredProgressBp,
 } from './missions.service.js';
-import { freezeShares, settleMissionRewards, type SettlementResult } from './rewards.service.js';
+import {
+  RATIO_FULL,
+  bonusComponents,
+  freezeShares,
+  settleAssignment,
+  settleMissionRewards,
+  type SettlementResult,
+} from './rewards.service.js';
+import { notifyMissionEvent } from './notifications.service.js';
 import { evaluatePrerequisites } from './prerequisites.service.js';
-import { getPlayerGroup, isCorporationMember, isGroupMember } from './social.client.js';
+import { getPlayerGroup, isCorporationMember, isGroupMember, notifyPlayer } from './social.client.js';
 import { assertMissionZone } from './zones.service.js';
 
 const PG_UNIQUE_VIOLATION = '23505';
@@ -140,11 +150,36 @@ export async function acceptMission(
   if (existing && existing.status === 'completed') {
     throw new HttpError(409, 'ALREADY_COMPLETED', 'You already completed this mission');
   }
+  if (existing && existing.status === 'partially_completed') {
+    throw new HttpError(409, 'ALREADY_HANDED_IN', 'You already handed in this mission');
+  }
 
   // Zone gate: the player must be where the mission is available (players only; a mission
   // without zones costs nothing, an unknown/outage location fails closed).
   if (holderType === 'player') {
     await assertMissionZone(mission, playerId);
+  }
+
+  // Scenario chain: every mission listed in `requiresMissionIds` must already be completed
+  // by this player. System-driven NPC assignments skip it.
+  if (holderType === 'player' && mission.requiresMissionIds.length > 0) {
+    await assertMissionChainCompleted(mission, playerId);
+  }
+
+  // Anti-stacking: a player may only hold so many missions at once (0 = unlimited).
+  if (holderType === 'player' && env.mission.maxActiveAssignments > 0) {
+    const [row] = await db
+      .select({ total: count() })
+      .from(missionAssignments)
+      .where(and(eq(missionAssignments.playerId, playerId), eq(missionAssignments.status, 'active')));
+    if ((row?.total ?? 0) >= env.mission.maxActiveAssignments) {
+      throw new HttpError(
+        409,
+        'ASSIGNMENT_LIMIT_REACHED',
+        `You already hold ${env.mission.maxActiveAssignments} active missions`,
+        { limit: env.mission.maxActiveAssignments },
+      );
+    }
   }
 
   // Prerequisite gates (kind registry): evaluated before any state change, so a player
@@ -188,12 +223,24 @@ export async function acceptMission(
 
   const rewardExternalId =
     existing?.rewardExternalId ?? `mission:${missionId}:${playerId}`;
+  // Per-assignment deadline (B7): the mission may carry a lifetime for every assignee.
+  const deadlineAt = mission.assignmentDeadlineHours
+    ? new Date(Date.now() + mission.assignmentDeadlineHours * 3600 * 1000)
+    : null;
 
   let assignment: MissionAssignment;
   if (existing) {
     const [updated] = await db
       .update(missionAssignments)
-      .set({ status: 'active', acceptedAt: new Date(), completedAt: null, updatedAt: new Date() })
+      .set({
+        status: 'active',
+        acceptedAt: new Date(),
+        completedAt: null,
+        deadlineAt,
+        deadlineNotifiedAt: null,
+        completionRatio: 0,
+        updatedAt: new Date(),
+      })
       .where(eq(missionAssignments.id, existing.id))
       .returning();
     assignment = updated;
@@ -201,7 +248,7 @@ export async function acceptMission(
     try {
       const [created] = await db
         .insert(missionAssignments)
-        .values({ missionId, playerId, holderType, rewardExternalId })
+        .values({ missionId, playerId, holderType, rewardExternalId, deadlineAt })
         .returning();
       assignment = created;
     } catch (err) {
@@ -223,78 +270,58 @@ export async function acceptMission(
 }
 
 /**
- * Reports progress on one objective of the player's mission and returns the updated state.
- * @param missionId - Mission id.
- * @param playerId - Player id.
- * @param objectiveId - Objective id.
- * @param quantity - Quantity to add (positive).
- * @returns Updated objective, all objectives and whether they are all complete.
- * @throws 409 when the player has no active assignment or the objective is locked.
+ * Whether an objective still has something to measure: it is a `service` one, and it is
+ * not a completed high-water mark (whose progress is `max(stored, measured)` and
+ * therefore cannot regress — measuring it again can only reproduce the stored value).
+ * @param objective - Objective row.
  */
-export async function reportProgress(
-  missionId: string,
-  playerId: string,
-  objectiveId: string,
-  quantity: number,
-): Promise<{ objective: MissionObjective; objectives: MissionObjective[]; allComplete: boolean }> {
-  const mission = await requireMission(missionId);
-  const assignment = await requireAssignment(missionId, playerId);
-  if (assignment.status !== 'active') {
-    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`, { status: assignment.status });
-  }
-  requireOpenMission(mission);
-
-  const objective = await requireObjective(missionId, objectiveId);
+function isServiceMeasurable(objective: MissionObjective): boolean {
   const kindDef = getObjectiveKind(objective.type);
-  if (!kindDef || kindDef.evaluation !== 'game') {
-    throw new HttpError(
-      409,
-      'OBJECTIVE_NOT_PUSHABLE',
-      kindDef
-        ? `Objective kind ${objective.type} is not reported by the game server (use verify or issuer confirmation)`
-        : `Unknown objective kind: ${objective.type}`,
-    );
-  }
-  const objectives = await db
-    .select()
-    .from(missionObjectives)
-    .where(eq(missionObjectives.missionId, missionId));
-  assertObjectiveUnlocked(mission, objective, objectives);
+  if (!kindDef || kindDef.evaluation !== 'service' || !kindDef.measure) return false;
+  if (kindDef.progress !== 'highWater') return true; // snapshots can regress, always measure
+  return !(objective.status === 'completed' && objective.currentProgress >= objective.targetQuantity);
+}
 
-  const nextProgress = Math.min(objective.currentProgress + quantity, objective.targetQuantity);
-  const status = nextProgress >= objective.targetQuantity ? 'completed' : 'in_progress';
-  const [updated] = await db
-    .update(missionObjectives)
-    .set({ currentProgress: nextProgress, status, updatedAt: new Date() })
-    .where(eq(missionObjectives.id, objective.id))
-    .returning();
-
-  const merged = objectives.map((o) => (o.id === updated.id ? updated : o));
-  return { objective: updated, objectives: merged, allComplete: allObjectivesCompleted(merged) };
+/** Options for one measurement pass. */
+export interface MeasureOptions {
+  /**
+   * Player states preloaded by the caller (one SELECT for a whole batch). The state-based
+   * kinds then issue no query at all, which is what keeps the auto-measure cheap.
+   */
+  stateCache?: ReadonlyMap<string, PrefetchedPlayerState | null>;
+  /**
+   * Remaining budget of remote (Inventory/Economy HTTP) measurements. Remote objectives
+   * are skipped — progress untouched, picked up by the next pass — once it is exhausted.
+   * Left undefined, every objective is measured (`/verify`, and the re-measure that
+   * precedes a payout, must not be throttled).
+   */
+  remoteBudget?: { remaining: number };
 }
 
 /**
  * Measures every `service` objective of the mission against external state (Inventory,
- * Economy, ...) and persists the result. Scenario-locked objectives are skipped.
+ * player-states, ...) and persists the result. Scenario-locked objectives are skipped.
  *
- * Snapshot kinds (`owns_items`, `has_credits`) may regress: spending the goods lowers the
- * stored progress, which is why completion re-runs this measurement before paying.
- * `deliver_items` performs its transfer as its side effect.
+ * Snapshot kinds (`owns_items`) may regress: spending the goods lowers the stored progress,
+ * which is why completion re-runs this measurement before paying. High-water kinds
+ * (`visit`, `deliver_material`, `transport`, `transport_passenger`) never regress: stored
+ * progress is `max(stored, measured)` — so a completed one is never measured again.
  * @param mission - Mission being measured.
  * @param assignment - Assignee whose holder state is measured.
  * @param objectives - Current objectives of the mission.
+ * @param opts - Optional batch context (preloaded states, remote-read budget).
  * @returns The objective list with measurements merged in.
  */
 async function measureServiceObjectives(
   mission: Mission,
   assignment: MissionAssignment,
   objectives: MissionObjective[],
+  opts: MeasureOptions = {},
 ): Promise<MissionObjective[]> {
   const now = new Date();
   const result: MissionObjective[] = [];
   for (const objective of objectives) {
-    const kindDef = getObjectiveKind(objective.type);
-    if (!kindDef || kindDef.evaluation !== 'service' || !kindDef.measure) {
+    if (!isServiceMeasurable(objective)) {
       result.push(objective);
       continue;
     }
@@ -302,14 +329,30 @@ async function measureServiceObjectives(
       result.push(objective);
       continue;
     }
+    const kindDef = getObjectiveKind(objective.type);
+    if (!kindDef?.measure) {
+      result.push(objective);
+      continue;
+    }
+    // Budget the remote reads: they are the only cost that scales with the player count.
+    if (kindDef.remoteRead && opts.remoteBudget) {
+      if (opts.remoteBudget.remaining <= 0) {
+        result.push(objective);
+        continue;
+      }
+      opts.remoteBudget.remaining -= 1;
+    }
 
     const measured = await kindDef.measure({
       playerId: assignment.playerId,
       holderType: assignment.holderType,
       missionId: mission.id,
       objective,
+      stateCache: opts.stateCache,
     });
-    const currentProgress = Math.max(0, Math.min(measured, objective.targetQuantity));
+    const raw = Math.max(0, Math.min(measured, objective.targetQuantity));
+    // High-water: progress never regresses (a completed delivery stays complete).
+    const currentProgress = kindDef.progress === 'highWater' ? Math.max(objective.currentProgress, raw) : raw;
     const status =
       currentProgress >= objective.targetQuantity ? 'completed' : currentProgress > 0 ? 'in_progress' : 'pending';
     if (currentProgress === objective.currentProgress && status === objective.status) {
@@ -337,16 +380,151 @@ async function measureServiceObjectives(
 export async function verifyPlayerObjectives(
   missionId: string,
   playerId: string,
-): Promise<{ objectives: MissionObjective[]; allComplete: boolean }> {
+): Promise<{ objectives: MissionObjective[]; allComplete: boolean; completed: boolean }> {
   const mission = await requireMission(missionId);
   requireOpenMission(mission);
   const assignment = await requireAssignment(missionId, playerId);
   if (assignment.status !== 'active') {
     throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`, { status: assignment.status });
   }
+  await assertAssignmentDeadline(assignment);
   const objectives = await listObjectives(missionId);
   const measured = await measureServiceObjectives(mission, assignment, objectives);
-  return { objectives: measured, allComplete: allObjectivesCompleted(measured) };
+  const allComplete = allRequiredObjectivesCompleted(measured);
+  if (allComplete && mission.autoComplete) {
+    await completeMission(missionId, playerId);
+    return { objectives: measured, allComplete: true, completed: true };
+  }
+  return { objectives: measured, allComplete, completed: false };
+}
+
+/**
+ * True while a pass is running. `completeMission` is not reentrant — it settles the
+ * rewards — so two overlapping pushes must never both complete the same mission.
+ *
+ * A push arriving while one runs therefore does not start another: its states are already
+ * stored by the upsert, and the next push measures them.
+ */
+let autoMeasureInFlight = false;
+
+/** Where the next pass starts, so a large batch is served across successive pushes. */
+let autoMeasureRotation = 0;
+
+/** Mission statuses whose assignments may still make progress. */
+const OPEN_MISSION_STATUSES = ['available', 'active'] as const;
+
+/** Rotates a list so successive passes serve different tails first. */
+function rotated<T>(items: T[], offset: number): T[] {
+  if (items.length <= 1 || offset === 0) return items;
+  const start = offset % items.length;
+  return [...items.slice(start), ...items.slice(0, start)];
+}
+
+/**
+ * Measures the `service` objectives of every active assignment held by the given players
+ * and completes the missions that just became fully done — the automatic counterpart of
+ * {@link verifyPlayerObjectives}, driven by the player-state push instead of an explicit
+ * call. This is what makes a `visit` or a delivery progress by itself.
+ *
+ * Built to stay cheap when nothing happens, which is the common case:
+ * - one indexed SELECT finds whether any of these players holds an active assignment;
+ * - when none does, the pass stops there and nothing else runs;
+ * - otherwise one SELECT loads the objectives and one preloads the whole batch of player
+ *   states, so the state-based kinds (`visit`, `transport_passenger`) cost no query;
+ * - remote reads (Inventory/Economy) are budgeted per pass and the order rotates, so a
+ *   thousand players sharing the push channel cannot make one pass monopolise the budget.
+ *
+ * Fail-soft by design: a measurement or completion error is logged and swallowed — the
+ * push that triggered the pass must never fail because of it, and the next push retries.
+ * @param playerIds - Players whose state was just upserted.
+ */
+export async function measureActiveAssignmentsForPlayers(playerIds: string[]): Promise<void> {
+  if (playerIds.length === 0 || autoMeasureInFlight) return;
+  autoMeasureInFlight = true;
+  try {
+    await autoMeasurePass(playerIds);
+  } catch (err) {
+    console.error('[auto-measure] pass failed', err);
+  } finally {
+    autoMeasureInFlight = false;
+  }
+}
+
+/** One {@link measureActiveAssignmentsForPlayers} pass. */
+async function autoMeasurePass(playerIds: string[]): Promise<void> {
+  const now = new Date();
+  const rows = await db
+    .select({ assignment: missionAssignments, mission: missions })
+    .from(missionAssignments)
+    .innerJoin(missions, eq(missions.id, missionAssignments.missionId))
+    .where(
+      and(
+        inArray(missionAssignments.playerId, playerIds),
+        eq(missionAssignments.status, 'active'),
+        inArray(missions.status, [...OPEN_MISSION_STATUSES]),
+        // An expired mission is swept by the expiry command; do not keep measuring it.
+        or(isNull(missions.expiresAt), gt(missions.expiresAt, now)),
+      ),
+    );
+  if (rows.length === 0) return;
+
+  const missionIds = [...new Set(rows.map((row) => row.mission.id))];
+  const objectives = await db
+    .select()
+    .from(missionObjectives)
+    .where(inArray(missionObjectives.missionId, missionIds));
+  // Nothing left to measure anywhere: every objective is either completed (high-water)
+  // or waits for its issuer — the usual state of a mission already handed in.
+  if (!objectives.some(isServiceMeasurable)) return;
+
+  const objectivesByMission = new Map<string, MissionObjective[]>();
+  for (const objective of objectives) {
+    const list = objectivesByMission.get(objective.missionId);
+    if (list) list.push(objective);
+    else objectivesByMission.set(objective.missionId, [objective]);
+  }
+
+  // One SELECT for the whole batch: players with no state are recorded as known-absent
+  // so the kinds do not re-query them one by one.
+  const involvedPlayers = [...new Set(rows.map((row) => row.assignment.playerId))];
+  const stateRows = await db
+    .select()
+    .from(missionPlayerStates)
+    .where(inArray(missionPlayerStates.playerId, involvedPlayers));
+  const found = new Map(stateRows.map((row) => [row.playerId, row as PrefetchedPlayerState | null]));
+  const stateCache = new Map<string, PrefetchedPlayerState | null>(
+    involvedPlayers.map((playerId) => [playerId, found.get(playerId) ?? null]),
+  );
+
+  const budgetSize = Math.max(0, env.mission.autoMeasureRemoteBudget);
+  const start = autoMeasureRotation % rows.length;
+  autoMeasureRotation = (start + budgetSize) % rows.length;
+  const budget = { remaining: budgetSize };
+  const completed = new Set<string>();
+
+  for (const row of rotated(rows, start)) {
+    // `completeMission` closes the whole mission, so the other assignees of the same
+    // mission have nothing left to measure.
+    if (completed.has(row.mission.id)) continue;
+    const missionObjectivesList = objectivesByMission.get(row.mission.id) ?? [];
+    if (!missionObjectivesList.some(isServiceMeasurable)) continue;
+    try {
+      const measured = await measureServiceObjectives(row.mission, row.assignment, missionObjectivesList, {
+        stateCache,
+        remoteBudget: budget,
+      });
+      if (!row.mission.autoComplete || !allRequiredObjectivesCompleted(measured)) continue;
+      await completeMission(row.mission.id, row.assignment.playerId);
+      completed.add(row.mission.id);
+    } catch (err) {
+      console.error(
+        '[auto-measure] mission %s player %s failed: %s',
+        row.mission.id,
+        row.assignment.playerId,
+        err,
+      );
+    }
+  }
 }
 
 /** Result of completing a mission (single- or multi-player). */
@@ -368,34 +546,42 @@ export interface CompleteMissionResult {
  *
  * Objective verification is re-checked here, so a reward is only ever paid once every
  * objective reports its target quantity. When `force` is false and objectives are
- * incomplete, the call is rejected.
+ * incomplete, the call is rejected — unless the caller asks for a `partial` hand-in, which
+ * is allowed on missions with `allowPartial` and pays a proportional credits share (see
+ * {@link completeMissionPartial}).
  *
  * Multiplayer: every active assignee is completed at once and receives an equal share of
  * each reward component (frozen in `rewardShares`, so a retry settles the exact same
- * amounts).
+ * amounts). The bonus components of the completed bonus objectives are merged into the
+ * shares.
  * @param missionId - Mission id.
  * @param playerId - Player triggering the completion (must have an active assignment).
  * @param opts.force - Skip the objective check (game-server override).
  * @param opts.settle - Settle the rewards now (default true).
+ * @param opts.partial - Hand in proportionally to the weighted progress of the required objectives.
  * @returns The caller's assignment, all completed assignments, the mission and settlements.
  */
 export async function completeMission(
   missionId: string,
   playerId: string,
-  opts: { force?: boolean; settle?: boolean } = {},
+  opts: { force?: boolean; settle?: boolean; partial?: boolean } = {},
 ): Promise<CompleteMissionResult> {
   const mission = await requireMission(missionId);
   const assignment = await requireAssignment(missionId, playerId);
   if (assignment.status !== 'active') {
     throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', `Assignment is ${assignment.status}`, { status: assignment.status });
   }
+  await assertAssignmentDeadline(assignment);
 
   let objectives = await listObjectives(missionId);
   if (!opts.force) {
     // Fresh measurement of service objectives right before paying (snapshots may have
     // regressed, deliveries from other participants are picked up here).
     objectives = await measureServiceObjectives(mission, assignment, objectives);
-    if (!allObjectivesCompleted(objectives)) {
+    if (!allRequiredObjectivesCompleted(objectives)) {
+      if (opts.partial) {
+        return completeMissionPartial(mission, assignment, objectives, opts);
+      }
       throw new HttpError(409, 'OBJECTIVES_INCOMPLETE', 'Not every objective is completed');
     }
   }
@@ -404,8 +590,12 @@ export async function completeMission(
     .select()
     .from(missionAssignments)
     .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, 'active')));
+  const bonuses = bonusComponents(objectives);
   const sharesByAssignment = new Map(
-    participants.map((participant) => [participant.id, freezeShares(mission, participant, participants)]),
+    participants.map((participant) => [
+      participant.id,
+      freezeShares(mission, participant, participants, { bonusComponents: bonuses }),
+    ]),
   );
   const now = new Date();
 
@@ -422,6 +612,7 @@ export async function completeMission(
             completedAt: now,
             rewardShares: shares,
             rewardAmount: creditsShare?.type === 'credits' ? creditsShare.amount : null,
+            completionRatio: RATIO_FULL,
             updatedAt: now,
           })
           .where(eq(missionAssignments.id, participant.id))
@@ -444,12 +635,110 @@ export async function completeMission(
 
   const settlements = await settleMissionRewards(updatedMission, { force: opts.force });
   const settlement = settlements.find((s) => s.assignment.id === caller.id);
+  await Promise.all(
+    completedAssignments.map((participant) =>
+      notifyMissionEvent(participant.playerId, {
+        type: 'mission.completed',
+        data: { missionId, assignmentId: participant.id, ratioBp: RATIO_FULL },
+      }),
+    ),
+  );
   return {
     assignment: settlement?.assignment ?? caller,
     assignments: completedAssignments,
     mission: updatedMission,
     settlement,
     settlements,
+  };
+}
+
+/**
+ * Hands a mission in proportionally to the weighted progress of its required objectives:
+ * the caller's assignment becomes `partially_completed` (terminal), receives the
+ * corresponding credits share and never receives any item. The mission is closed on the
+ * spot (the payout is final) and the unpaid remainder of the escrow goes back to the
+ * payer.
+ *
+ * Only one active assignee is allowed: their share is frozen against the whole mission
+ * reward, so a second active assignee would be paid out of a pool already reduced by the
+ * partial payout.
+ * @param mission - The mission.
+ * @param assignment - The caller's active assignment.
+ * @param objectives - Objectives as measured for this completion attempt.
+ * @param opts.settle - Settle the rewards now (default true).
+ * @returns The result, with the partially completed assignment and its settlement.
+ * @throws 409 `PARTIAL_NOT_ALLOWED` / `PARTIAL_NO_PROGRESS` / `PARTIAL_MULTIPLAYER`.
+ */
+async function completeMissionPartial(
+  mission: Mission,
+  assignment: MissionAssignment,
+  objectives: MissionObjective[],
+  opts: { settle?: boolean } = {},
+): Promise<CompleteMissionResult> {
+  if (!mission.allowPartial) {
+    throw new HttpError(409, 'PARTIAL_NOT_ALLOWED', 'This mission does not accept a partial hand-in');
+  }
+  const ratioBp = requiredProgressBp(objectives);
+  if (ratioBp <= 0) {
+    throw new HttpError(409, 'PARTIAL_NO_PROGRESS', 'None of the required objectives has any progress yet');
+  }
+  const participants = await db
+    .select()
+    .from(missionAssignments)
+    .where(and(eq(missionAssignments.missionId, mission.id), eq(missionAssignments.status, 'active')));
+  if (participants.length > 1) {
+    throw new HttpError(
+      409,
+      'PARTIAL_MULTIPLAYER',
+      'A partial hand-in requires you to be the only assignee still working on this mission',
+    );
+  }
+
+  const shares = freezeShares(mission, assignment, participants, { ratioBp });
+  const creditsShare = shares.find((component) => component.type === 'credits');
+  const now = new Date();
+
+  const { assignment: partial, mission: updatedMission } = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(missionAssignments)
+      .set({
+        status: 'partially_completed',
+        completedAt: now,
+        completionRatio: ratioBp,
+        rewardShares: shares,
+        rewardAmount: creditsShare?.type === 'credits' ? creditsShare.amount : null,
+        updatedAt: now,
+      })
+      .where(and(eq(missionAssignments.id, assignment.id), eq(missionAssignments.status, 'active')))
+      .returning();
+    if (!row) {
+      // Another completion won the race: nothing was paid.
+      throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', 'Assignment is no longer active');
+    }
+    const [missionRow] = await tx
+      .update(missions)
+      .set({ status: 'completed', updatedAt: now })
+      .where(eq(missions.id, mission.id))
+      .returning();
+    return { assignment: row, mission: missionRow };
+  });
+
+  if (opts.settle === false) {
+    return { assignment: partial, assignments: [partial], mission: updatedMission };
+  }
+  const settlement = await settleAssignment(updatedMission, partial);
+  // Nothing else can be completed on this mission: give the payer what is left.
+  await refundEscrow(updatedMission);
+  await notifyMissionEvent(partial.playerId, {
+    type: 'mission.partially_completed',
+    data: { missionId: mission.id, assignmentId: partial.id, ratioBp },
+  });
+  return {
+    assignment: settlement.assignment,
+    assignments: [partial],
+    mission: updatedMission,
+    settlement,
+    settlements: [settlement],
   };
 }
 
@@ -491,6 +780,116 @@ export async function abandonMission(
     }
     return updated;
   });
+}
+
+/**
+ * Rejects an assignment whose per-assignment deadline has passed, expiring it on the way
+ * out so it stops consuming a slot even if the built-in sweep has not run yet.
+ * @param assignment - The assignment being acted upon.
+ * @throws 409 `DEADLINE_PASSED`.
+ */
+async function assertAssignmentDeadline(assignment: MissionAssignment): Promise<void> {
+  if (!assignment.deadlineAt || assignment.deadlineAt.getTime() > Date.now()) return;
+  await db
+    .update(missionAssignments)
+    .set({ status: 'expired', updatedAt: new Date() })
+    .where(and(eq(missionAssignments.id, assignment.id), eq(missionAssignments.status, 'active')));
+  await notifyMissionEvent(assignment.playerId, {
+    type: 'mission.deadline',
+    data: { missionId: assignment.missionId, assignmentId: assignment.id, expired: true },
+  });
+  throw new HttpError(409, 'DEADLINE_PASSED', 'This assignment reached its deadline');
+}
+
+/**
+ * Verifies the scenario chain of a mission: every mission listed in `requiresMissionIds`
+ * must already have been completed by this player.
+ * @param mission - The mission being accepted.
+ * @param playerId - Player accepting it.
+ * @throws 409 `CHAIN_INCOMPLETE`.
+ */
+async function assertMissionChainCompleted(mission: Mission, playerId: string): Promise<void> {
+  const rows = await db
+    .select({ missionId: missionAssignments.missionId })
+    .from(missionAssignments)
+    .where(
+      and(
+        eq(missionAssignments.playerId, playerId),
+        eq(missionAssignments.status, 'completed'),
+        inArray(missionAssignments.missionId, mission.requiresMissionIds),
+      ),
+    );
+  const done = new Set(rows.map((row) => row.missionId));
+  const missing = mission.requiresMissionIds.filter((id) => !done.has(id));
+  if (missing.length > 0) {
+    throw new HttpError(
+      409,
+      'CHAIN_INCOMPLETE',
+      t('mission.chain_incomplete', { count: missing.length }),
+      { missing: missing.join(', ') },
+    );
+  }
+}
+
+/**
+ * Expires every assignment that reached its per-assignment deadline, notifying its holder
+ * once. The sweep is idempotent: `deadlineNotifiedAt` is claimed in the same statement, so
+ * a retried run never notifies twice.
+ * @param now - Reference time.
+ * @returns The number of assignments expired.
+ */
+export async function expireDueAssignments(now = new Date()): Promise<number> {
+  const due = await db
+    .select()
+    .from(missionAssignments)
+    .where(and(eq(missionAssignments.status, 'active'), lte(missionAssignments.deadlineAt, now)));
+
+  for (const assignment of due) {
+    const expired = await db
+      .update(missionAssignments)
+      .set({ status: 'expired', deadlineNotifiedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(missionAssignments.id, assignment.id),
+          eq(missionAssignments.status, 'active'),
+          isNull(missionAssignments.deadlineNotifiedAt),
+        ),
+      )
+      .returning({ id: missionAssignments.id });
+    if (expired.length === 0) continue;
+    await notifyMissionEvent(assignment.playerId, {
+      type: 'mission.deadline',
+      data: { missionId: assignment.missionId, assignmentId: assignment.id, expired: true },
+    });
+    // The mission may be left with no assignee at all: put it back on the board.
+    await db.transaction(async (tx) => {
+      const remaining = await tx
+        .select({ id: missionAssignments.id })
+        .from(missionAssignments)
+        .where(and(eq(missionAssignments.missionId, assignment.missionId), eq(missionAssignments.status, 'active')));
+      if (remaining.length === 0) {
+        await tx
+          .update(missions)
+          .set({ status: 'available', updatedAt: now })
+          .where(and(eq(missions.id, assignment.missionId), eq(missions.status, 'active')));
+      }
+    });
+  }
+  return due.length;
+}
+
+/**
+ * Every assignment of a mission (any status), earliest first: the internal mission
+ * detail's "who took it" list, including abandoned/expired participants.
+ * @param missionId - Mission id.
+ * @returns Assignments.
+ */
+export function listAssignmentsForMission(missionId: string): Promise<MissionAssignment[]> {
+  return db
+    .select()
+    .from(missionAssignments)
+    .where(eq(missionAssignments.missionId, missionId))
+    .orderBy(asc(missionAssignments.acceptedAt), asc(missionAssignments.id));
 }
 
 /**

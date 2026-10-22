@@ -47,6 +47,9 @@ mettre `INTERNAL_DEV_BYPASS=true` et passer `X-Internal-Key: <INTERNAL_API_KEY>`
 | `SOCIAL_API_URL` | URL interne du service social (membres corporation/politique : inventaires corpo + permissions POI ; vide = désactivé) |
 | `SOCIAL_SERVICE_CLIENT_ID` / `SOCIAL_SERVICE_CLIENT_SECRET` | Compte de service Keycloak pour appeler social |
 | `SOCIAL_INTERNAL_API_KEY` | Repli dev : clé partagée envoyée en `X-Internal-Key` si aucun secret n'est défini |
+| `MISSION_API_URL` | URL interne du service mission (verrou des POI déjà cible d'une mission acceptée ; vide = verrou inactif) |
+| `MISSION_SERVICE_CLIENT_ID` / `MISSION_SERVICE_CLIENT_SECRET` | Compte de service Keycloak (rôle `mission:read`) pour appeler mission |
+| `MISSION_INTERNAL_API_KEY` | Repli dev : clé partagée envoyée en `X-Internal-Key` si aucun secret n'est défini |
 
 ## Modèle
 
@@ -63,11 +66,13 @@ mettre `INTERNAL_DEV_BYPASS=true` et passer `X-Internal-Key: <INTERNAL_API_KEY>`
   `refId` obligatoire sauf pour `manual`). Un hold ne change pas la
   propriété : `available = quantity - held`. La consommation d'un hold (`consume`) transfère
   réellement la propriété ; sa libération (`release`) rend les biens disponibles.
-- **POI** (`inventory_pois`) : point GPS `{x, y, z}` éventuellement entouré d'une zone
-  (`radiusM`), rattaché à une `scene` (préfixe) et/ou un `system`, avec un propriétaire
-  (`player`/`npc`/`corporation`/`political`/`system`) et une visibilité
-  (`private`/`public`). `parentId` est un uuid d'objet persistence opaque (nullable,
-  pas de FK). La table `inventory_poi_shares` ajoute des grants **lecture seule**
+- **POI** (`inventory_pois`) : point GPS `{x, y, z}` mesuré en mètres dans le **repère du
+  corps nommé par `scene`** (pas de triplet absolu : un corps orbite et tourne, donc un
+  repère absolu est périmé dès l'écriture). `scene: "space"` = espace ouvert, repère du
+  système lui-même. `radiusM` élargit le point en zone ; `system` doit être cohérent
+  avec `scene` (le corps doit appartenir au système). Un `parentId` est un uuid d'objet
+  persistence opaque (nullable, pas de FK). `visibility`
+  (`private`/`public`). La table `inventory_poi_shares` ajoute des grants **lecture seule**
   (player/npc/corporation/political) ; le propriétaire reste le seul à écrire.
   Transfert de propriété : `POST /api/me/pois/:poiId/transfer` (ou API interne).
   Lecture : owned ∪ granted ∪ public, plus les lectures `inventory:read` internes.
@@ -117,7 +122,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/me/pois` | Mes POI (owned, granted, public) |
 | POST | `/api/me/pois` | Créer un POI (propre, ou pour une corpo/entité politique gérée) |
 | GET | `/api/me/pois/:poiId` | Un POI avec ses shares |
-| PATCH | `/api/me/pois/:poiId` | Éditer un POI géré (ownership inchangé) |
+| PATCH | `/api/me/pois/:poiId` | Éditer un POI géré (ownership inchangé) ; géométrie par le créateur, bloquée si le POI est la destination d'une mission acceptée |
 | DELETE | `/api/me/pois/:poiId` | Supprimer un POI géré (shares en cascade) |
 | POST | `/api/me/pois/:poiId/shares` `{granteeType, granteeId}` | Grant **lecture seule** |
 | DELETE | `/api/me/pois/:poiId/shares/:granteeType/:granteeId` | Révoquer un grant |
@@ -163,6 +168,15 @@ Un refus mappe sur `403 NOT_CORPORATION_MEMBER` / `NOT_POLITICAL_MEMBER` (non-me
 | Créer `/api/me/pois` | soi-même (ou `owner` passé) | action `inventory:poi:manage` (CEO ou `manage_corporation`) | action `inventory:poi:manage` (chef ou `manage_entity`) |
 | Éditer / supprimer / partager / transférer | propriétaire `player` | propriétaire `corporation` | propriétaire `political` |
 | Propriétaire `system` / `npc` | interdit (`403 NOT_POI_OWNER` / `POI_SYSTEM_OWNER_FORBIDDEN`) — API interne uniquement | | |
+
+**Géométrie** (`system`, `scene`, `x`, `y`, `z`, `radiusM`) : sur `PATCH /api/me/pois/:poiId` elle
+n'est ouverte qu'au **créateur** du POI (`created_by`, systématiquement renseigné à la création
+depuis cette API) ou à un membre gérant une POI de corporation/entité politique. Un propriétaire
+ayant reçu le POI par transfert ne peut donc pas en déplacer la position — il peut toujours le
+renommer. Toute géométrie bougeant sur un POI **cible d'une mission dont l'assignation est
+active** est refusée (`400 POI_IN_USE`) : la destination d'un contrat ne bouge pas sous les pieds
+de celui qui l'a acceptée. Si Mission est injoignable, la même protection est active mais ne peut
+s'exercer : le mouvement est refusé (`503 POI_IN_USE_CHECK_FAILED`).
 
 ## Structure
 

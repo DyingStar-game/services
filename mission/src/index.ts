@@ -14,6 +14,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { languageMiddleware } from './middleware/language.js';
 import { apiRouter } from './routes/index.js';
 import { internalRoutes } from './routes/internal.routes.js';
+import { startExpirySweep } from './scheduler.js';
 
 const app = express();
 
@@ -73,6 +74,12 @@ async function start(): Promise<void> {
   app.listen(env.port, () => {
     console.log(`DyingStar Mission API listening on http://localhost:${env.port}`);
   });
+
+  // Built-in TTL sweep: mission deadlines and per-assignment deadlines (0 disables it).
+  const sweep = startExpirySweep();
+  if (sweep) {
+    console.log(`Mission expiry sweep every ${env.mission.expireIntervalSeconds}s`);
+  }
 }
 
 process.on('SIGINT', () => process.exit(0));

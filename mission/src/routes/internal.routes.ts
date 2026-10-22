@@ -7,6 +7,7 @@
 import { Router, type IRouter } from 'express';
 import { t } from '../i18n/index.js';
 
+import { env } from '../config/env.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { HttpError } from '../lib/httpError.js';
 import { assertServiceRole, requireService, requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
@@ -17,14 +18,13 @@ import {
   getAssignment,
   listAssignmentsForPlayer,
   listMissionsByIds,
-  reportProgress,
+  measureActiveAssignmentsForPlayers,
   verifyPlayerObjectives,
 } from '../services/assignments.service.js';
 import {
   cancelMission,
   confirmObjective,
   createMission,
-  expireDueMissions,
   getMissionById,
   listMissions,
   setMissionEventInternal,
@@ -33,17 +33,22 @@ import {
   updateMission,
 } from '../services/missions.service.js';
 import { settleMissionRewards } from '../services/rewards.service.js';
+import { runExpirySweep } from '../scheduler.js';
+import { getInternalMissionDetail } from '../services/detail.service.js';
+import { upsertPlayerStates } from '../services/playerStates.service.js';
+import { findPoisInUse } from '../services/poiUsage.service.js';
 import {
   createMissionBody,
   eventBody,
   internalAssignBody,
   internalCompleteBody,
-  internalProgressBody,
   missionIdParams,
   limitQuery,
   missionListQuery,
   objectiveParams,
   playerIdParams,
+  playerStatesBody,
+  poiUsageBody,
   settleBody,
   shareBody,
   internalVerifyBody,
@@ -96,12 +101,34 @@ internalRoutes.get(
   }),
 );
 
-/** POST /missions/expire — Expire every mission past its deadline (scheduled job). */
+/**
+ * GET /missions/:missionId — Full detail of one mission: the mission itself, its ordered
+ * objectives, **every** assignment (who took it, status and reward shares) plus a
+ * best-effort Social enrichment (assignee names, the group involved) and the scenario
+ * chain. No visibility filter: a service holding `mission:read` reads any mission, unlike
+ * the player route which hides group-shared missions from non-members.
+ */
+internalRoutes.get(
+  '/missions/:missionId',
+  requireServiceRole(SERVICE_ROLES.missionRead),
+  validate(missionIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const detail = await getInternalMissionDetail(req.params.missionId);
+    if (!detail) throw new HttpError(404, 'NOT_FOUND', t('not_found.mission_bare'));
+    res.json(detail);
+  }),
+);
+
+/**
+ * POST /missions/expire — Expire every mission and assignment past its deadline. Called by
+ * the scheduler, replayable by hand (idempotent).
+ */
 internalRoutes.post(
   '/missions/expire',
   requireServiceRole(SERVICE_ROLES.missionWrite),
   asyncHandler(async (_req, res) => {
-    res.json({ expired: await expireDueMissions() });
+    const { missions: expiredMissions, assignments } = await runExpirySweep();
+    res.json({ expired: expiredMissions, expiredAssignments: assignments });
   }),
 );
 
@@ -158,19 +185,37 @@ internalRoutes.post(
   }),
 );
 
-// ── Objective progress ───────────────────────────────────────────────────────
+// ── Player states ────────────────────────────────────────────────────────────
 
-/** POST /missions/:missionId/objectives/:objectiveId/progress — Verified progress report. */
-internalRoutes.post(
-  '/missions/:missionId/objectives/:objectiveId/progress',
-  requireServiceRole(SERVICE_ROLES.missionProgress),
-  validate(objectiveParams, 'params'),
-  validate(internalProgressBody),
+/**
+ * PUT /missions/player-states — Batch player state push from the game server.
+ * Used for zone matching and physical objective evaluation (visit, delivery, transport,
+ * passenger). States older than 30s are treated as "outside every zone".
+ *
+ * The push is also what drives the measurement of the `service` objectives
+ * (`MISSION_AUTO_MEASURE`): it is the only signal that a player's place or carried goods
+ * changed, so without it a `visit` would need an explicit `/verify` to progress.
+ */
+internalRoutes.put(
+  '/missions/player-states',
+  requireServiceRole(SERVICE_ROLES.missionWrite),
+  validate(playerStatesBody),
   asyncHandler(async (req, res) => {
-    const { playerId, quantity } = req.body;
-    res.json(await reportProgress(req.params.missionId, playerId, req.params.objectiveId, quantity));
+    const { count } = await upsertPlayerStates(req.body.players);
+    res.json({ updated: count });
+    // Deliberately not awaited: the push is a heartbeat, and a measurement must never
+    // delay it. The pass is fail-soft (logs and swallows its own errors).
+    if (env.mission.autoMeasure) {
+      measureActiveAssignmentsForPlayers(
+        req.body.players.map((player: { playerId: string }) => player.playerId),
+      ).catch((err) => {
+        console.error('[auto-measure] unhandled rejection', err);
+      });
+    }
   }),
 );
+
+// ── Objective progress ───────────────────────────────────────────────────────
 
 /** POST /missions/:missionId/objectives/:objectiveId/confirm — Confirm an issuer-verified objective (game server). */
 internalRoutes.post(
@@ -214,11 +259,12 @@ internalRoutes.post(
   validate(missionIdParams, 'params'),
   validate(internalCompleteBody),
   asyncHandler(async (req, res) => {
-    const { playerId, force, settle } = req.body;
+    const { playerId, force, settle, partial } = req.body;
     res.json(
       await completeMission(req.params.missionId, playerId, {
         force,
         settle,
+        partial,
       }),
     );
   }),
@@ -263,5 +309,23 @@ internalRoutes.get(
       limit,
       offset,
     });
+  }),
+);
+
+// ── POI usage (Inventory lock) ───────────────────────────────────────────────
+
+/**
+ * POST /poi-usage — Which of the given POIs are referenced by a mission with at least one
+ * **active** assignment. Called by Inventory before it lets a player move a POI: a POI in
+ * use cannot move, so the destination of an accepted contract never changes under the
+ * acceptor's feet (`POI_IN_USE`).
+ */
+internalRoutes.post(
+  '/poi-usage',
+  requireServiceRole(SERVICE_ROLES.missionRead),
+  validate(poiUsageBody),
+  asyncHandler(async (req, res) => {
+    const usage = await findPoisInUse(req.body.poiIds);
+    res.json(Object.fromEntries(usage));
   }),
 );

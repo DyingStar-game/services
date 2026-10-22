@@ -92,6 +92,11 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (res.status === 409 && error?.error === 'INSUFFICIENT_GOODS') {
     throw new HttpError(409, 'INSUFFICIENT_GOODS', error.message ?? 'Insufficient goods');
   }
+  // A missing target (holder, good, instance) is a permanent client error: the mission
+  // layer uses it to fail an assignment instead of retrying forever.
+  if (res.status === 404) {
+    throw new HttpError(404, 'INVENTORY_NOT_FOUND', error?.message ?? `Inventory ${method} ${path}: not found`);
+  }
   throw new HttpError(502, 'INVENTORY_CALL_FAILED', `Inventory ${method} ${path} failed (${res.status}): ${error?.message ?? text}`, {
       method,
       path,
@@ -199,11 +204,13 @@ export async function resolvePois(ids: string[]): Promise<Map<string, PoiGeometr
   return resolved;
 }
 
-/** One fungible stack with its reserved and available quantities. */
+/** One fungible stack with its reserved, carried and available quantities. */
 export interface StackView {
   goodType: string;
   quantity: number;
   held: number;
+  /** Physically carried quantity (e.g. crates in a player's hold). */
+  carried: number;
   available: number;
   [key: string]: unknown;
 }

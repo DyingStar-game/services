@@ -11,6 +11,7 @@ import {
   MISSION_KINDS,
   MISSION_STATUSES,
   MISSION_VISIBILITIES,
+  STANDING_DOMAINS,
 } from '../db/schema/index.js';
 import { pageQuery } from '../lib/pagination.js';
 
@@ -61,7 +62,7 @@ export const missionCreatedListQuery = limitQuery.extend({
 /** Free-form location / payload objects (opaque to this service). */
 const jsonObject = z.record(z.string(), z.unknown());
 
-/** One reward component: credits (at most one per mission) or an item (distinct items). */
+/** One reward component: credits (at most one per mission), an item (distinct items) or standing. */
 export const rewardComponentSchema = z.union([
   z
     .object({
@@ -77,6 +78,17 @@ export const rewardComponentSchema = z.union([
       quantity: z.number().int().min(1).max(1_000_000),
       /** Unique-instance reward (single assignee); omitted for fungible goods. */
       instanceId: uuidSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('standing'),
+      /** Standing domain — one of the mission categories (Social holds the score). `general` is derived, never granted. */
+      domain: z.enum(MISSION_CATEGORIES),
+      /** Signed non-zero delta applied to each full completion's standing. */
+      amount: z.number().int().min(-100_000).max(100_000).refine((v) => v !== 0, {
+        message: 'Standing delta must be non-zero',
+      }),
     })
     .strict(),
 ]);
@@ -99,6 +111,15 @@ export const rewardsSchema = z
         path: [0],
       });
     }
+    const domains = components.filter((c) => c.type === 'standing').map((c) => (c.type === 'standing' ? c.domain : ''));
+    const duplicateDomains = domains.filter((d, i) => domains.indexOf(d) !== i);
+    if (duplicateDomains.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Duplicate standing reward domain: ${duplicateDomains[0]}`,
+        path: [0],
+      });
+    }
   });
 
 /** One prerequisite gate: kind name + structured params (registry-validated). */
@@ -111,12 +132,13 @@ export const prerequisiteSchema = z
 
 // ── Zones ────────────────────────────────────────────────────────────────────
 
-const zoneSystem = z.string().trim().min(1).max(64);
+/** `""` = outside any system (matches the game's Place vocabulary). */
+const zoneSystem = z.string().trim().max(64);
 
 /**
  * One availability zone, matched against the player's presence location. Geometry
- * (scenes, areas) lives in the Inventory POI registry: a `poi` zone references a POI,
- * with an optional `radiusM` overriding the POI's own radius.
+ * (scenes, areas) lives in the Inventory POI registry: a `poi` zone references a POI and
+ * inherits its geometry wholesale — a zone carries no radius of its own.
  */
 export const missionZoneSchema = z.union([
   z.object({ kind: z.literal('system'), system: zoneSystem }).strict(),
@@ -124,7 +146,6 @@ export const missionZoneSchema = z.union([
     .object({
       kind: z.literal('poi'),
       poiId: z.string().uuid(),
-      radiusM: z.number().int().min(1).max(1_000_000).optional(),
     })
     .strict(),
 ]);
@@ -143,6 +164,15 @@ export const objectiveInput = z.object({
   locationFrom: jsonObject.optional(),
   locationTo: jsonObject.optional(),
   order: z.number().int().min(0).max(10_000).optional(),
+  /**
+   * Weight of this objective in the partial-completion ratio (1 = equal share with any
+   * other default-weighted required objective).
+   */
+  weight: z.number().int().min(1).max(1_000).optional(),
+  /** Optional objective: left out of the completion gate, ordering and the ratio. */
+  isBonus: z.boolean().optional(),
+  /** Extra component granted when this bonus objective is completed. */
+  bonusReward: rewardComponentSchema.optional(),
   /** Kind-specific structured params (validated by the kind's params schema). */
   params: jsonObject.optional(),
   payload: jsonObject.optional(),
@@ -160,7 +190,7 @@ export const createMissionBody = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(4000).optional(),
   kind: z.enum(MISSION_KINDS).default('dynamic'),
-  category: z.enum(MISSION_CATEGORIES).default('generic'),
+  category: z.enum(MISSION_CATEGORIES).default('divers'),
   issuerType: z.enum(MISSION_ISSUER_TYPES).default('system'),
   issuerId: uuidSchema.nullish(),
   /** Reward components; empty/omitted for reputation-only missions. */
@@ -176,6 +206,22 @@ export const createMissionBody = z.object({
   zones: zonesSchema,
   scriptId: z.string().trim().min(1).max(128).nullish(),
   expiresAt: z.coerce.date().nullish(),
+  /** Relative deadline in hours, ignored when `expiresAt` is set. */
+  expiresInHours: z.number().int().min(1).max(8760).nullish(),
+  /**
+   * Accepts a partial hand-in: paid proportionally to the weighted progress of the
+   * required objectives (items are never paid on a partial).
+   */
+  allowPartial: z.boolean().default(false),
+  /** Complete and settle on its own once every required objective is done. */
+  autoComplete: z.boolean().default(true),
+  /**
+   * Missions that must be fully completed before this one can be accepted (scenario
+   * chain). Unknown ids, self-reference and cycles are refused at creation.
+   */
+  requiresMissionIds: z.array(uuidSchema).max(10).default([]),
+  /** When set, every assignment expires this many hours after acceptance. */
+  assignmentDeadlineHours: z.number().int().min(1).max(8760).nullish(),
   objectives: z.array(objectiveInput).min(1).max(100),
   /**
    * Funds the credits reward from a treasury instead of the faucet: debited at creation,
@@ -188,7 +234,7 @@ export const createPlayerMissionBody = z
   .object({
     title: z.string().trim().min(1).max(200),
     description: z.string().trim().max(4000).optional(),
-    category: z.enum(MISSION_CATEGORIES).default('generic'),
+    category: z.enum(MISSION_CATEGORIES).default('divers'),
     visibility: z.enum(MISSION_VISIBILITIES).default('public'),
     /** Required when `visibility` is `corporation`. */
     corporationId: uuidSchema.nullish(),
@@ -208,6 +254,16 @@ export const createPlayerMissionBody = z
     /** Availability zones (empty = global). */
     zones: zonesSchema,
     expiresAt: z.coerce.date().nullish(),
+    /** Relative deadline, ignored when `expiresAt` is set. */
+    expiresInHours: z.number().int().min(1).max(8760).nullish(),
+    /** Accepts a partial hand-in, paid proportionally to the weighted progress. */
+    allowPartial: z.boolean().default(false),
+    /** Complete and settle on its own once every required objective is done. */
+    autoComplete: z.boolean().default(true),
+    /** Missions that must be fully completed before this one can be accepted. */
+    requiresMissionIds: z.array(uuidSchema).max(10).default([]),
+    /** When set, every assignment expires this many hours after acceptance. */
+    assignmentDeadlineHours: z.number().int().min(1).max(8760).nullish(),
     objectives: z.array(objectiveInput).min(1).max(100),
   })
   .refine((v) => v.visibility !== 'corporation' || !!v.corporationId, {
@@ -254,16 +310,18 @@ export const eventBody = z.object({
   maxAssignees: z.number().int().min(1).max(1000).optional(),
 });
 
-export const progressBody = z.object({
-  quantity: z.number().int().min(1).max(1_000_000_000),
-});
-
-export const internalProgressBody = progressBody.extend({ playerId: uuidSchema });
+/**
+ * Player completion request: `partial` hands in the mission proportionally to the
+ * weighted progress of the required objectives (missions with `allowPartial` only).
+ */
+export const completeBody = z.object({ partial: z.boolean().optional() }).default({});
 
 export const internalCompleteBody = z.object({
   playerId: uuidSchema,
   force: z.boolean().optional(),
   settle: z.boolean().optional(),
+  /** Hand in proportionally to the weighted progress (missions with `allowPartial` only). */
+  partial: z.boolean().default(false),
 });
 
 export const settleBody = z.object({ playerId: uuidSchema });
@@ -275,6 +333,39 @@ export const internalVerifyBody = z.object({ playerId: uuidSchema });
 export const internalAssignBody = z.object({
   playerId: uuidSchema,
   holderType: z.enum(ASSIGNEE_HOLDER_TYPES).default('player'),
+});
+
+/** POI ids whose "in use by a mission" status is being asked about (Inventory lock). */
+export const poiUsageBody = z
+  .object({ poiIds: z.array(uuidSchema).min(1).max(200) })
+  .strict();
+
+/** Player position, relative to the body named by `scene` (local frame, metres). */
+export const placeSchema = z
+  .object({
+    system: z.string().max(64).optional(),
+    scene: z.string().max(128).optional(),
+    x: z.number().finite(),
+    y: z.number().finite(),
+    z: z.number().finite(),
+  })
+  .strict();
+
+/** One player state entry pushed by the game server. */
+export const playerStateEntry = z.object({
+  playerId: uuidSchema,
+  place: placeSchema.nullish(),
+  /** True when the player is on foot (not seated in a vehicle). */
+  onFoot: z.boolean().default(true),
+  /** True when the player is seated in a non-driver seat (passenger). */
+  passenger: z.boolean().default(false),
+  /** Carried goods snapshot: goodType → quantity. */
+  carried: z.record(z.string(), z.number().int().min(0)).default({}),
+});
+
+/** Batch player state push (`PUT /api/internal/missions/player-states`). */
+export const playerStatesBody = z.object({
+  players: z.array(playerStateEntry).min(1).max(500),
 });
 
 export type CreateMissionBody = z.infer<typeof createMissionBody>;

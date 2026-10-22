@@ -26,7 +26,10 @@ import {
 import { t } from '../i18n/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
+import { isMissionConfigured, isPoiInUse } from './mission.client.js';
 import { authorizeAction, isSocialConfigured } from './social.client.js';
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** POI plus its shares (returned by detail endpoints). */
 export interface PoiView extends InventoryPoi {
@@ -46,6 +49,8 @@ export interface PoiInput {
   radiusM?: number | null;
   visibility?: PoiVisibility;
   metadata?: Record<string, unknown> | null;
+  /** Who created the POI (audit); for mission POIs this is the mission creator. */
+  createdBy?: string | null;
 }
 
 /** Mutable POI fields (ownership changes go through `transferPoi`). */
@@ -81,6 +86,11 @@ function grantedTo(granteeType: PoiGranteeType, granteeId: string) {
 
 /**
  * A POI of the player's own scope: owned, granted to them, or public.
+ *
+ * Mission POIs (`ownerType: 'mission'`) are deliberately absent even when the player
+ * created them: their holder is the mission, not the player, they are temporary, and a
+ * destination zone is not a marker the player placed. Since they never appear in a list,
+ * the game reads one by id instead — see {@link canReadAsPlayer}.
  * @param playerId - Player id.
  * @param limit - Page size.
  * @param offset - Rows to skip.
@@ -193,30 +203,83 @@ export async function listHolderPois(
   return page(rows, totalRow[0].total, limit, offset);
 }
 
+/** Reserved owner UUID for mission POIs (the creator is recorded in `createdBy`). */
+export const MISSION_POI_OWNER_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Reserved scene name: open-space frame of the system (the system's own star). */
+export const SPACE_SCENE = 'space';
+
+/**
+ * Validates system/scene coherence: when both are declared, the scene must designate a
+ * location inside the system. A location is inside the system when it is the system
+ * itself (`scene === system`), open space (`scene === SPACE_SCENE`), or a body/sub-scene
+ * in the system (`scene === system + '/' + …` or `scene === system + '_' + …`).
+ * @throws 400 `POI_SCENE_SYSTEM_MISMATCH` when the scene does not belong to the system.
+ */
+function assertSceneSystemCoherence(system: string | null | undefined, scene: string | null | undefined): void {
+  if (!system || !scene) return;
+  if (
+    scene !== system &&
+    scene !== SPACE_SCENE &&
+    !scene.startsWith(`${system}/`) &&
+    !scene.startsWith(`${system}_`)
+  ) {
+    throw new HttpError(400, 'POI_SCENE_SYSTEM_MISMATCH', `Scene "${scene}" does not belong to system "${system}"`);
+  }
+}
+
+/**
+ * Validates that a parentId does not create a cycle by walking up the parent chain.
+ * @throws 400 `POI_PARENT_NOT_FOUND` when the parent does not exist.
+ * @throws 400 `POI_PARENT_CYCLE` when the parent chain forms a loop.
+ */
+async function assertParentValid(tx: Tx, poiId: string | undefined, parentId: string | null | undefined): Promise<void> {
+  if (!parentId) return;
+  if (poiId && parentId === poiId) {
+    throw new HttpError(400, 'POI_PARENT_CYCLE', 'A POI cannot be its own parent');
+  }
+  const visited = new Set<string>();
+  let current: string | null = parentId;
+  while (current) {
+    if (current === poiId || visited.has(current)) {
+      throw new HttpError(400, 'POI_PARENT_CYCLE', 'Parent chain forms a cycle');
+    }
+    visited.add(current);
+    const [parent] = await tx.select({ parentId: inventoryPois.parentId }).from(inventoryPois).where(eq(inventoryPois.id, current)).limit(1);
+    if (!parent) throw new HttpError(400, 'POI_PARENT_NOT_FOUND', `Parent POI ${current} does not exist`);
+    current = parent.parentId;
+  }
+}
+
 /** Creates a POI for an owner. */
 export async function createPoi(
   owner: { ownerType: PoiOwnerType; ownerId: string },
   input: PoiInput,
 ): Promise<InventoryPoi> {
-  const [poi] = await db
-    .insert(inventoryPois)
-    .values({
-      ownerType: owner.ownerType,
-      ownerId: owner.ownerId,
-      name: input.name,
-      description: input.description ?? null,
-      system: input.system ?? null,
-      scene: input.scene ?? null,
-      parentId: input.parentId ?? null,
-      x: input.x,
-      y: input.y,
-      z: input.z,
-      radiusM: input.radiusM ?? null,
-      visibility: input.visibility ?? 'private',
-      metadata: input.metadata ?? null,
-    })
-    .returning();
-  return poi;
+  assertSceneSystemCoherence(input.system, input.scene);
+  return db.transaction(async (tx) => {
+    await assertParentValid(tx, undefined, input.parentId);
+    const [poi] = await tx
+      .insert(inventoryPois)
+      .values({
+        ownerType: owner.ownerType,
+        ownerId: owner.ownerId,
+        name: input.name,
+        description: input.description ?? null,
+        system: input.system ?? null,
+        scene: input.scene ?? null,
+        parentId: input.parentId ?? null,
+        x: input.x,
+        y: input.y,
+        z: input.z,
+        radiusM: input.radiusM ?? null,
+        visibility: input.visibility ?? 'private',
+        metadata: input.metadata ?? null,
+        createdBy: input.createdBy ?? null,
+      })
+      .returning();
+    return poi;
+  });
 }
 
 /** Applies a partial update to a POI (ownership untouched). */
@@ -234,9 +297,17 @@ export async function updatePoi(poiId: string, patch: PoiPatch): Promise<Invento
   if (patch.visibility !== undefined) set.visibility = patch.visibility;
   if (patch.metadata !== undefined) set.metadata = patch.metadata;
 
-  const rows = await db.update(inventoryPois).set(set).where(eq(inventoryPois.id, poiId)).returning();
-  if (!rows[0]) throw notFound(t('not_found.poi', { id: poiId }));
-  return rows[0];
+  // P2: validate system/scene coherence (after the patch fields are known).
+  const existing = await getPoi(poiId);
+  if (!existing) throw notFound(t('not_found.poi', { id: poiId }));
+  assertSceneSystemCoherence(patch.system ?? existing.system, patch.scene ?? existing.scene);
+
+  return db.transaction(async (tx) => {
+    await assertParentValid(tx, poiId, patch.parentId !== undefined ? patch.parentId : existing.parentId);
+    const rows = await tx.update(inventoryPois).set(set).where(eq(inventoryPois.id, poiId)).returning();
+    if (!rows[0]) throw notFound(t('not_found.poi', { id: poiId }));
+    return rows[0];
+  });
 }
 
 /** Deletes a POI (its shares cascade). */
@@ -383,6 +454,7 @@ export async function assertPoliticalManage(playerId: string, entityId: string):
 /**
  * Whether a player may mutate a POI (owner, or member with the org permission).
  * `system`/`npc` POIs are never manageable by a player through this API.
+ * `mission` POIs are manageable by their creator (`createdBy`) only.
  * @param poi - POI.
  * @param playerId - Acting player.
  * @throws 403 `NOT_POI_OWNER` / `POI_SYSTEM_OWNER_FORBIDDEN` / org errors, 503 without Social.
@@ -396,6 +468,9 @@ export async function assertPoiWriteAccess(poi: InventoryPoi, playerId: string):
       throw new HttpError(403, 'NOT_POI_OWNER', t('poi.not_owner'));
     case 'system':
       throw new HttpError(403, 'POI_SYSTEM_OWNER_FORBIDDEN', t('poi.system_owner'));
+    case 'mission':
+      if (poi.createdBy === playerId) return;
+      throw new HttpError(403, 'NOT_POI_OWNER', t('poi.not_owner'));
     case 'corporation':
       await assertCorporationManage(playerId, poi.ownerId);
       return;
@@ -434,7 +509,13 @@ function hasPlayerShare(poiId: string, playerId: string): Promise<boolean> {
 
 /**
  * Whether a player may read a POI through the `/api/me/pois` scope: they own it, they
- * hold a grant, it is public, or they manage the organization owning it.
+ * hold a grant, it is public, they manage the organization owning it, or it belongs to a
+ * mission.
+ *
+ * A mission POI is readable by **any** player, not only by its creator: since it never
+ * appears in `listPlayerPois`, this read is the only way for the client to display the
+ * named point a mission refers to. The id is an unguessable UUID and the row carries
+ * nothing but a name and coordinates.
  * @param poi - POI.
  * @param playerId - Acting player.
  * @returns True when readable.
@@ -442,6 +523,8 @@ function hasPlayerShare(poiId: string, playerId: string): Promise<boolean> {
 export async function canReadAsPlayer(poi: InventoryPoi, playerId: string): Promise<boolean> {
   if (poi.visibility === 'public') return true;
   if (poi.ownerType === 'player' && poi.ownerId === playerId) return true;
+  // Mission POI: never in a list, so readable by id by any player.
+  if (poi.ownerType === 'mission') return true;
   if (await hasPlayerShare(poi.id, playerId)) return true;
   if (poi.ownerType === 'corporation' || poi.ownerType === 'political') {
     try {
@@ -494,4 +577,49 @@ export async function requirePoi(poiId: string): Promise<InventoryPoi> {
   const poi = await getPoi(poiId);
   if (!poi) throw notFound(t('not_found.poi', { id: poiId }));
   return poi;
+}
+
+/**
+ * Requires that a POI's geometry may be moved. The criterion is the **creator**, not the
+ * owner: a player can create a POI of their own, of their corporation or of a mission, and
+ * in all three cases they are the one who placed it. An organization POI stays editable by
+ * a member holding `inventory:poi:manage`, whoever created it. A system POI never moves.
+ *
+ * Call after {@link assertPoiWriteAccess}, which has already established that the caller
+ * manages the POI in the ordinary sense (owner, org manager, or mission creator).
+ * @param poi - POI about to be moved.
+ * @param playerId - Acting player.
+ * @throws 403 `NOT_POI_OWNER` when the caller neither created the POI nor manages an org.
+ */
+export function assertPoiGeometryEditable(poi: InventoryPoi, playerId: string): void {
+  if (poi.ownerType === 'system') {
+    throw new HttpError(403, 'POI_SYSTEM_OWNER_FORBIDDEN', t('poi.system_owner'));
+  }
+  const creator = poi.createdBy === playerId;
+  const managesOrg = poi.ownerType === 'corporation' || poi.ownerType === 'political';
+  if (!creator && !managesOrg) {
+    throw new HttpError(403, 'NOT_POI_OWNER', t('poi.not_owner'));
+  }
+}
+
+/**
+ * Requires that a POI is not referenced by a mission someone has accepted: a destination
+ * may not change under the acceptor's feet.
+ *
+ * Fails **closed**: when the Mission integration is not configured the lock is inert
+ * (nothing is known to be in use), but any error — outage, timeout, non-2xx — refuses the
+ * move rather than let a contract's destination change during an incident.
+ * @param poiId - POI about to be moved.
+ * @throws 400 `POI_IN_USE` when the POI is the target of a mission with an active assignee.
+ * @throws 503 `POI_IN_USE_CHECK_FAILED` when the check itself could not be performed.
+ */
+export async function assertPoiNotInUse(poiId: string): Promise<void> {
+  if (!isMissionConfigured()) return;
+  let inUse: boolean;
+  try {
+    inUse = await isPoiInUse(poiId);
+  } catch {
+    throw new HttpError(503, 'POI_IN_USE_CHECK_FAILED', t('poi.in_use_check_failed'));
+  }
+  if (inUse) throw new HttpError(400, 'POI_IN_USE', t('poi.in_use'));
 }

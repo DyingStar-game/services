@@ -107,6 +107,10 @@ export const profilePatchBody = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
+/**
+ * Player location: `position` is metres from the centre of the body named by `scene`
+ * (local frame). `scene: "space"` = open space (frame of the system).
+ */
 export const locationSchema = z.object({
   system: z.string().trim().max(64).optional(),
   scene: z.string().trim().max(128).optional(),
@@ -138,6 +142,17 @@ export const statsBody = z
     role: nullableText(64),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
+/**
+ * Standing delta applied by the game (mission settlement, scenario events). `domain` is
+ * an opaque label (mission categories); `amount` is a signed non-zero delta.
+ */
+export const standingBody = z.object({
+  domain: z.string().trim().min(1).max(32),
+  amount: z.number().int().min(-100_000).max(100_000).refine((v) => v !== 0, {
+    message: 'Standing delta must be non-zero',
+  }),
+});
 
 export const activityBody = z.object({
   type: z.string().trim().min(1).max(64),
