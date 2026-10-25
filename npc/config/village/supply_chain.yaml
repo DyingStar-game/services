@@ -1,0 +1,65 @@
+# Supply chain of tarsis_3 (ADR services/0007, 0009, 0010): who produces, refines, makes, carries
+# and trades what. scripts/village_gen.py reads it with the archetypes and the geology, and
+# writes the universesimulator world-file sections (--write-seed writes the seed itself).
+#
+#   ore:   mining village -> its factory (refines) -> factories -> railway city -> rail -> spaceport -> off-planet
+#   food:  farm village (raw produce) -> its factory (makes the consumables) -> factories -> villages
+#   water, food additives: off-planet -> spaceport -> rail -> railway city -> factories -> villages
+
+planet: tarsis_3
+archetypes: [mining_village, farm_village]
+
+# Villages per role; farms come from config/world/tarsis_3/farm_villages.json
+# (scripts/village_farms.py).
+villages: { mining: 71, factory: 47, railway: 15, spaceport: 7 }
+reference_population: { factory: 1000, railway: 2000, spaceport: 5000 }
+default_water_per_thousand_h: 40   # seed defaults: water drunk in villages without a profile
+
+# Ore and metals (ADR services/0008).
+refining_yield: 0.65
+refining_capacity_factor: 2     # refinery rate = 2x the ore a factory expects
+host_element: { element: Al, fraction: 0.5293 }   # aluminium in Al2O3
+metals:
+  Al: { code: metal_aluminium, name: Aluminium, value: bon marché }
+  Fe: { code: metal_fer, name: Iron, value: bon marché }
+  Ti: { code: metal_titane, name: Titanium, value: bon marché }
+  Cr: { code: metal_chrome, name: Chromium, value: bon marché }
+  V:  { code: metal_vanadium, name: Vanadium, value: très cher }
+# "Indice de valeur" of the planet resource sheet, in credits/kg.
+value_prices: { "bon marché": 5, "normal": 12, "très cher": 40, "luxueux": 80 }
+ore_price_share: 0.5            # ore sells for half the value of the metal it yields
+
+# Food (ADR services/0009, 0010).
+farms:
+  min_altitude_m: 4800          # sealed greenhouses on the high plateaus
+  biome: outcrop-plateau
+  max_road_m: 3000              # near a road, for the trucks
+  hub_distance_m: [8000, 40000] # from its factory
+  min_spacing_m: 25000          # between two farms
+  name_prefix: A
+food_capacity_factor: 2         # food plant rate = 2x the expected demand
+food_batch_min_input: 1         # a recipe batch consumes at least 1 kg of each input
+local_food_target: 0.8          # share of food mass grown on Sandbox (the rest: imported additives)
+
+# Trade and transport.
+trade_capacity_factor: 2        # spaceport import/export rates = 2x the expected demand
+push_lot_kg: 1000               # villages and factories ship from one truckload
+rail_speed_kmh: 80
+poi_types:                      # persistence name prefix -> profile
+  M: mining
+  F: factory
+  A: farm
+  major_railway_city: railway
+  major_airport_city: spaceport
+  Palaka: spaceport
+
+# Moon 2 of tarsis_3 (resourcesDynamic P3_M2, DyingStar tarsis_3_2): all the water of the planet,
+# and the mineral salts of the food, extracted from its regolith (ADR services/0011). Imported
+# through the spaceports; the moon stations are not simulated yet.
+moon:
+  name: tarsis_3_2
+  resources_dynamic_name: P3_M2
+  distance_km: 320000
+  regolith_pct: { H2O: 30.0, Phyllosilicate: 40.0, Sulfate: 7.5, Carbonate: 7.5, Magnesium: 10, Iron: 5 }
+  water_fraction: 0.30          # water recovered per kg of regolith processed
+  salts_from: [Sulfate, Carbonate]

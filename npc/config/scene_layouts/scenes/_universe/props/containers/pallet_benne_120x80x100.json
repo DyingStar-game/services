@@ -1,0 +1,46 @@
+{
+	"doors": [],
+	"footprint": {
+		"center": [
+			0.0,
+			0.5,
+			0.0
+		],
+		"size": [
+			1.2,
+			1.0,
+			0.8
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [
+		{
+			"corners": [
+				[
+					-0.6,
+					-0.4
+				],
+				[
+					0.6,
+					-0.4
+				],
+				[
+					0.6,
+					0.4
+				],
+				[
+					-0.6,
+					0.4
+				]
+			],
+			"path": "CollisionShape3D",
+			"y_max": 1.0,
+			"y_min": 0.0
+		}
+	],
+	"scenename": "scenes/_universe/props/containers/pallet_benne_120x80x100.tscn",
+	"schema_version": 1,
+	"seats": []
+}

@@ -1,0 +1,171 @@
+# Mining-village archetype: the single source of truth for who lives in a
+# mining village, where they work and sleep, and what the village consumes and
+# produces (ADR services/0002, 0003, 0004).
+#
+# scripts/village_gen.py reads this file with config/schedules.yaml and writes:
+#   - config/npcs.mining_village.yaml                   the 250-NPC roster (ROSTER_PATH)
+#   - config/village/budget.mining_village.generated.md staffing, building load, resources
+#   - config/village/usim_profile.generated.json  universesimulator seed values
+# Run `python3 scripts/village_gen.py --check` after any change.
+
+archetype: mining_village
+population: 250
+
+# Building positions come from the village sketch (1280 x 890 px): sketch x
+# grows away from the mine, sketch y grows towards the road (downwards). A
+# position is `(px - origin_px) * metres_per_px`, as {x, y: 0, z} in the frame
+# of the village object (`--village-uuid`). PLACEHOLDERS until the Godot scene
+# exports markers for these buildings.
+layout:
+  metres_per_px: 0.5
+  origin_px: [640, 445]
+
+# id: {name, zone, center_px [x, y], size_px [w, h]}. `units` (residential
+# buildings only): individual dwellings in that building.
+buildings:
+  # --- Mine (left of the sketch) ---
+  cave_entrance:      { name: "Entrée de grotte (mine)",                  zone: mine,    center_px: [180, 395],  size_px: [60, 70] }
+  sterile:            { name: "Stérile (verse à stériles)",               zone: mine,    center_px: [215, 125],  size_px: [190, 130] }
+  pretreatment:       { name: "Prétraitement",                            zone: mine,    center_px: [280, 300],  size_px: [150, 90] }
+  loading_point:      { name: "Point de chargement",                      zone: mine,    center_px: [330, 345],  size_px: [80, 30] }
+  mine_admin:         { name: "Administration (mine)",                    zone: mine,    center_px: [262, 480],  size_px: [40, 70] }
+  mine_maintenance:   { name: "Service maintenance (mine)",               zone: mine,    center_px: [325, 490],  size_px: [40, 60] }
+  mine_parking:       { name: "Parking minier, nettoyage, maintenance",   zone: mine,    center_px: [440, 475],  size_px: [130, 110] }
+  changing_rooms:     { name: "Sous-dépôt, salle des pendus, hygiène",    zone: mine,    center_px: [425, 270],  size_px: [80, 90] }
+  guard_post:         { name: "Poste de garde",                           zone: mine,    center_px: [462, 345],  size_px: [50, 40] }
+  # --- Energy ---
+  transformer:        { name: "Transfo élec",                             zone: energy,  center_px: [215, 552],  size_px: [60, 50] }
+  battery_park:       { name: "Parc de batteries",                        zone: energy,  center_px: [447, 637],  size_px: [130, 45] }
+  wind_farm:          { name: "Champ éolien (20 éoliennes)",              zone: energy,  center_px: [200, 795],  size_px: [250, 170] }
+  # --- Village ---
+  bar:                { name: "Bar",                                      zone: village, center_px: [605, 160],  size_px: [185, 70] }
+  housing_a:          { name: "Habitations A",                            zone: village, center_px: [565, 275],  size_px: [100, 110], units: 60 }
+  housing_b:          { name: "Habitations B",                            zone: village, center_px: [680, 270],  size_px: [90, 100],  units: 80 }
+  school:             { name: "École, garderie",                          zone: village, center_px: [765, 210],  size_px: [85, 85] }
+  canteen:            { name: "Cantine, réfectoire",                      zone: village, center_px: [897, 212],  size_px: [135, 80] }
+  civil_admin:        { name: "Administration civile",                    zone: village, center_px: [808, 290],  size_px: [140, 50] }
+  retail:             { name: "Vente de détail",                          zone: village, center_px: [953, 298],  size_px: [110, 50] }
+  imports_depot:      { name: "Entrepôts imports",                        zone: village, center_px: [1075, 225], size_px: [190, 150] }
+  security_fire:      { name: "Poste de sécurité, incendie",              zone: village, center_px: [1080, 282], size_px: [75, 75] }
+  server_room:        { name: "Salle serveur, antennes relais",           zone: village, center_px: [1233, 284], size_px: [90, 35] }
+  refugee_housing:    { name: "Habitations temporaires pour réfugiés",    zone: village, center_px: [850, 80],   size_px: [250, 150], units: 30 }
+  exports_depot:      { name: "Entrepôts export",                         zone: village, center_px: [608, 465],  size_px: [180, 100] }
+  transport_parking:  { name: "Parking transport, nettoyage, maintenance", zone: village, center_px: [765, 460], size_px: [100, 90] }
+  infirmary:          { name: "Infirmerie",                               zone: village, center_px: [902, 450],  size_px: [120, 80] }
+  municipal_services: { name: "Maintenance municipale, gestion des déchets", zone: village, center_px: [1070, 457], size_px: [155, 95] }
+  geology:            { name: "Département sciences géologiques",         zone: village, center_px: [660, 575],  size_px: [75, 75] }
+  dormitories:        { name: "Dortoirs",                                 zone: village, center_px: [765, 572],  size_px: [95, 110], units: 135 }
+  cemetery:           { name: "Cimetière, jardin du souvenir",            zone: village, center_px: [905, 565],  size_px: [140, 125] }
+
+# Buildings nobody works in on purpose (the check accepts them unstaffed).
+unstaffed: [battery_park, wind_farm]
+
+# Display names: deterministic first x last combinations, never reused within
+# the village. The storekeepers keep their names from config/npcs.yaml.sample.
+names:
+  first: [Ada, Bastien, Céleste, Dario, Elouan, Fatou, Gaspard, Hana, Ilyes, Jade,
+          Kenji, Léna, Malo, Nadia, Oskar, Paloma, Quentin, Rania, Soren, Tess,
+          Ugo, Vera, Wassim, Xenia, Yanis, Zoé, Anouk, Brahim, Clémence, Dmitri,
+          Esther, Farid, Gwen, Hugo, Inès, Jonas, Kahina, Lucien, Maëlle, Noam]
+  last: [Arnaud, Benali, Carvalho, Delmas, Esposito, Fournier, Garnier, Haddad,
+         Ivanov, Jacquet, Kowalski, Lambert, Moreau, Nguyen, Okafor, Perrin,
+         Quiroga, Renard, Sato, Tessier, Ulrich, Vasseur, Weber, Xu, Yilmaz,
+         Zanetti, Aubry, Bertin, Chevalier, Dumont, Étienne, Ferrand, Gilles,
+         Hoarau, Imbert, Joly, Keller, Lefort, Marchand, Noël]
+
+# Housing: one individual dwelling per NPC (and per player). 305 units in all:
+# 250 for the NPCs, the rest stays free.
+housing:
+  # Filled in this order for `housing: family`, then the other way round for
+  # `housing: dorm`; refugees always go to refugee_housing.
+  family_order: [housing_a, housing_b, dormitories]
+  dorm_order: [dormitories, housing_b, housing_a]
+  # Kept free for players (ADR services/0002, open question: how many).
+  player_units: { building: housing_b, units: 20 }
+
+meal_building: canteen
+
+# Rota families (patterns in config/schedules.yaml).
+#   crew:        equipe_1..5, rank-robin (24/7 posts; headcount multiple of 5)
+#   magasinier:  magasinier_1..5 (the existing storekeepers)
+#   day:         jour_1..5, rank-robin, unless the role sets `patterns`
+#   evening:     soir_1..3
+#   fixed:       the role's single `patterns` entry for everyone
+rotas:
+  crew: [equipe_1, equipe_2, equipe_3, equipe_4, equipe_5]
+  magasinier: [magasinier_1, magasinier_2, magasinier_3, magasinier_4, magasinier_5]
+  day: [jour_1, jour_2, jour_3, jour_4, jour_5]
+  evening: [soir_1, soir_2, soir_3]
+
+# Actions every NPC gets on top of its role's `actions`.
+base_actions: [detect_player_and_greet, going_to_work, go_to_meal, mandatory_activity, go_home]
+
+# Roles. `work`: building of `T`/`t`; `mandatory`: building of `a`;
+# `mine_side`: showers at the changing rooms after each shift (water budget);
+# `housing`: family | dorm | refugee; `diet`: what the role eats
+# (config/food/consumables.yaml, default `worker`).
+roles:
+  # --- Mine (140) ---
+  - { id: miner,               label: "Mineur de fond",                       count: 65, rota: crew,    work: cave_entrance,      mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: haulage,             label: "Roulage, conducteur d'engins",         count: 10, rota: crew,    work: cave_entrance,      mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: pretreatment,        label: "Opérateur de prétraitement",           count: 15, rota: crew,    work: pretreatment,       mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: loader,              label: "Chargeur (point de chargement)",       count: 5,  rota: crew,    work: loading_point,      mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: export_clerk,        label: "Magasinier export (minerai)",          count: 5,  rota: crew,    work: exports_depot,      mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: spoil,               label: "Opérateur de verse à stériles",        count: 5,  rota: crew,    work: sterile,            mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: mine_mechanic,       label: "Mécanicien mine",                      count: 10, rota: crew,    work: mine_maintenance,   mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: mine_parking,        label: "Agent parking minier (nettoyage)",     count: 5,  rota: crew,    work: mine_parking,       mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: lamp_room,           label: "Lampiste, magasin du sous-dépôt",      count: 5,  rota: crew,    work: changing_rooms,     mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: gate_guard,          label: "Garde du poste de garde",              count: 5,  rota: crew,    work: guard_post,         mandatory: changing_rooms, mine_side: true, housing: dorm, diet: mine }
+  - { id: shift_boss,          label: "Chef de poste",                        count: 5,  rota: crew,    work: mine_admin,         mandatory: changing_rooms, mine_side: true, housing: family, diet: executive }
+  - { id: mine_director,       label: "Directeur de la mine",                 count: 1,  rota: day,     work: mine_admin,         mandatory: civil_admin,    housing: family, diet: executive }
+  - { id: geologist,           label: "Géologue",                             count: 4,  rota: day,     work: geology,            mandatory: infirmary,      housing: family, diet: executive }
+  # --- Transport (20) ---
+  - { id: driver,              label: "Chauffeur de camion",                  count: 10, rota: crew,    work: transport_parking,  mandatory: infirmary,      housing: dorm, actions: [drive_to_factory] }
+  - { id: vehicle_mechanic,    label: "Mécanicien véhicules de transport",    count: 5,  rota: crew,    work: transport_parking,  mandatory: infirmary,      housing: dorm }
+  - { id: storekeeper,         label: "Magasinier (entrepôts imports)",       count: 5,  rota: magasinier, work: imports_depot,   mandatory: infirmary,      housing: family, from_sample: true }
+  # --- Energy and infrastructure (14) ---
+  - { id: power_tech,          label: "Technicien énergie (transfo, batteries, éoliennes)", count: 5, rota: crew, work: transformer, mandatory: infirmary, housing: dorm }
+  - { id: it_tech,             label: "Technicien serveurs et antennes",      count: 2,  rota: day,     work: server_room,        mandatory: civil_admin,    housing: family }
+  - { id: municipal,           label: "Agent municipal (maintenance, déchets)", count: 6, rota: day,    work: municipal_services, mandatory: civil_admin,    housing: family }
+  - { id: cemetery_keeper,     label: "Gardien du cimetière",                 count: 1,  rota: day,     work: cemetery,           mandatory: civil_admin,    housing: family }
+  # --- Services (39) ---
+  - { id: cook,                label: "Cuisinier",                            count: 10, rota: crew,    work: canteen,            mandatory: infirmary,      housing: dorm }
+  - { id: head_cook,           label: "Chef cuisinier, économe",              count: 2,  rota: day,     work: canteen,            mandatory: civil_admin,    housing: family, patterns: [jour_1, jour_3] }
+  - { id: nurse,               label: "Infirmier, médecin",                   count: 5,  rota: crew,    work: infirmary,          mandatory: civil_admin,    housing: family }
+  - { id: firefighter,         label: "Agent de sécurité, pompier",           count: 5,  rota: crew,    work: security_fire,      mandatory: infirmary,      housing: dorm }
+  - { id: bartender,           label: "Barman",                               count: 3,  rota: evening, work: bar,                mandatory: infirmary,      housing: family }
+  - { id: shopkeeper,          label: "Vendeur",                              count: 3,  rota: day,     work: retail,             mandatory: infirmary,      housing: family }
+  - { id: teacher,             label: "Enseignant, animateur de garderie",    count: 4,  rota: day,     work: school,             mandatory: infirmary,      housing: family, patterns: [jour_5] }
+  - { id: civil_clerk,         label: "Agent administratif (mairie, RH, comptabilité)", count: 5, rota: day, work: civil_admin, mandatory: infirmary,      housing: family }
+  - { id: caretaker,           label: "Concierge des dortoirs",               count: 2,  rota: day,     work: dormitories,        mandatory: civil_admin,    housing: family }
+  # --- Not working (37) ---
+  - { id: child,               label: "Enfant (école)",                       count: 25, rota: fixed,   work: school,             mandatory: infirmary,      housing: family, patterns: [enfant], active: false, diet: dependant }
+  - { id: retired,             label: "Retraité",                             count: 7,  rota: fixed,   work: null,               mandatory: infirmary,      housing: family, patterns: [retraite], active: false, diet: dependant }
+  - { id: refugee,             label: "Réfugié",                              count: 5,  rota: fixed,   work: null,               mandatory: civil_admin,    housing: refugee, patterns: [refugie], active: false, diet: dependant }
+
+# Resource budget (ADR services/0004). Rates are per inhabitant or per hour on
+# duty; the generator turns them into per-day totals and universesimulator
+# flows. One planetary day = 25 h, one rota cycle = 5 days.
+budget:
+  # Food: the diets of config/food/consumables.yaml (ADR services/0009).
+  water:
+    resource: water
+    l_per_person_day: 30          # drinking, cooking, hygiene
+    shower_l_per_mine_shift: 40   # mine-side roles, after each shift
+    process_l_per_raw_kg: 0.05    # dust suppression and washing at pre-treatment
+  ore:
+    producer_role: miner          # `T` hours of this role extract raw rock
+    raw_kg_per_worker_hour: 75
+    pretreatment_yield: 0.6       # the rest goes to the spoil heap
+    # The ore is the village's outcrop rock (config/world/tarsis_3/village_geology.json,
+    # ADR services/0008): one resource per rock, refined at the factory.
+  transport:
+    driver_role: driver
+    truck_payload_kg: 1000
+    road_round_trip_h: 1.0        # mining village <-> nearest factory
+    handling_h: 0.5               # loading + unloading, both ends
+  stock_days:                     # in days of consumption (or production for ore)
+    min_threshold: 1.5
+    target_level: 3
+    capacity: 5
+    ore_capacity: 2

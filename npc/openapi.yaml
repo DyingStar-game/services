@@ -1,0 +1,1187 @@
+openapi: 3.1.0
+info:
+  title: DyingStar NPC service API
+  version: 0.2.0
+  description: |
+    Admin API of the NPC service: the NPC roster (stored in PostgreSQL, one Keycloak user per
+    NPC in group `npcs` with realm role `npc`), the global switch, manual tasks, shift
+    schedules, logs and events. Used by the adminpanel BFF.
+
+    Authentication (Keycloak): `/api/admin/*` needs a staff bearer token with a moderation role
+    (`moderator`, `admin`, `supervisor`); writes need `admin` or `supervisor`. Dev only
+    (`AUTH_DEV_BYPASS=true`): `X-Player-Id` and `X-Player-Roles` headers instead.
+
+    Errors: `{ "error": "<CODE>", "message": "<text>" }`.
+
+    An NPC runs (is connected to Horizon) when the global switch is on and its own `enabled`
+    is set. Changes are applied by a background reconciler within a second or two; `live`
+    reflects the current state.
+servers:
+- url: http://localhost:9400
+tags:
+- name: Public
+- name: Settings
+- name: NPCs
+- name: Tasks
+- name: Logs
+- name: Schedules
+- name: Villages
+- name: Debug
+security:
+- bearer: []
+paths:
+  /healthz:
+    get:
+      tags: [Public]
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: ok
+
+  /api/admin/settings:
+    get:
+      tags: [Settings]
+      operationId: getSettings
+      summary: Global switch and counts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Settings]
+      operationId: putSettings
+      summary: Turn every enabled NPC on or off (global switch)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [npcsEnabled]
+              properties:
+                npcsEnabled: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs:
+    get:
+      tags: [NPCs]
+      operationId: listNpcs
+      summary: The roster with live status
+      parameters:
+      - { name: village, in: query, schema: { type: string }, description: Village code (e.g. M0012) }
+      - { name: role, in: query, schema: { $ref: '#/components/schemas/Role' } }
+      - { name: enabled, in: query, schema: { type: boolean } }
+      - { name: online, in: query, schema: { type: boolean }, description: Connected to Horizon right now }
+      - { name: q, in: query, schema: { type: string }, description: Substring of the display name or login }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+      - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: OK (`total` counts the rows matching the filters, before `online`)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Npc' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [NPCs]
+      operationId: createNpcs
+      summary: Create NPCs (generated names, Keycloak accounts)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNpcs'
+      responses:
+        '201':
+          description: Created (`errors` lists the NPCs that could not be created)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [created, errors]
+                properties:
+                  created:
+                    type: array
+                    items: { $ref: '#/components/schemas/Npc' }
+                  errors:
+                    type: array
+                    items: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/bulk:
+    post:
+      tags: [NPCs]
+      operationId: bulkNpcs
+      summary: Spawn, despawn or delete several NPCs (by ids or by count)
+      description: |
+        With `count`, `spawn` picks the oldest disabled NPCs; `despawn` and `delete` pick the most
+        recent enabled ones, non-storekeepers first. `village` / `role` narrow the pick.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [spawn, despawn, delete] }
+                ids:
+                  type: array
+                  items: { $ref: '#/components/schemas/Uuid' }
+                count: { type: integer, minimum: 1, maximum: 1000 }
+                village: { type: string }
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [affected, errors]
+                properties:
+                  affected:
+                    type: array
+                    items: { $ref: '#/components/schemas/Uuid' }
+                  errors:
+                    type: array
+                    items: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    get:
+      tags: [NPCs]
+      operationId: getNpc
+      summary: One NPC with its routine, recent tasks, live state and workplace
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NpcDetail'
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [NPCs]
+      operationId: patchNpc
+      summary: Edit an NPC (hot-pushed to its runtime)
+      description: |
+        Absent fields are left unchanged; `null` clears a nullable field. Setting `role` by hand
+        locks it (no automatic assignment) unless it is `unassigned`. A rename is propagated to
+        Keycloak and shows in Horizon at the next connection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NpcPatch'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NpcEnvelope'
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [NPCs]
+      operationId: deleteNpc
+      summary: Delete an NPC (runtime, Keycloak user, row)
+      responses:
+        '204': { description: Deleted }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}/spawn:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    post:
+      tags: [NPCs]
+      operationId: spawnNpc
+      summary: Enable one NPC
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NpcEnvelope' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}/despawn:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    post:
+      tags: [NPCs]
+      operationId: despawnNpc
+      summary: Disable one NPC
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NpcEnvelope' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}/reassign:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    post:
+      tags: [NPCs]
+      operationId: reassignNpc
+      summary: Forget role and workplace; the automatic assignment runs again
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NpcEnvelope' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}/reset-credentials:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    post:
+      tags: [NPCs]
+      operationId: resetNpcCredentials
+      summary: Set a new random Keycloak password
+      responses:
+        '204': { description: Done }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}/logs:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    get:
+      tags: [Logs]
+      operationId: getNpcLogs
+      summary: Recent log lines of an NPC (in memory, lost on restart)
+      parameters:
+      - { name: since, in: query, schema: { type: integer, minimum: 0, default: 0 }, description: Only lines with a greater `seq` (poll with the last `lastSeq`) }
+      - { name: level, in: query, schema: { type: string, enum: [error, warn, info, debug, trace] }, description: Minimum level }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, lastSeq]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LogLine' }
+                  lastSeq: { type: integer }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}/events:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    get:
+      tags: [Logs]
+      operationId: getNpcEvents
+      summary: Key events of an NPC, newest first
+      parameters:
+      - $ref: '#/components/parameters/eventKind'
+      - $ref: '#/components/parameters/eventBefore'
+      - $ref: '#/components/parameters/eventLimit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventList' }
+
+  /api/admin/events:
+    get:
+      tags: [Logs]
+      operationId: listEvents
+      summary: Key events of every NPC and service-wide ones, newest first
+      parameters:
+      - $ref: '#/components/parameters/eventKind'
+      - $ref: '#/components/parameters/eventBefore'
+      - $ref: '#/components/parameters/eventLimit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventList' }
+
+  /api/admin/npcs/{id}/tasks:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    get:
+      tags: [Tasks]
+      operationId: listNpcTasks
+      summary: Open tasks first, then the most recent finished ones
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Task' }
+    post:
+      tags: [Tasks]
+      operationId: createNpcTask
+      summary: Give an NPC a task (pre-empts its schedule)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewTask'
+      responses:
+        '201':
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskEnvelope' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/admin/npcs/{id}/tasks/{taskId}:
+    parameters:
+    - $ref: '#/components/parameters/npcId'
+    - name: taskId
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    delete:
+      tags: [Tasks]
+      operationId: cancelNpcTask
+      summary: Cancel an open task (aborts it when running)
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskEnvelope' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/admin/task-kinds:
+    get:
+      tags: [Tasks]
+      operationId: getTaskKinds
+      summary: Task kinds, their parameters and the actions that can be run by hand
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [kinds, actions, actionConfigs]
+                properties:
+                  kinds:
+                    type: array
+                    items:
+                      type: object
+                      required: [kind, params]
+                      properties:
+                        kind: { $ref: '#/components/schemas/TaskKind' }
+                        params:
+                          type: object
+                          additionalProperties: { type: string }
+                          description: Parameter name -> human description
+                  actions:
+                    type: array
+                    items: { type: string }
+                  actionConfigs:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      additionalProperties: { type: string }
+                    description: Action -> its config fields (for `run_action.config`)
+
+  /api/admin/schedule/patterns:
+    get:
+      tags: [Schedules]
+      operationId: listPatterns
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Pattern' }
+    post:
+      tags: [Schedules]
+      operationId: createPattern
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+              - $ref: '#/components/schemas/PatternBody'
+              - type: object
+                required: [name]
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatternEnvelope' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/admin/schedule/patterns/{name}:
+    parameters:
+    - name: name
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9_]{1,64}$' }
+    get:
+      tags: [Schedules]
+      operationId: getPattern
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatternEnvelope' }
+        '404': { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Schedules]
+      operationId: updatePattern
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatternBody' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatternEnvelope' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Schedules]
+      operationId: deletePattern
+      responses:
+        '204': { description: Deleted }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409':
+          description: Used by NPCs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/admin/schedule/import:
+    post:
+      tags: [Schedules]
+      operationId: importSchedules
+      summary: Import config/schedules.yaml (or the given YAML) into the database
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [missing, overwrite]
+                  default: missing
+                  description: '`missing` only adds absent patterns and mapping rows; `overwrite` replaces them'
+                yaml:
+                  type: string
+                  description: YAML in the format of config/schedules.yaml; absent = the file shipped with the service
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [report]
+                properties:
+                  report: { $ref: '#/components/schemas/ImportReport' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/admin/schedule/activity-actions:
+    get:
+      tags: [Schedules]
+      operationId: getActivityActions
+      summary: Activity -> actions allowed during it (`always` = in every activity)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityActions' }
+    put:
+      tags: [Schedules]
+      operationId: putActivityActions
+      summary: Replace the actions of the activities given (others unchanged)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              propertyNames:
+                enum: [work, transmission, meal, mandatory, off, always]
+              additionalProperties:
+                type: array
+                items: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityActions' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/admin/schedule/legend:
+    get:
+      tags: [Schedules]
+      operationId: getScheduleLegend
+      summary: Meaning of the grid letters
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hoursPerDay, letters]
+                properties:
+                  hoursPerDay: { type: integer }
+                  letters:
+                    type: array
+                    items:
+                      type: object
+                      required: [letter, activity, label]
+                      properties:
+                        letter: { type: string }
+                        activity: { $ref: '#/components/schemas/Activity' }
+                        label: { type: string }
+
+  /api/admin/villages:
+    get:
+      tags: [Villages]
+      operationId: listVillages
+      summary: Mining villages (NPCs, storekeepers, workplace, Factory) and Factory villages
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [planet, mining, factories]
+                properties:
+                  planet: { type: string }
+                  mining:
+                    type: array
+                    items: { $ref: '#/components/schemas/MiningVillage' }
+                  factories:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, lon, lat]
+                      properties:
+                        name: { type: string }
+                        lon: { type: number }
+                        lat: { type: number }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/admin/villages/{code}/workplace:
+    parameters:
+    - name: code
+      in: path
+      required: true
+      schema: { type: string }
+    put:
+      tags: [Villages]
+      operationId: setVillageWorkplace
+      summary: Set by hand the cargo_depot a village's storekeepers work at
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [warehouseId]
+              properties:
+                warehouseId: { $ref: '#/components/schemas/Uuid' }
+                warehouseCode: { type: string }
+                scenename: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workplace]
+                properties:
+                  workplace: { $ref: '#/components/schemas/Workplace' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Villages]
+      operationId: deleteVillageWorkplace
+      summary: Forget the workplace (resolved again at the next assignment)
+      responses:
+        '204': { description: Deleted }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/admin/debug/world:
+    get:
+      tags: [Debug]
+      operationId: debugWorld
+      summary: What each running NPC sees on its workplace object
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, npcs]
+                properties:
+                  count: { type: integer }
+                  npcs:
+                    type: array
+                    items: { type: object }
+
+  /api/admin/debug/routes/{from}/{to}:
+    get:
+      tags: [Debug]
+      operationId: debugRoute
+      summary: Road route between two villages, as GeoJSON
+      parameters:
+      - { name: from, in: path, required: true, schema: { type: string } }
+      - { name: to, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: GeoJSON Feature
+          content:
+            application/json:
+              schema: { type: object }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/admin/health/keycloak:
+    get:
+      tags: [Debug]
+      operationId: keycloakHealth
+      summary: Keycloak users of group npcs without a row (orphans) and rows without a user
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groupMembers, orphans, missing]
+                properties:
+                  groupMembers: { type: integer }
+                  orphans:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, username]
+                      properties:
+                        id: { $ref: '#/components/schemas/Uuid' }
+                        username: { type: string }
+                  missing:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, login]
+                      properties:
+                        id: { $ref: '#/components/schemas/Uuid' }
+                        login: { type: string }
+        '502': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    npcId:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    eventKind:
+      name: kind
+      in: query
+      schema: { type: string }
+    eventBefore:
+      name: before
+      in: query
+      description: Only events with a smaller id (pagination)
+      schema: { type: integer, format: int64 }
+    eventLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum: [BAD_REQUEST, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, UPSTREAM_ERROR, INTERNAL_ERROR]
+        message: { type: string }
+    Uuid:
+      type: string
+      pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    Timestamp:
+      type: string
+      format: date-time
+    Role:
+      type: string
+      enum: [unassigned, storekeeper, villager, custom]
+      description: |
+        `unassigned`: decided at first spawn (storekeeper of its Mining village for the first five,
+        villager after). `custom`: configured by hand.
+    Activity:
+      type: string
+      enum: [work, transmission, meal, mandatory, off]
+    Vec3:
+      type: object
+      required: [x, y, z]
+      properties:
+        x: { type: number }
+        y: { type: number }
+        z: { type: number }
+    Place:
+      type: object
+      required: [uuid, position]
+      description: A position local to the object `uuid` (a depot, a building…)
+      properties:
+        uuid: { type: string }
+        planet: { type: [string, 'null'] }
+        position: { $ref: '#/components/schemas/Vec3' }
+    CurrentAction:
+      type: object
+      required: [name, source, taskId, startedAt]
+      properties:
+        name: { type: string, description: 'Action name, or `manual:<kind|action>` for a task' }
+        source: { type: string, enum: [schedule, manual] }
+        taskId: { type: [integer, 'null'], format: int64 }
+        startedAt: { $ref: '#/components/schemas/Timestamp' }
+    LiveStatus:
+      type: object
+      required: [running, connected, status, currentAction, runningSince]
+      properties:
+        running: { type: boolean, description: The runtime exists (enabled and global switch on) }
+        connected: { type: boolean, description: Has a Horizon session (false while off-shift) }
+        status:
+          type: [string, 'null']
+          description: FSM status while connected (idle, at_home, going_to_work, at_work, walking…)
+        currentAction:
+          oneOf:
+          - $ref: '#/components/schemas/CurrentAction'
+          - type: 'null'
+        runningSince:
+          oneOf:
+          - $ref: '#/components/schemas/Timestamp'
+          - type: 'null'
+    Npc:
+      type: object
+      required: [id, login, firstName, lastName, displayName, enabled, role, roleLocked, villageCode,
+        storekeeperSlot, schedulePattern, actionProfile, placeWhereWork, home, mealPlace, mandatoryPlace,
+        actionTiming, actionConfig, kcState, kcError, firstSpawnAt, lastSeenAt, notes, createdBy,
+        createdAt, updatedAt, live]
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: Keycloak user id = JWT sub = Horizon player id
+        login: { type: string, description: Keycloak username (npc-xxxxxxxx) }
+        firstName: { type: string }
+        lastName: { type: string }
+        displayName: { type: string, description: Shown in game (preferred_username) }
+        enabled: { type: boolean }
+        role: { $ref: '#/components/schemas/Role' }
+        roleLocked: { type: boolean, description: The automatic assignment leaves this NPC alone }
+        villageCode: { type: [string, 'null'] }
+        storekeeperSlot: { type: [integer, 'null'], minimum: 1, maximum: 5 }
+        schedulePattern: { type: [string, 'null'] }
+        actionProfile:
+          type: array
+          items: { type: string }
+        placeWhereWork:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        home:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        mealPlace:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        mandatoryPlace:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        actionTiming:
+          type: object
+          description: 'Action -> {once, cooldown_ms, min_interval_ms, timeout_ms}'
+          additionalProperties: true
+        actionConfig:
+          type: object
+          description: Per-action config blocks (depot_store_reception_to_temp_area, depot_store_item, take_a_walk, drive_to_factory)
+          additionalProperties: true
+        kcState: { type: string, enum: [ready, error] }
+        kcError: { type: [string, 'null'] }
+        firstSpawnAt:
+          oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
+        lastSeenAt:
+          oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
+        notes: { type: [string, 'null'] }
+        createdBy: { type: [string, 'null'] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        live: { $ref: '#/components/schemas/LiveStatus' }
+    NpcEnvelope:
+      type: object
+      required: [npc]
+      properties:
+        npc: { $ref: '#/components/schemas/Npc' }
+    Routine:
+      type: object
+      required: [pattern, patternMissing, planet, rotationH, day, hour, activity, allowedActions, days]
+      properties:
+        pattern: { type: [string, 'null'] }
+        patternMissing: { type: boolean, description: The pattern is set but unknown }
+        planet: { type: string }
+        rotationH: { type: number }
+        day: { type: integer, description: Rota day (0-based) }
+        hour: { type: integer, description: Planetary hour }
+        activity:
+          oneOf: [{ $ref: '#/components/schemas/Activity' }, { type: 'null' }]
+        allowedActions:
+          oneOf:
+          - type: array
+            items: { type: string }
+          - type: 'null'
+          description: null = no schedule gating
+        days:
+          oneOf:
+          - type: array
+            items: { type: string }
+          - type: 'null'
+    NpcDetail:
+      type: object
+      required: [npc, routine, tasks, state, workplace]
+      properties:
+        npc: { $ref: '#/components/schemas/Npc' }
+        routine:
+          oneOf: [{ $ref: '#/components/schemas/Routine' }, { type: 'null' }]
+        tasks:
+          type: array
+          items: { $ref: '#/components/schemas/Task' }
+        state:
+          oneOf:
+          - type: object
+            properties:
+              state:
+                type: object
+                properties:
+                  status: { type: string }
+                  board: { type: object, additionalProperties: true }
+              position:
+                oneOf: [{ $ref: '#/components/schemas/Vec3' }, { type: 'null' }]
+              parent: { type: [string, 'null'] }
+          - type: 'null'
+          description: Live FSM state and blackboard while connected
+        workplace:
+          oneOf: [{ $ref: '#/components/schemas/Workplace' }, { type: 'null' }]
+    CreateNpcs:
+      type: object
+      properties:
+        count: { type: integer, minimum: 1, maximum: 50, default: 1 }
+        role:
+          type: string
+          enum: [unassigned, villager, custom]
+          default: unassigned
+        enabled: { type: boolean, default: false, description: Spawn right away }
+        schedulePattern: { type: string }
+        actionProfile:
+          type: array
+          items: { type: string }
+        firstName: { type: string, description: Imposed name (count must be 1) }
+        lastName: { type: string }
+    NpcPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        firstName: { type: string, minLength: 1, maxLength: 64 }
+        lastName: { type: string, minLength: 1, maxLength: 64 }
+        enabled: { type: boolean }
+        role: { $ref: '#/components/schemas/Role' }
+        roleLocked: { type: boolean }
+        villageCode: { type: [string, 'null'] }
+        storekeeperSlot: { type: [integer, 'null'], minimum: 1, maximum: 5 }
+        schedulePattern: { type: [string, 'null'] }
+        actionProfile:
+          type: array
+          items: { type: string }
+        placeWhereWork:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        home:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        mealPlace:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        mandatoryPlace:
+          oneOf: [{ $ref: '#/components/schemas/Place' }, { type: 'null' }]
+        actionTiming:
+          type: [object, 'null']
+          additionalProperties: true
+        actionConfig:
+          type: [object, 'null']
+          additionalProperties: true
+        notes: { type: [string, 'null'] }
+    TaskKind:
+      type: string
+      enum: [go_to_position, run_action, wait]
+    NewTask:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: '#/components/schemas/TaskKind' }
+        params:
+          type: object
+          additionalProperties: true
+          description: |
+            go_to_position: {position: {x,y,z}, uuid?, hold_s? (60), timeout_s? (300)};
+            run_action: {action, config?, duration_s? (300)}; wait: {seconds}
+        forceOnline: { type: boolean, default: false, description: Connect the NPC even off-shift }
+    Task:
+      type: object
+      required: [id, npcId, kind, params, forceOnline, status, error, createdBy, createdAt, startedAt, finishedAt]
+      properties:
+        id: { type: integer, format: int64 }
+        npcId: { $ref: '#/components/schemas/Uuid' }
+        kind: { $ref: '#/components/schemas/TaskKind' }
+        params: { type: object, additionalProperties: true }
+        forceOnline: { type: boolean }
+        status: { type: string, enum: [pending, running, done, failed, timeout, cancelled] }
+        error: { type: [string, 'null'] }
+        createdBy: { type: [string, 'null'] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        startedAt:
+          oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
+        finishedAt:
+          oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
+    TaskEnvelope:
+      type: object
+      required: [task]
+      properties:
+        task: { $ref: '#/components/schemas/Task' }
+    LogLine:
+      type: object
+      required: [seq, ts, level, target, message, fields]
+      properties:
+        seq: { type: integer }
+        ts: { $ref: '#/components/schemas/Timestamp' }
+        level: { type: string, enum: [ERROR, WARN, INFO, DEBUG, TRACE] }
+        target: { type: string }
+        message: { type: string }
+        fields: { type: object, additionalProperties: true }
+    Event:
+      type: object
+      required: [id, npcId, ts, kind, level, message, data]
+      properties:
+        id: { type: integer, format: int64 }
+        npcId:
+          oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }]
+          description: null = service-wide event
+        ts: { $ref: '#/components/schemas/Timestamp' }
+        kind:
+          type: string
+          description: |
+            created, spawned, despawned, connected, disconnected, off_shift, spec_reloaded, updated,
+            role_assigned, assign_failed, reassign, action_started, action_failed, action_timeout,
+            task_created, task_started, task_done, task_failed, task_timeout, task_cancelled,
+            credentials_rotated, login_failed, spawn_failed; service-wide: global_switch, bulk,
+            npc_deleted, schedules_imported, pattern_created, pattern_updated, pattern_deleted,
+            activity_actions_updated, workplace_set
+        level: { type: string, enum: [debug, info, warn, error] }
+        message: { type: string }
+        data:
+          type: [object, 'null']
+          additionalProperties: true
+    EventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+    Pattern:
+      type: object
+      required: [name, description, days, source, updatedAt, updatedBy]
+      properties:
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        days:
+          type: array
+          items: { type: string, description: 'One char per planetary hour: T t r a . l' }
+        source: { type: string, enum: [import, panel] }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedBy: { type: [string, 'null'] }
+    PatternBody:
+      type: object
+      required: [days]
+      properties:
+        name: { type: string, pattern: '^[a-z0-9_]{1,64}$' }
+        description: { type: string }
+        days:
+          type: array
+          minItems: 1
+          maxItems: 14
+          items: { type: string, pattern: '^[Ttra.l]+$' }
+    PatternEnvelope:
+      type: object
+      required: [pattern]
+      properties:
+        pattern: { $ref: '#/components/schemas/Pattern' }
+    ImportReport:
+      type: object
+      required: [created, updated, skipped, errors]
+      properties:
+        created:
+          type: array
+          items: { type: string }
+        updated:
+          type: array
+          items: { type: string }
+        skipped:
+          type: array
+          items: { type: string }
+        errors:
+          type: array
+          items: { type: string }
+    ActivityActions:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+    Workplace:
+      type: object
+      required: [villageCode, warehouseId, warehouseCode, scenename, source, updatedAt, updatedBy]
+      properties:
+        villageCode: { type: string }
+        warehouseId: { $ref: '#/components/schemas/Uuid' }
+        warehouseCode: { type: [string, 'null'] }
+        scenename: { type: [string, 'null'] }
+        source: { type: string, enum: [usim, world, manual] }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedBy: { type: [string, 'null'] }
+    MiningVillage:
+      type: object
+      required: [name, lon, lat, npcs, storekeepers, storekeeperSlots, workplace, factory]
+      properties:
+        name: { type: string }
+        lon: { type: number }
+        lat: { type: number }
+        npcs: { type: integer }
+        storekeepers: { type: integer }
+        storekeeperSlots: { type: integer }
+        workplace:
+          oneOf: [{ $ref: '#/components/schemas/Workplace' }, { type: 'null' }]
+        factory:
+          oneOf:
+          - type: object
+            properties:
+              factory: { type: string }
+              road_cost_m: { type: [number, 'null'] }
+              configured: { type: boolean }
+          - type: 'null'
+    SettingsResponse:
+      type: object
+      required: [settings, counts]
+      properties:
+        settings:
+          type: object
+          required: [npcsEnabled, updatedAt, updatedBy]
+          properties:
+            npcsEnabled: { type: boolean }
+            updatedAt: { $ref: '#/components/schemas/Timestamp' }
+            updatedBy: { type: [string, 'null'] }
+        counts:
+          type: object
+          required: [total, enabled, running, connected]
+          properties:
+            total: { type: integer }
+            enabled: { type: integer }
+            running: { type: integer }
+            connected: { type: integer }

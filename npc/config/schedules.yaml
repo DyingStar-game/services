@@ -1,0 +1,238 @@
+# Shift schedules for the cargo-depot NPCs.
+#
+# Loaded at startup (SCHEDULES_PATH, default config/schedules.yaml). Each NPC in
+# config/npcs.yaml references one pattern by name via its `schedule:` field.
+#
+# A pattern is a grid of PLANETARY hours: one line per rota-day (`days:`), each
+# line EXACTLY 25 characters long (the planet turns in 25 h), one character per
+# planetary hour 0..24. The service advances through the days in order, then
+# wraps back to day 1 — a repeating 5-day rota.
+#
+# Legend (mirrors the planning spreadsheet):
+#   T  travail            — depot work (reception -> temp zone, stocking shelves)
+#   t  transmission       — shift handoff (treated as work for MVP: box flow continues)
+#   r  repas              — meal in the common zone  (-> go_to_meal)
+#   a  activites oblig.   — medical / RH / cleaning / chores  (-> mandatory_activity)
+#   .  off-shift          — home / sleep  (-> go_home)
+#   l  loisir             — bar, shop, cemetery (ADR services/0003). No action yet:
+#                           the parser treats any unknown letter as off-shift, so
+#                           `l` behaves like `.` (-> go_home) until one exists.
+#
+# NOTE (verify me): this is a best-effort transcription of the pasted planning
+# image, laid out as a rotating rota — 5 magasiniers evenly spaced ~5 h apart so
+# the depot is always staffed (checked: no hour has zero workers), and each NPC
+# cycles through all time-slots over the 5 days (fair rotation). A shift is one
+# 18 h block "t TTTTT aa r a TTTTT aa r"; some shifts wrap across the day
+# boundary (a night shift). Correct any individual cells to match the sheet.
+
+schedules:
+  magasinier_1:
+    days:
+      - "TTTTTaaratTTTTTaar......."   # jour 1
+      - "....tTTTTTaaratTTTTT....."   # jour 2
+      - "....tTTTTTaaratTTTTT....."   # jour 3
+      - ".......r.tTTTTTaaratTTTTT"   # jour 4
+      - "a........................"   # jour 5
+
+  magasinier_2:
+    days:
+      - "....tTTTTTaaratTTTTTaar.."   # jour 1
+      - "....tTTTTTaaratTTTTT....."   # jour 2
+      - ".......r.tTTTTTaaratTTTTT"   # jour 3
+      - "a.....................r.t"   # jour 4
+      - "TTTTTaaratTTTTTaar......."   # jour 5
+
+  magasinier_3:
+    days:
+      - "....tTTTTTaaratTTTTTaar.."   # jour 1
+      - ".......r.tTTTTTaaratTTTTT"   # jour 2
+      - "a.....................r.t"   # jour 3
+      - "TTTTTaaratTTTTTaar......."   # jour 4
+      - "....tTTTTTaaratTTTTT....."   # jour 5
+
+  magasinier_4:
+    days:
+      - ".......r.tTTTTTaaratTTTTT"   # jour 1
+      - "a.....................r.t"   # jour 2
+      - "TTTTTaaratTTTTTaar......."   # jour 3
+      - "....tTTTTTaaratTTTTT....."   # jour 4
+      - "....tTTTTTaaratTTTTT....."   # jour 5
+
+  magasinier_5:
+    days:
+      - "......................r.t"   # jour 1
+      - "TTTTTaaratTTTTTaar......."   # jour 2
+      - "....tTTTTTaaratTTTTT....."   # jour 3
+      - "....tTTTTTaaratTTTTT....."   # jour 4
+      - ".......r.tTTTTTaaratTTTTT"   # jour 5
+
+  # --- Mining-village archetype (ADR services/0002, 0003) -------------------
+  #
+  # Rota families used by config/village/mining_village.yaml. The generator
+  # (scripts/village_gen.py) assigns them to the 250 inhabitants.
+
+  # Crews for round-the-clock posts (mine, canteen, infirmary, drivers...):
+  # exact copies of magasinier_1..5, so every 24/7 post has the same coverage
+  # as the depot (1 to 4 of every 5 people on duty at any hour). A role of 5k
+  # people puts k in each crew.
+  equipe_1:
+    days:
+      - "TTTTTaaratTTTTTaar......."   # jour 1
+      - "....tTTTTTaaratTTTTT....."   # jour 2
+      - "....tTTTTTaaratTTTTT....."   # jour 3
+      - ".......r.tTTTTTaaratTTTTT"   # jour 4
+      - "a........................"   # jour 5
+
+  equipe_2:
+    days:
+      - "....tTTTTTaaratTTTTTaar.."   # jour 1
+      - "....tTTTTTaaratTTTTT....."   # jour 2
+      - ".......r.tTTTTTaaratTTTTT"   # jour 3
+      - "a.....................r.t"   # jour 4
+      - "TTTTTaaratTTTTTaar......."   # jour 5
+
+  equipe_3:
+    days:
+      - "....tTTTTTaaratTTTTTaar.."   # jour 1
+      - ".......r.tTTTTTaaratTTTTT"   # jour 2
+      - "a.....................r.t"   # jour 3
+      - "TTTTTaaratTTTTTaar......."   # jour 4
+      - "....tTTTTTaaratTTTTT....."   # jour 5
+
+  equipe_4:
+    days:
+      - ".......r.tTTTTTaaratTTTTT"   # jour 1
+      - "a.....................r.t"   # jour 2
+      - "TTTTTaaratTTTTTaar......."   # jour 3
+      - "....tTTTTTaaratTTTTT....."   # jour 4
+      - "....tTTTTTaaratTTTTT....."   # jour 5
+
+  equipe_5:
+    days:
+      - "......................r.t"   # jour 1
+      - "TTTTTaaratTTTTTaar......."   # jour 2
+      - "....tTTTTTaaratTTTTT....."   # jour 3
+      - "....tTTTTTaaratTTTTT....."   # jour 4
+      - ".......r.tTTTTTaaratTTTTT"   # jour 5
+
+  # Day posts (administration, school, shop, geology...): 9 h on site
+  # (handoff h7, work h8-16, lunch h12), meals h5 / h12 / h19, leisure in the
+  # evening. jour_k rests on day k (with a mandatory slot at h9), so 4/5 of a
+  # day team is always present.
+  jour_1:
+    days:
+      - ".....r...alllr...llrl...."   # jour 1 (repos)
+      - ".....r.tTTTTrTTTTllrl...."   # jour 2
+      - ".....r.tTTTTrTTTTllrl...."   # jour 3
+      - ".....r.tTTTTrTTTTllrl...."   # jour 4
+      - ".....r.tTTTTrTTTTllrl...."   # jour 5
+
+  jour_2:
+    days:
+      - ".....r.tTTTTrTTTTllrl...."   # jour 1
+      - ".....r...alllr...llrl...."   # jour 2 (repos)
+      - ".....r.tTTTTrTTTTllrl...."   # jour 3
+      - ".....r.tTTTTrTTTTllrl...."   # jour 4
+      - ".....r.tTTTTrTTTTllrl...."   # jour 5
+
+  jour_3:
+    days:
+      - ".....r.tTTTTrTTTTllrl...."   # jour 1
+      - ".....r.tTTTTrTTTTllrl...."   # jour 2
+      - ".....r...alllr...llrl...."   # jour 3 (repos)
+      - ".....r.tTTTTrTTTTllrl...."   # jour 4
+      - ".....r.tTTTTrTTTTllrl...."   # jour 5
+
+  jour_4:
+    days:
+      - ".....r.tTTTTrTTTTllrl...."   # jour 1
+      - ".....r.tTTTTrTTTTllrl...."   # jour 2
+      - ".....r.tTTTTrTTTTllrl...."   # jour 3
+      - ".....r...alllr...llrl...."   # jour 4 (repos)
+      - ".....r.tTTTTrTTTTllrl...."   # jour 5
+
+  jour_5:
+    days:
+      - ".....r.tTTTTrTTTTllrl...."   # jour 1
+      - ".....r.tTTTTrTTTTllrl...."   # jour 2
+      - ".....r.tTTTTrTTTTllrl...."   # jour 3
+      - ".....r.tTTTTrTTTTllrl...."   # jour 4
+      - ".....r...alllr...llrl...."   # jour 5 (repos, like the school)
+
+  # Bar (open h13-h24): shift A h13-21, shift B h16-24, meal mid-shift. Each
+  # day has one A and one B; each barman rests 1 or 2 days out of 5.
+  soir_1:
+    days:
+      - ".........r...tTTTTrTTT..."   # jour 1 A
+      - ".........r..l.r.tTTTrTTTT"   # jour 2 B
+      - ".........r.alll.r...llr.."   # jour 3 repos
+      - ".........r...tTTTTrTTT..."   # jour 4 A
+      - ".........r..l.r.tTTTrTTTT"   # jour 5 B
+
+  soir_2:
+    days:
+      - ".........r..l.r.tTTTrTTTT"   # jour 1 B
+      - ".........r.alll.r...llr.."   # jour 2 repos
+      - ".........r...tTTTTrTTT..."   # jour 3 A
+      - ".........r..l.r.tTTTrTTTT"   # jour 4 B
+      - ".........r.alll.r...llr.."   # jour 5 repos
+
+  soir_3:
+    days:
+      - ".........r.alll.r...llr.."   # jour 1 repos
+      - ".........r...tTTTTrTTT..."   # jour 2 A
+      - ".........r..l.r.tTTTrTTTT"   # jour 3 B
+      - ".........r.alll.r...llr.."   # jour 4 repos
+      - ".........r...tTTTTrTTT..."   # jour 5 A
+
+  # Children: `T` is school (h7-15, lunch at the canteen h12), days 1-4; day 5
+  # is the school's rest day (check-up `a` at the infirmary).
+  enfant:
+    days:
+      - ".....r.TTTTTrTTTlllr....."   # jour 1
+      - ".....r.TTTTTrTTTlllr....."   # jour 2
+      - ".....r.TTTTTrTTTlllr....."   # jour 3
+      - ".....r.TTTTTrTTTlllr....."   # jour 4
+      - ".....r..alll.r..lll.r...."   # jour 5 (repos)
+
+  # Retired: meals, leisure, infirmary check-up (`a`) on days 2 and 4.
+  retraite:
+    days:
+      - "......r..ll..r.lll...r..."   # jour 1
+      - "......r..al..r.lll...r..."   # jour 2
+      - "......r..ll..r.lll...r..."   # jour 3
+      - "......r..al..r.lll...r..."   # jour 4
+      - "......r..ll..r.lll...r..."   # jour 5
+
+  # Refugees: civil-administration paperwork (`a`) on days 1 and 3.
+  refugie:
+    days:
+      - "......r.aaa..r.lll...r..."   # jour 1
+      - "......r..lll.r.lll...r..."   # jour 2
+      - "......r.aaa..r.lll...r..."   # jour 3
+      - "......r..lll.r.lll...r..."   # jour 4
+      - "......r..lll.r.lll...r..."   # jour 5
+
+# Activity -> allowed actions. Same as the code defaults (src/schedule.rs),
+# plus `drive_to_factory` during work: a driver makes one factory trip per
+# on-shift session (the action runs once per Horizon session, and an off-shift
+# NPC disconnects). Each NPC's `action_profile` still limits what it can run.
+activity_actions:
+  work:
+    - going_to_work
+    - depot_store_reception_to_temp_area
+    - depot_store_item
+    - reception_players
+    - drive_to_factory
+  transmission:
+    - going_to_work
+    - depot_store_reception_to_temp_area
+    - depot_store_item
+    - reception_players
+    - drive_to_factory
+  meal:
+    - go_to_meal
+  mandatory:
+    - mandatory_activity
+  off:
+    - go_home
