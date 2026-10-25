@@ -58,9 +58,6 @@ pub struct Config {
     pub log_buffer_lines: usize,
     /// Role templates (storekeeper, villager).
     pub roles_path: String,
-    /// First and last name lists for generated NPC names.
-    pub first_names_path: String,
-    pub last_names_path: String,
 
     /// Base URL of the resourcesDynamic REST API (source of per-planet rotation
     /// periods), e.g. `http://host:3001`.
@@ -162,10 +159,6 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(500);
         let roles_path = env::var("ROLES_PATH").unwrap_or_else(|_| "config/roles.yaml".to_string());
-        let first_names_path = env::var("FIRST_NAMES_PATH")
-            .unwrap_or_else(|_| "config/names/first.txt".to_string());
-        let last_names_path = env::var("LAST_NAMES_PATH")
-            .unwrap_or_else(|_| "config/names/last.txt".to_string());
 
         let resources_dynamic_http = env::var("RESOURCES_DYNAMIC_HTTP")
             .unwrap_or_else(|_| "http://localhost:3001".to_string());
@@ -230,8 +223,6 @@ impl Config {
             events_retention_days,
             log_buffer_lines,
             roles_path,
-            first_names_path,
-            last_names_path,
             resources_dynamic_http,
             planet_internal_name,
             rotation_h_fallback,

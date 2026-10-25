@@ -134,8 +134,7 @@ async fn main() -> anyhow::Result<()> {
     let passwords = PasswordBox::from_base64(&config.npc_password_key)
         .context("NPC_PASSWORD_KEY (base64 of 32 bytes: `openssl rand -base64 32`)")?;
     let roles = Arc::new(RoleTemplates::load(&config.roles_path).context("role templates")?);
-    let names = NameGenerator::from_files(&config.first_names_path, &config.last_names_path)
-        .context("name lists")?;
+    let names = NameGenerator::new();
 
     let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
     let service_token = Arc::new(ServiceToken::new(

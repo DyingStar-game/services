@@ -45,7 +45,6 @@ migrations/               # embedded SQL migrations
 config/
   schedules.yaml          # shift patterns, imported into the database
   roles.yaml              # storekeeper / villager templates
-  names/{first,last}.txt  # generated names (prénom + nom)
   routing.yaml            # planet + Mining -> Factory choices for driving
   world/<planet>/         # poi.json + roads.json (copies of the QGIS exports)
   scene_layouts/          # JSON exported by DyingStar/tools/npc/npc_layout_export.gd
@@ -70,7 +69,6 @@ Environment (see `.env.example`):
 | `NPC_EVENTS_RETENTION_DAYS` | `7` | Events kept in the database |
 | `NPC_LOG_BUFFER_LINES` | `500` | Log lines kept in memory per NPC |
 | `ROLES_PATH` | `config/roles.yaml` | Role templates |
-| `FIRST_NAMES_PATH` / `LAST_NAMES_PATH` | `config/names/*.txt` | Generated names |
 | `SCHEDULES_PATH` | `config/schedules.yaml` | Imported into the database |
 | `SPAWN_STAGGER_MS` | `200` | Delay between two spawns |
 | `TICK_INTERVAL_MS` | `200` | Action scheduler tick |
@@ -84,8 +82,9 @@ Environment (see `.env.example`):
 
 ## NPC lifecycle
 
-- **Create** (`POST /api/admin/npcs {count}`): a generated name (first + last,
-  unique), a Keycloak user `npc-<8 hex>` in group `npcs` with a random 32-char
+- **Create** (`POST /api/admin/npcs {count}`): a generated name (first + last from
+  the `fake` crate's locale lists, mostly French, then English, German,
+  Italian, Brazilian; unique), a Keycloak user `npc-<8 hex>` in group `npcs` with a random 32-char
   password, then the row keyed by the Keycloak user id (= JWT `sub` = Horizon
   player id). A failed insert deletes the account again.
 - **Run**: an NPC is connected when the **global switch** is on

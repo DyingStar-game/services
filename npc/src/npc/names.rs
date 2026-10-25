@@ -1,48 +1,72 @@
-//! Generated NPC names: a first name and a last name drawn from two lists
-//! (`config/names/first.txt`, `last.txt`, one name per line, `#` comments).
-//! Uniqueness is the database's job (`npcs_display_name_uq`); the caller
-//! retries on a clash.
+//! Generated NPC names: a first name and a last name from the locale lists
+//! of the `fake` crate, both from the same locale so they sound like one
+//! person. Latin-script locales only: the display name travels to Horizon
+//! and Godot. French alone gives about 880 000 pairs. Uniqueness is the
+//! database's job (`npcs_display_name_uq`); the caller retries on a clash.
 
-use rand::{Rng, seq::SliceRandom};
+use fake::{
+    Fake,
+    faker::name::raw::{FirstName, LastName},
+    locales::{DE_DE, EN, FR_FR, IT_IT, PT_BR},
+    rand::RngExt,
+};
+use rand::Rng;
 
-pub struct NameGenerator {
-    first: Vec<String>,
-    last: Vec<String>,
+/// The locales a name is drawn from, with their weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Locale {
+    Fr,
+    En,
+    De,
+    It,
+    PtBr,
 }
+
+const LOCALES: &[(Locale, u32)] = &[
+    (Locale::Fr, 4),
+    (Locale::En, 3),
+    (Locale::De, 1),
+    (Locale::It, 1),
+    (Locale::PtBr, 1),
+];
+
+#[derive(Default)]
+pub struct NameGenerator;
 
 impl NameGenerator {
-    pub fn new(first: Vec<String>, last: Vec<String>) -> Self {
-        Self { first, last }
+    pub fn new() -> Self {
+        Self
     }
 
-    pub fn from_files(first: &str, last: &str) -> std::io::Result<Self> {
-        Ok(Self::new(read_list(first)?, read_list(last)?))
+    /// `(first, last)`.
+    pub fn generate(&self) -> (String, String) {
+        self.generate_with(&mut fake::rand::rng())
     }
 
-    /// `(first, last)`. Falls back to `Npc` / a number when a list is empty.
-    pub fn generate(&self, rng: &mut impl Rng) -> (String, String) {
-        let first = self.first.choose(rng).cloned().unwrap_or_else(|| "Npc".to_string());
-        let last = self
-            .last
-            .choose(rng)
-            .cloned()
-            .unwrap_or_else(|| format!("{:04}", rng.gen_range(0..10_000)));
-        (first, last)
+    pub fn generate_with<R: RngExt + ?Sized>(&self, rng: &mut R) -> (String, String) {
+        let total: u32 = LOCALES.iter().map(|(_, w)| w).sum();
+        let mut pick = rng.random_range(0..total);
+        let locale = LOCALES
+            .iter()
+            .find(|(_, w)| {
+                if pick < *w {
+                    true
+                } else {
+                    pick -= w;
+                    false
+                }
+            })
+            .map_or(Locale::Fr, |(l, _)| *l);
+        let (first, last): (String, String) = match locale {
+            Locale::Fr => (FirstName(FR_FR).fake_with_rng(rng), LastName(FR_FR).fake_with_rng(rng)),
+            Locale::En => (FirstName(EN).fake_with_rng(rng), LastName(EN).fake_with_rng(rng)),
+            Locale::De => (FirstName(DE_DE).fake_with_rng(rng), LastName(DE_DE).fake_with_rng(rng)),
+            Locale::It => (FirstName(IT_IT).fake_with_rng(rng), LastName(IT_IT).fake_with_rng(rng)),
+            Locale::PtBr => (FirstName(PT_BR).fake_with_rng(rng), LastName(PT_BR).fake_with_rng(rng)),
+        };
+        // Some entries of the lists carry stray whitespace (`"Ricci\t"`).
+        (first.trim().to_string(), last.trim().to_string())
     }
-
-    /// How many distinct names the lists can produce.
-    pub fn capacity(&self) -> usize {
-        self.first.len().max(1) * self.last.len().max(1)
-    }
-}
-
-fn read_list(path: &str) -> std::io::Result<Vec<String>> {
-    Ok(std::fs::read_to_string(path)?
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(String::from)
-        .collect())
 }
 
 /// A fresh Keycloak login: `npc-` and 8 hex digits.
@@ -52,28 +76,37 @@ pub fn generate_login(rng: &mut impl Rng) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    use fake::rand::{SeedableRng as _, rngs::StdRng as FakeRng};
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
 
     #[test]
-    fn draws_from_both_lists() {
-        let g = NameGenerator::new(vec!["Jean".into()], vec!["Caisse".into(), "Deloin".into()]);
-        let mut rng = StdRng::seed_from_u64(1);
-        for _ in 0..10 {
-            let (f, l) = g.generate(&mut rng);
-            assert_eq!(f, "Jean");
-            assert!(l == "Caisse" || l == "Deloin");
+    fn names_are_non_empty_and_trimmed() {
+        let g = NameGenerator::new();
+        let mut rng = FakeRng::seed_from_u64(1);
+        for _ in 0..500 {
+            let (f, l) = g.generate_with(&mut rng);
+            assert!(!f.is_empty() && !l.is_empty());
+            assert_eq!(f, f.trim());
+            assert_eq!(l, l.trim());
         }
-        assert_eq!(g.capacity(), 2);
     }
 
     #[test]
-    fn empty_lists_still_name() {
-        let g = NameGenerator::new(vec![], vec![]);
-        let (f, l) = g.generate(&mut StdRng::seed_from_u64(1));
-        assert_eq!(f, "Npc");
-        assert_eq!(l.len(), 4);
+    fn two_thousand_names_rarely_clash() {
+        // 2 000 NPCs need well under 10 retries each (provision::create_one).
+        let g = NameGenerator::new();
+        let mut rng = FakeRng::seed_from_u64(7);
+        let names: HashSet<String> = (0..2_000)
+            .map(|_| {
+                let (f, l) = g.generate_with(&mut rng);
+                format!("{f} {l}").to_lowercase()
+            })
+            .collect();
+        assert!(names.len() >= 1_990, "only {} distinct names out of 2000", names.len());
     }
 
     #[test]
@@ -82,11 +115,5 @@ mod tests {
         assert!(login.starts_with("npc-"));
         assert_eq!(login.len(), 12);
         assert_eq!(login, login.to_lowercase());
-    }
-
-    #[test]
-    fn shipped_lists_are_readable() {
-        let g = NameGenerator::from_files("config/names/first.txt", "config/names/last.txt").unwrap();
-        assert!(g.capacity() >= 2_500, "lists too short for a few villages");
     }
 }

@@ -169,7 +169,7 @@ async fn manager(pool: sqlx::PgPool) -> Arc<NpcManager> {
         kc,
         None,
         Arc::new(RoleTemplates::load("config/roles.yaml").unwrap()),
-        NameGenerator::new(vec![], vec![]),
+        NameGenerator::new(),
         passwords,
         LogHub::new(10),
     )

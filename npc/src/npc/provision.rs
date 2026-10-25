@@ -154,10 +154,10 @@ async fn pick_name(mgr: &NpcManager, req: &CreateRequest) -> Result<(String, Str
         return Ok((first, last));
     }
     for _ in 0..10 {
-        let (first, last) = mgr.names.generate(&mut thread_rng());
+        let (first, last) = mgr.names.generate();
         if !db::npcs::display_name_taken(mgr.pool(), &format!("{first} {last}")).await? {
             return Ok((first, last));
         }
     }
-    Err(NpcError::Conflict("no free generated name after 10 tries (extend config/names)".into()))
+    Err(NpcError::Conflict("no free generated name after 10 tries".into()))
 }

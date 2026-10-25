@@ -46,6 +46,8 @@ dotenvy = "0.15"
 # UUID & RNG
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.8"
+# Generated NPC names (locale name lists); brings its own rand 0.10.
+fake = "5.1"
 
 # JWT verification of the admin API callers (Keycloak, RS256 via JWKS)
 jsonwebtoken = "9"
