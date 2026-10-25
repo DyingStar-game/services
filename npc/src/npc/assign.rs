@@ -3,6 +3,8 @@
 //! becomes one of the five storekeepers (magasiniers) of that Mining village
 //! (Mxxxx) — working at its warehouse — or a villager once those are taken.
 
+use std::collections::HashMap;
+
 use serde_json::json;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -13,7 +15,7 @@ use crate::{
     horizon::messages::Vec3,
     npc::manager::{DepotCandidate, NpcManager},
     roles::Depot,
-    world_data::WorldData,
+    world_data::{WorldData, poi::VillageKind},
 };
 
 /// How far from the NPC a replicated cargo_depot may be to count as its
@@ -152,6 +154,82 @@ async fn resolve_workplace(
     }
 }
 
+/// What a pass of [`resolve_all_workplaces`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct WorkplaceSweep {
+    /// Rows written (new village, or universesimulator changed its answer).
+    pub written: usize,
+    /// Mining villages universesimulator has no active warehouse for.
+    pub missing: usize,
+}
+
+/// Fill the workplace cache of every Mining village from universesimulator,
+/// without waiting for an NPC to spawn there: the admin panel shows where the
+/// storekeepers will work, and the first assignment needs no lookup. A manual
+/// workplace is never touched, and a row already right is not rewritten.
+/// Storekeepers already assigned keep the place they were given.
+pub async fn resolve_all_workplaces(mgr: &NpcManager) -> Result<WorkplaceSweep> {
+    let (Some(usim), Some(wd)) = (&mgr.usim, WorldData::shared()) else {
+        return Ok(WorkplaceSweep::default());
+    };
+    let main = usim.main_warehouses().await?;
+    let cached: HashMap<String, Workplace> =
+        db::workplaces::list(mgr.pool()).await?.into_iter().map(|w| (w.village_code.clone(), w)).collect();
+    let mut sweep = WorkplaceSweep::default();
+    for v in wd.villages.of_kind(VillageKind::Mining) {
+        let Some(w) = main.get(&v.name.to_uppercase()) else {
+            sweep.missing += 1;
+            continue;
+        };
+        if needs_refresh(cached.get(&v.name), w.id) {
+            db::workplaces::upsert(mgr.pool(), &v.name, w.id, Some(&w.code), w.scenename.as_deref(), "usim", None)
+                .await?;
+            sweep.written += 1;
+        }
+    }
+    Ok(sweep)
+}
+
+/// Whether universesimulator's warehouse should replace the cached row:
+/// always over nothing or over a depot an NPC happened to see (`world`),
+/// never over a `manual` choice.
+fn needs_refresh(cached: Option<&Workplace>, warehouse: Uuid) -> bool {
+    match cached {
+        None => true,
+        Some(w) if w.source == "manual" => false,
+        Some(w) => w.source != "usim" || w.warehouse_id != warehouse,
+    }
+}
+
 fn distance(a: Vec3, b: Vec3) -> f64 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    fn cached(source: &str, warehouse: u128) -> Workplace {
+        Workplace {
+            village_code: "M0042".into(),
+            warehouse_id: Uuid::from_u128(warehouse),
+            warehouse_code: None,
+            scenename: None,
+            source: source.into(),
+            updated_at: OffsetDateTime::now_utc(),
+            updated_by: None,
+        }
+    }
+
+    #[test]
+    fn usim_fills_and_corrects_but_never_overrides_manual() {
+        let w = Uuid::from_u128(1);
+        assert!(needs_refresh(None, w));
+        assert!(needs_refresh(Some(&cached("world", 1)), w));
+        assert!(needs_refresh(Some(&cached("usim", 2)), w));
+        assert!(!needs_refresh(Some(&cached("usim", 1)), w));
+        assert!(!needs_refresh(Some(&cached("manual", 2)), w));
+    }
 }

@@ -26,7 +26,7 @@ src/
   auth/                   # Keycloak JWT check of the admin API callers
   crypto.rs               # AES-256-GCM sealing of the NPC passwords
   roles.rs                # role templates (storekeeper, villager)
-  usim.rs                 # universesimulator: main warehouse of a village
+  usim.rs                 # universesimulator: main warehouse of the villages
   logs.rs                 # per-NPC ring buffer of log lines (tracing layer)
   events.rs               # key events written to `npc_events` in the background
   schedule.rs             # shift patterns + hot-swappable ScheduleStore
@@ -103,6 +103,12 @@ Environment (see `.env.example`):
   cargo_depot, and is cached per village — or a **villager** once the five
   slots are taken. Concurrent spawns are serialised per village. No warehouse
   found: the NPC strolls and the assignment is retried at its next session.
+- **Village workplaces**: at startup and every 10 min, the main warehouse of
+  every Mining village is read from universesimulator into the cache, before
+  any NPC spawns there (admin panel › Villages). A manual workplace is never
+  replaced; storekeepers already assigned keep their place. Without
+  `UNIVERSESIMULATOR_URL` (or `SERVICE_CLIENT_SECRET`), only a depot an NPC
+  sees can fill it, so a village stays "not found yet" until one spawns.
 - **Manual tasks** (`POST /api/admin/npcs/{id}/tasks`): `go_to_position`,
   `run_action` (any catalogue action, outside the schedule) or `wait`; they
   pre-empt the schedule, and `forceOnline` connects an off-shift NPC.
