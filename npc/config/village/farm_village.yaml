@@ -1,0 +1,110 @@
+# Farm-village archetype (ADR services/0010): sealed greenhouses on the high plateaus of Sandbox
+# (above 4,800 m) that grow the raw food of the planet. No mining. Same format as
+# mining_village.yaml; scripts/village_gen.py expands it into config/npcs.farm_village.yaml and
+# config/village/budget.farm_village.generated.md.
+
+archetype: farm_village
+population: 200
+
+# No sketch yet: buildings are laid out on the same placeholder canvas as the mining village
+# (sketch pixels × metres_per_px, around origin_px), until the Godot scene exists.
+layout:
+  metres_per_px: 0.5
+  origin_px: [640, 445]
+
+buildings:
+  # --- Production (sealed, pressurised) ---
+  algae_bioreactors:  { name: "Photobioréacteurs à algues",                zone: farm,    center_px: [220, 200],  size_px: [220, 140] }
+  insect_farm:        { name: "Élevage d'insectes",                        zone: farm,    center_px: [220, 420],  size_px: [200, 120] }
+  greenhouse_cereal:  { name: "Serre étanche — céréales",                  zone: farm,    center_px: [500, 160],  size_px: [260, 120] }
+  greenhouse_legume:  { name: "Serre étanche — légumineuses, oléagineux",  zone: farm,    center_px: [500, 330],  size_px: [260, 120] }
+  mushroom_cave:      { name: "Champignonnière (galeries)",                zone: farm,    center_px: [220, 620],  size_px: [160, 100] }
+  distillery:         { name: "Distillerie et conserverie civile",         zone: farm,    center_px: [420, 620],  size_px: [90, 60] }
+  packing_hall:       { name: "Hall de récolte et conditionnement vrac",   zone: farm,    center_px: [720, 250],  size_px: [140, 100] }
+  # --- Infrastructure ---
+  seal_workshop:      { name: "Atelier étanchéité et pressurisation",      zone: infra,   center_px: [720, 420],  size_px: [100, 70] }
+  water_plant:        { name: "Recyclage de l'eau, irrigation",            zone: infra,   center_px: [860, 420],  size_px: [110, 80] }
+  power_plant:        { name: "Centrale solaire et batteries",             zone: infra,   center_px: [1100, 700], size_px: [260, 140] }
+  depot:              { name: "Entrepôt agricole (expéditions, imports)",  zone: infra,   center_px: [900, 250],  size_px: [160, 110] }
+  transport_parking:  { name: "Parking transport, maintenance",            zone: infra,   center_px: [1080, 250], size_px: [140, 100] }
+  # --- Village ---
+  farm_admin:         { name: "Direction de la ferme, agronomes",          zone: village, center_px: [620, 560],  size_px: [90, 60] }
+  canteen:            { name: "Cantine, réfectoire",                       zone: village, center_px: [760, 560],  size_px: [120, 70] }
+  infirmary:          { name: "Infirmerie",                                zone: village, center_px: [900, 560],  size_px: [100, 70] }
+  security_post:      { name: "Poste de sécurité",                         zone: village, center_px: [1040, 560], size_px: [80, 60] }
+  school:             { name: "École, garderie",                           zone: village, center_px: [620, 700],  size_px: [90, 70] }
+  bar:                { name: "Bar",                                       zone: village, center_px: [760, 700],  size_px: [100, 60] }
+  retail:             { name: "Vente de détail",                           zone: village, center_px: [900, 700],  size_px: [90, 50] }
+  housing_a:          { name: "Habitations A",                             zone: village, center_px: [620, 820],  size_px: [120, 80],  units: 50 }
+  housing_b:          { name: "Habitations B",                             zone: village, center_px: [780, 820],  size_px: [120, 80],  units: 60 }
+  dormitories:        { name: "Dortoirs",                                  zone: village, center_px: [940, 820],  size_px: [120, 80],  units: 110 }
+
+unstaffed: []
+
+names:
+  first: [Aïcha, Benoît, Capucine, Dorian, Eléa, Florent, Garance, Hamid, Isaure, Jules,
+          Kira, Lorenzo, Mahault, Nils, Ophélie, Pablo, Quitterie, Rayan, Salomé, Tristan,
+          Ulysse, Violette, Wanda, Yaël, Zacharie, Albane, Basile, Célia, Damien, Elsa]
+  last: [Abadie, Bonnet, Courtois, Dupuis, Ferreira, Girard, Hamon, Jourdan, Lacroix, Martel,
+         Navarro, Ollivier, Pons, Rolland, Simon, Texier, Valette, Wagner, Zimmer, Barbier,
+         Collet, Delorme, Fabre, Guillot, Huet, Lebrun, Masson, Picard, Roussel, Vidal]
+
+housing:
+  family_order: [housing_a, housing_b, dormitories]
+  dorm_order: [dormitories, housing_b, housing_a]
+  player_units: { building: housing_b, units: 10 }
+
+meal_building: canteen
+
+rotas:
+  crew: [equipe_1, equipe_2, equipe_3, equipe_4, equipe_5]
+  day: [jour_1, jour_2, jour_3, jour_4, jour_5]
+  evening: [soir_1, soir_2, soir_3]
+
+base_actions: [detect_player_and_greet, going_to_work, go_to_meal, mandatory_activity, go_home]
+
+# `produces`: kg of a raw food per `T` hour of the role (ADR services/0010). Greenhouses,
+# reactors and insect halls run round the clock, so production roles work in crews.
+roles:
+  # --- Production (108) ---
+  - { id: algae_tech,      label: "Technicien des photobioréacteurs",  count: 40, rota: crew, work: algae_bioreactors, mandatory: infirmary, housing: dorm, produces: { raw_algae: 14.5 } }
+  - { id: insect_farmer,   label: "Éleveur d'insectes",                count: 10, rota: crew, work: insect_farm,       mandatory: infirmary, housing: dorm, produces: { raw_insect: 3.9 } }
+  - { id: cereal_grower,   label: "Cultivateur de céréales (serre)",   count: 20, rota: crew, work: greenhouse_cereal, mandatory: infirmary, housing: dorm, produces: { raw_cereal: 17.5 } }
+  - { id: legume_grower,   label: "Cultivateur de légumineuses",       count: 10, rota: crew, work: greenhouse_legume, mandatory: infirmary, housing: dorm, produces: { raw_legume: 3.5 } }
+  - { id: mushroom_grower, label: "Champignonniste",                   count: 10, rota: crew, work: mushroom_cave,     mandatory: infirmary, housing: dorm, produces: { raw_mushroom: 3.4 } }
+  - { id: distiller,       label: "Distillateur, conserveur civil",    count: 3,  rota: day,  work: distillery,        mandatory: farm_admin, housing: family }
+  - { id: packer,          label: "Récolte et conditionnement",        count: 15, rota: crew, work: packing_hall,      mandatory: infirmary, housing: dorm }
+  # --- Infrastructure (40) ---
+  - { id: seal_tech,       label: "Technicien étanchéité, pressurisation", count: 10, rota: crew, work: seal_workshop, mandatory: infirmary, housing: dorm }
+  - { id: water_tech,      label: "Technicien recyclage de l'eau",     count: 5,  rota: crew, work: water_plant,       mandatory: infirmary, housing: dorm }
+  - { id: power_tech,      label: "Technicien énergie",                count: 5,  rota: crew, work: power_plant,       mandatory: infirmary, housing: dorm }
+  - { id: storekeeper,     label: "Magasinier de l'entrepôt agricole", count: 5,  rota: crew, work: depot,             mandatory: infirmary, housing: dorm }
+  - { id: driver,          label: "Chauffeur de camion",               count: 10, rota: crew, work: transport_parking, mandatory: infirmary, housing: dorm, actions: [drive_to_factory] }
+  - { id: vehicle_mechanic, label: "Mécanicien véhicules",             count: 5,  rota: crew, work: transport_parking, mandatory: infirmary, housing: dorm }
+  # --- Management and services (36) ---
+  - { id: farm_director,   label: "Directeur de la ferme",             count: 1,  rota: day,  work: farm_admin,        mandatory: infirmary, housing: family, diet: executive }
+  - { id: agronomist,      label: "Agronome",                          count: 3,  rota: day,  work: farm_admin,        mandatory: infirmary, housing: family, diet: executive }
+  - { id: cook,            label: "Cuisinier",                         count: 5,  rota: crew, work: canteen,           mandatory: infirmary, housing: dorm }
+  - { id: head_cook,       label: "Chef cuisinier",                    count: 1,  rota: day,  work: canteen,           mandatory: farm_admin, housing: family, patterns: [jour_1] }
+  - { id: nurse,           label: "Infirmier",                         count: 5,  rota: crew, work: infirmary,         mandatory: farm_admin, housing: family }
+  - { id: security,        label: "Agent de sécurité",                 count: 5,  rota: crew, work: security_post,     mandatory: infirmary, housing: dorm }
+  - { id: civil_clerk,     label: "Agent administratif",               count: 3,  rota: day,  work: farm_admin,        mandatory: infirmary, housing: family }
+  - { id: shopkeeper,      label: "Vendeur",                           count: 2,  rota: day,  work: retail,            mandatory: infirmary, housing: family }
+  - { id: bartender,       label: "Barman",                            count: 2,  rota: evening, work: bar,            mandatory: infirmary, housing: family }
+  - { id: teacher,         label: "Enseignant",                        count: 2,  rota: day,  work: school,            mandatory: infirmary, housing: family, patterns: [jour_5] }
+  - { id: caretaker,       label: "Concierge",                         count: 1,  rota: day,  work: dormitories,       mandatory: farm_admin, housing: family }
+  - { id: municipal,       label: "Agent municipal",                   count: 3,  rota: day,  work: water_plant,       mandatory: farm_admin, housing: family }
+  # --- Not working (19) ---
+  - { id: child,           label: "Enfant (école)",                    count: 14, rota: fixed, work: school,           mandatory: infirmary, housing: family, patterns: [enfant], active: false, diet: dependant }
+  - { id: retired,         label: "Retraité",                          count: 5,  rota: fixed, work: null,             mandatory: infirmary, housing: family, patterns: [retraite], active: false, diet: dependant }
+
+budget:
+  water:
+    l_per_person_day: 30
+    irrigation_l_per_kg: 0.5      # make-up water of the sealed greenhouses, per kg harvested
+  transport:
+    driver_role: driver
+    truck_payload_kg: 1000
+    road_round_trip_h: 1.0
+    handling_h: 0.5
+  stock_days: { min_threshold: 1.5, target_level: 3, capacity: 5, ore_capacity: 2 }

@@ -1,39 +1,56 @@
 #!/usr/bin/env bash
-# Control how many roster NPCs (config/npcs.yaml) are live, via the admin API.
+# Drive the NPCs through the admin API (the adminpanel does the same).
 #
-#   npcctl status         # {total, target, running}
-#   npcctl set 20         # run the first 20 roster entries
-#   npcctl set all        # run every roster entry
-#   npcctl add 50         # 50 more
-#   npcctl remove 30      # 30 fewer (last spawned go first)
-#   npcctl reload         # re-read the roster file
+#   npcctl status            # global switch + counts
+#   npcctl on | off          # global switch: connect / disconnect the NPCs
+#   npcctl create 10         # create 10 NPCs (generated names, Keycloak accounts)
+#   npcctl spawn 20          # enable 20 more (oldest disabled first)
+#   npcctl despawn 5         # disable 5 (most recent non-storekeepers first)
+#   npcctl list              # login, name, role, village, enabled, connected
+#   npcctl import [--overwrite]  # import config/schedules.yaml into the database
 #
 # NPC_ADMIN_URL overrides the API base (default http://localhost:9400).
+# NPC_TOKEN: a staff access token (admin/supervisor). Without it, the dev
+# bypass headers are sent (AUTH_DEV_BYPASS=true on the service).
 set -euo pipefail
 
-base="${NPC_ADMIN_URL:-http://localhost:9400}"
+base="${NPC_ADMIN_URL:-http://localhost:9400}/api/admin"
 
 usage() {
-    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
 }
 
 is_count() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
+auth=()
+if [[ -n "${NPC_TOKEN:-}" ]]; then
+    auth=(-H "Authorization: Bearer $NPC_TOKEN")
+else
+    auth=(-H "X-Player-Id: 00000000-0000-0000-0000-000000000001" -H "X-Player-Roles: admin")
+fi
+
 call() {
-    curl -sS --fail-with-body -X "$1" "$base$2" \
+    curl -sS --fail-with-body -X "$1" "$base$2" "${auth[@]}" \
         -H 'Content-Type: application/json' ${3:+-d "$3"}
     echo
 }
 
 case "${1:-}" in
-    status) call GET /npcs/roster ;;
-    set)
-        if [[ "${2:-}" == all ]]; then call PUT /npcs/roster/active '{"count":null}'
-        elif is_count "${2:-}"; then call PUT /npcs/roster/active "{\"count\":$2}"
-        else usage; fi ;;
-    add)    is_count "${2:-}" || usage; call POST /npcs/roster/scale "{\"delta\":$2}" ;;
-    remove) is_count "${2:-}" || usage; call POST /npcs/roster/scale "{\"delta\":-$2}" ;;
-    reload) call POST /npcs/roster/reload ;;
+    status)  call GET /settings ;;
+    on)      call PUT /settings '{"npcsEnabled":true}' ;;
+    off)     call PUT /settings '{"npcsEnabled":false}' ;;
+    create)  is_count "${2:-}" || usage; call POST /npcs "{\"count\":$2}" ;;
+    spawn)   is_count "${2:-}" || usage; call POST /npcs/bulk "{\"action\":\"spawn\",\"count\":$2}" ;;
+    despawn) is_count "${2:-}" || usage; call POST /npcs/bulk "{\"action\":\"despawn\",\"count\":$2}" ;;
+    list)
+        call GET '/npcs?limit=1000' | python3 -c '
+import json, sys
+for n in json.load(sys.stdin)["items"]:
+    print(f"{n[\"login\"]:14} {n[\"displayName\"]:24} {n[\"role\"]:12} {n.get(\"villageCode\") or \"-\":7} "
+          f"{\"on\" if n[\"enabled\"] else \"off\":4} {\"connected\" if n[\"live\"][\"connected\"] else \"\"}")' ;;
+    import)
+        mode=missing; [[ "${2:-}" == --overwrite ]] && mode=overwrite
+        call POST /schedule/import "{\"mode\":\"$mode\"}" ;;
     *) usage ;;
 esac

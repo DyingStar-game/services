@@ -13,3 +13,6 @@ target/
 
 persistence/.cargo
 persistence/Cargo.lock
+
+# Python bytecode (npc/scripts)
+__pycache__/

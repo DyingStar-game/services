@@ -1,39 +1,64 @@
-//! NPC runtime: one tokio task per NPC. Connects to Horizon (with reconnect),
-//! maintains a [`WorldView`] from inbound GORC frames, and runs an
-//! [`ActionRegistry`] scheduler on a fixed tick.
+//! NPC runtime: one tokio task per NPC. Logs in to Keycloak, connects to
+//! Horizon (with reconnect), maintains a [`WorldView`] from inbound GORC frames,
+//! and runs an [`ActionRegistry`] scheduler on a fixed tick. Manual tasks from
+//! the admin panel pre-empt the schedule. The spec is hot-swappable: a change
+//! pushed by the manager rebuilds the actions without reconnecting.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
 
 use rand::{SeedableRng, rngs::StdRng};
+use serde_json::json;
+use ::time::OffsetDateTime;
 use tokio::{
-    sync::{Mutex, oneshot},
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
     time,
 };
-use tracing::{debug, info, warn};
+use tracing::{Instrument, debug, info, warn};
+use uuid::Uuid;
 
 use crate::{
-    actions::{ActionContext, ActionRegistry},
-    clock::{ClockParams, PlanetClock},
-    config::Config,
-    depot::{DepotRole, DepotWorkforce},
+    actions::{ActionContext, ActionRegistry, driving, manual},
+    clock::PlanetClock,
+    db,
+    depot::DepotRole,
     horizon::{
         client::{HorizonClient, HorizonReceiver, HorizonSender},
         messages::StandardizedFrame,
     },
-    jwt,
     npc::{
-        spec::NpcSpec,
+        manager::{
+            CurrentAction, CurrentSlot, DepotCandidate, NpcConfig, RuntimeEvent, Services, StateSlot,
+            TaskSignal, WorldSlot,
+        },
         state::{NpcState, NpcStatus},
     },
-    resources_dynamic::PlanetCatalogHandle,
     schedule::{Activity, Schedule},
     world::view::WorldView,
+    world_data::WorldData,
 };
 
 /// Poll cadence while an NPC waits out an off-shift window before (re)connecting.
 /// Planetary time maps 1:1 to real time, so a coarse poll is plenty — an idle,
 /// disconnected NPC has nothing to do until its shift starts.
 const OFF_SHIFT_POLL: Duration = Duration::from_secs(30);
+
+/// Everything one runtime needs, handed over by the manager at spawn.
+pub struct RuntimeCtx {
+    pub svc: Arc<Services>,
+    pub id: Uuid,
+    pub login: String,
+    pub cfg_rx: watch::Receiver<NpcConfig>,
+    pub world_slot: WorldSlot,
+    pub state_slot: StateSlot,
+    pub current: CurrentSlot,
+    pub tasks: Arc<TaskSignal>,
+    pub connected: Arc<std::sync::atomic::AtomicBool>,
+    pub runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
+}
 
 /// Whether `pattern` puts the NPC off-shift at the current planetary time.
 /// NPCs without a schedule pattern are never off-shift (they stay connected).
@@ -44,192 +69,223 @@ fn off_shift_now(schedule: &Schedule, pattern: Option<&str>, clock: &PlanetClock
     )
 }
 
-/// Sleep until the NPC's shift schedule leaves the off-shift window, or until a
-/// stop is requested. Returns `true` once on-shift, `false` if stopped.
-async fn wait_until_on_shift(
-    name: &str,
-    schedule: &Schedule,
-    pattern: Option<&str>,
-    clock: &PlanetClock,
-    stop_rx: &mut oneshot::Receiver<()>,
-) -> bool {
-    if !off_shift_now(schedule, pattern, clock) {
-        return true;
+/// What the current spec resolves to: the planetary clock and the schedule
+/// pattern that gates the actions.
+struct Plan {
+    cfg: NpcConfig,
+    clock: PlanetClock,
+    pattern: Option<String>,
+}
+
+impl Plan {
+    async fn resolve(ctx: &RuntimeCtx, cfg: NpcConfig) -> Self {
+        let (planet, rotation_h, clock) = ctx.svc.clock_for(&cfg.spec).await;
+        let pattern = match &cfg.spec.schedule {
+            Some(p) if ctx.svc.schedule.load().has_pattern(p) => Some(p.clone()),
+            Some(p) => {
+                warn!(npc = %ctx.login, schedule = %p, "unknown schedule pattern; no schedule gating");
+                None
+            }
+            None => None,
+        };
+        info!(npc = %ctx.login, %planet, rotation_h, schedule = ?pattern, "planetary clock resolved");
+        Self { cfg, clock, pattern }
     }
-    info!(npc = %name, "off-shift; staying disconnected until shift starts");
-    while off_shift_now(schedule, pattern, clock) {
+
+    fn depot_uuid(&self) -> Option<String> {
+        self.cfg.spec.place_where_work.as_ref().map(|p| p.uuid.clone())
+    }
+}
+
+enum Wait {
+    OnShift,
+    Stop,
+    /// The spec or the schedule changed: resolve the plan again.
+    Changed,
+}
+
+/// Sleep until the NPC's shift schedule leaves the off-shift window (or a
+/// manual task asks to connect it anyway), the spec or schedule changes, or a
+/// stop is requested.
+async fn wait_until_on_shift(
+    ctx: &mut RuntimeCtx,
+    plan: &Plan,
+    stop_rx: &mut oneshot::Receiver<()>,
+) -> Wait {
+    let mut sched_rx = ctx.svc.schedule.subscribe();
+    let mut announced = false;
+    loop {
+        let off = off_shift_now(&ctx.svc.schedule.load(), plan.pattern.as_deref(), &plan.clock);
+        if !off {
+            if announced {
+                info!(npc = %ctx.login, "shift started; connecting");
+            }
+            return Wait::OnShift;
+        }
+        if db::tasks::has_open_force_online(&ctx.svc.pool, ctx.id).await.unwrap_or(false) {
+            info!(npc = %ctx.login, "manual task while off-shift; connecting");
+            return Wait::OnShift;
+        }
+        if !announced {
+            info!(npc = %ctx.login, "off-shift; staying disconnected until shift starts");
+            ctx.svc.events.info(ctx.id, "off_shift", "off-shift; disconnected until the next shift", None);
+            announced = true;
+        }
         tokio::select! {
             biased;
-            _ = &mut *stop_rx => return false,
+            _ = &mut *stop_rx => return Wait::Stop,
+            r = ctx.cfg_rx.changed() => {
+                if r.is_err() { return Wait::Stop; }
+                return Wait::Changed;
+            }
+            _ = sched_rx.changed() => return Wait::Changed,
+            _ = ctx.tasks.notify.notified() => {}
             _ = tokio::time::sleep(OFF_SHIFT_POLL) => {}
         }
     }
-    info!(npc = %name, "shift started; connecting");
-    true
 }
 
-/// Shared slot holding an NPC's live [`WorldView`], published by its runtime on
-/// every session and read by the admin API. `None` while the NPC is between
-/// sessions (off shift, reconnecting).
-pub type WorldSlot = Arc<std::sync::RwLock<Option<Arc<WorldView>>>>;
-
-/// Shared slot holding an NPC's live [`NpcState`], published alongside its
-/// [`WorldSlot`]. "Which status is it in" is the other half of answering why an
-/// NPC stands idle: an NPC stuck in `GoingToWork` looks exactly like one that
-/// has nothing to do.
-pub type StateSlot = Arc<std::sync::RwLock<Option<Arc<NpcState>>>>;
-
-pub struct NpcHandle {
-    pub name: String,
-    pub spec: NpcSpec,
-    pub stop_tx: oneshot::Sender<()>,
-    pub join: tokio::task::JoinHandle<()>,
-    /// This NPC's live view of the world, for `GET /npcs/world`.
-    pub world: WorldSlot,
-    /// This NPC's live status + blackboard, for `GET /npcs/world`.
-    pub state: StateSlot,
+/// Sleep `d`, or return `false` early when a stop is requested.
+async fn sleep_or_stop(d: Duration, stop_rx: &mut oneshot::Receiver<()>) -> bool {
+    tokio::select! {
+        biased;
+        _ = &mut *stop_rx => false,
+        _ = tokio::time::sleep(d) => true,
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    config: Arc<Config>,
-    clock_params: Arc<ClockParams>,
-    planets: PlanetCatalogHandle,
-    schedule: Arc<Schedule>,
-    workforce: Arc<DepotWorkforce>,
-    name: String,
-    spec: NpcSpec,
-    world_slot: WorldSlot,
-    state_slot: StateSlot,
-    mut stop_rx: oneshot::Receiver<()>,
-) {
-    info!(npc = %name, actions = ?spec.action_profile, "NPC runtime started");
-
-    // Resolve this NPC's planet -> rotation period -> planetary clock. The
-    // planet key comes from `place_where_work.planet`, falling back to the
-    // service-wide default. Done once here (rotation periods change rarely).
-    let planet_key = spec
-        .place_where_work
-        .as_ref()
-        .and_then(|p| p.planet.clone())
-        .unwrap_or_else(|| config.planet_internal_name.clone());
-    let rotation_h = planets
-        .rotation_h_or(&planet_key, config.rotation_h_fallback)
-        .await;
-    let clock = PlanetClock::new(Arc::clone(&clock_params), rotation_h);
-    // The schedule pattern that gates this NPC's actions per planetary hour.
-    let pattern = match &spec.schedule {
-        Some(p) if schedule.has_pattern(p) => Some(p.clone()),
-        Some(p) => {
-            warn!(npc = %name, schedule = %p, "unknown schedule pattern; no schedule gating");
-            None
-        }
-        None => None,
-    };
-    info!(npc = %name, planet = %planet_key, rotation_h, schedule = ?pattern, "planetary clock resolved");
-
-    let tick = Duration::from_millis(config.tick_interval_ms);
-    let startup_delay = Duration::from_millis(config.action_startup_delay_ms);
-    // Depot this NPC works at (for the reception role split); `None` = no
-    // workplace, so no depot coordination applies.
-    let depot_uuid = spec.place_where_work.as_ref().map(|p| p.uuid.clone());
+pub async fn run(mut ctx: RuntimeCtx, mut stop_rx: oneshot::Receiver<()>) {
+    let cfg = ctx.cfg_rx.borrow_and_update().clone();
+    info!(npc = %ctx.login, actions = ?cfg.spec.action_profile, "NPC runtime started");
+    let mut plan = Plan::resolve(&ctx, cfg).await;
+    let mut backoff = ctx.svc.config.reconnect_backoff_initial_ms;
+    let backoff_max = ctx.svc.config.reconnect_backoff_max_ms;
 
     loop {
+        if ctx.cfg_rx.has_changed().unwrap_or(false) {
+            let cfg = ctx.cfg_rx.borrow_and_update().clone();
+            plan = Plan::resolve(&ctx, cfg).await;
+        }
+
         // If the shift schedule says this NPC is off-shift right now, stay
         // disconnected until its shift starts. This covers both startup (never
         // connect while off) and the return after going home (the session below
         // drops the connection once the NPC is home, then we wait here). NPCs
         // without a schedule are never off-shift and fall straight through.
-        if !wait_until_on_shift(&name, &schedule, pattern.as_deref(), &clock, &mut stop_rx).await {
-            info!(npc = %name, "stop requested while off-shift; exiting runtime");
-            return;
+        match wait_until_on_shift(&mut ctx, &plan, &mut stop_rx).await {
+            Wait::OnShift => {}
+            Wait::Stop => {
+                info!(npc = %ctx.login, "stop requested while off-shift; exiting runtime");
+                return;
+            }
+            Wait::Changed => {
+                let cfg = ctx.cfg_rx.borrow_and_update().clone();
+                plan = Plan::resolve(&ctx, cfg).await;
+                continue;
+            }
         }
 
-        // Generate a fresh JWT before each connection attempt.
-        let display_name = spec.name.as_deref().unwrap_or(&name);
-        let token = match jwt::generate(&spec.uuid, display_name, &config.jwt_secret) {
+        // Keycloak access token (cached; logs in again only when needed).
+        let token = tokio::select! {
+            biased;
+            _ = &mut stop_rx => return,
+            t = ctx.svc.tokens.token_for(ctx.id, &ctx.login) => t,
+        };
+        let token = match token {
             Ok(t) => t,
             Err(e) => {
-                warn!(npc = %name, error = %e, "cannot generate JWT; retrying");
-                tokio::time::sleep(Duration::from_millis(config.reconnect_backoff_initial_ms)).await;
+                warn!(npc = %ctx.login, error = %e, backoff_ms = backoff, "no Keycloak token; retrying");
+                if !sleep_or_stop(Duration::from_millis(backoff), &mut stop_rx).await {
+                    return;
+                }
+                backoff = backoff.saturating_mul(2).min(backoff_max);
                 continue;
             }
         };
 
-        // Connect (with backoff) until we have a live session, or stop.
         let session = tokio::select! {
             biased;
             _ = &mut stop_rx => {
-                info!(npc = %name, "stop requested before connection");
+                info!(npc = %ctx.login, "stop requested before connection");
                 return;
             }
-            t = HorizonClient::connect_with_retry(&config, &config.horizon_url, &token) => t,
+            s = HorizonClient::connect(&ctx.svc.config.horizon_url, &token) => s,
         };
-        let (sender, mut receiver, my_uuid) = session;
+        let (sender, mut receiver, my_uuid) = match session {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(npc = %ctx.login, error = %e, backoff_ms = backoff, "Horizon connect failed; retrying");
+                if !sleep_or_stop(Duration::from_millis(backoff), &mut stop_rx).await {
+                    return;
+                }
+                backoff = backoff.saturating_mul(2).min(backoff_max);
+                continue;
+            }
+        };
+        backoff = ctx.svc.config.reconnect_backoff_initial_ms;
+
         let world = Arc::new(WorldView::new(my_uuid.clone()));
         // Publish the fresh view to the admin API. Depot behaviour is driven
         // entirely by properties replicated onto the workplace object, so "what
         // does this NPC actually see on its depot" is the first question to ask
         // when an NPC stands idle — and the only way to answer it from outside.
-        *world_slot.write().unwrap() = Some(Arc::clone(&world));
+        *ctx.world_slot.write().unwrap() = Some(Arc::clone(&world));
         // Shared per-NPC state (FSM status + blackboard), built fresh per
         // session alongside the WorldView: a reconnect respawns the NPC, so
         // its lifecycle starts clean. An NPC that works spawns in its
         // habitation; `going_to_work` walks it out from there.
         let state = Arc::new(NpcState::new());
-        *state_slot.write().unwrap() = Some(Arc::clone(&state));
-        if spec.place_where_work.is_some() {
+        *ctx.state_slot.write().unwrap() = Some(Arc::clone(&state));
+        if plan.cfg.spec.place_where_work.is_some() {
             state.set_status(NpcStatus::AtHome);
         }
+        ctx.connected.store(true, Ordering::Relaxed);
+        ctx.svc.events.info(ctx.id, "connected", "Horizon session established", Some(json!({ "player_id": my_uuid })));
+        {
+            let pool = ctx.svc.pool.clone();
+            let id = ctx.id;
+            tokio::spawn(async move {
+                let _ = db::npcs::touch_seen(&pool, id).await;
+            });
+        }
         info!(
-            npc = %name,
+            npc = %ctx.login,
             %my_uuid,
-            settle_ms = config.action_startup_delay_ms,
+            settle_ms = ctx.svc.config.action_startup_delay_ms,
             "Horizon session established; settling before running actions"
         );
 
-        // Actions are rebuilt per session, alongside the WorldView: a fresh
-        // connection means a freshly spawned NPC, so per-session action state
-        // (e.g. "already went to work") starts clean.
-        let registry = Arc::new(ActionRegistry::from_spec(&spec));
-
-        let current = Arc::new(Mutex::new(None::<tokio::task::JoinHandle<()>>));
-
         let outcome = session_loop(
-            &name,
-            tick,
-            startup_delay,
+            &mut ctx,
+            &mut plan,
             Arc::clone(&world),
             Arc::clone(&state),
-            sender.clone(),
+            sender,
             &mut receiver,
-            Arc::clone(&registry),
-            Arc::clone(&current),
-            &clock,
-            Arc::clone(&schedule),
-            pattern.as_deref(),
-            &workforce,
-            depot_uuid.as_deref(),
-            &spec.uuid,
             &mut stop_rx,
         )
         .await;
 
-        if let Some(h) = current.lock().await.take() {
-            h.abort();
-        }
+        ctx.connected.store(false, Ordering::Relaxed);
+        *ctx.world_slot.write().unwrap() = None;
+        *ctx.current.write().unwrap() = None;
 
         match outcome {
             SessionOutcome::Stop => {
-                info!(npc = %name, "stop requested; exiting runtime");
+                info!(npc = %ctx.login, "stop requested; exiting runtime");
                 return;
             }
             SessionOutcome::Disconnected => {
-                warn!(npc = %name, "disconnected from Horizon; reconnecting");
+                warn!(npc = %ctx.login, "disconnected from Horizon; reconnecting");
+                ctx.svc.events.warn(ctx.id, "disconnected", "Horizon session lost; reconnecting", None);
+                if !sleep_or_stop(Duration::from_millis(backoff), &mut stop_rx).await {
+                    return;
+                }
                 continue;
             }
             SessionOutcome::OffShift => {
-                info!(npc = %name, "off-shift and home; closing session until next shift");
+                info!(npc = %ctx.login, "off-shift and home; closing session until next shift");
+                ctx.svc.events.info(ctx.id, "disconnected", "off-shift and home; session closed", None);
                 continue;
             }
         }
@@ -244,38 +300,54 @@ enum SessionOutcome {
     OffShift,
 }
 
+/// The action in flight, if any.
+struct Running {
+    handle: JoinHandle<()>,
+    /// Set when it is a manual task (its id), so it can be cancelled and so
+    /// the off-shift cut-off waits for it.
+    task_id: Option<i64>,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn session_loop(
-    name: &str,
-    tick: Duration,
-    startup_delay: Duration,
+    ctx: &mut RuntimeCtx,
+    plan: &mut Plan,
     world: Arc<WorldView>,
     state: Arc<NpcState>,
     sender: HorizonSender,
     receiver: &mut HorizonReceiver,
-    registry: Arc<ActionRegistry>,
-    current: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    clock: &PlanetClock,
-    schedule: Arc<Schedule>,
-    pattern: Option<&str>,
-    workforce: &DepotWorkforce,
-    depot_uuid: Option<&str>,
-    my_uuid: &str,
     stop_rx: &mut oneshot::Receiver<()>,
 ) -> SessionOutcome {
+    let startup_delay = Duration::from_millis(ctx.svc.config.action_startup_delay_ms);
+    let tick = Duration::from_millis(ctx.svc.config.tick_interval_ms);
     // Hold off on the first tick so the NPC settles in before acting. Only the
     // scheduler waits — the loop below keeps applying inbound frames, so the
     // world is already populated when the first action runs.
     let mut ticker = time::interval_at(time::Instant::now() + startup_delay, tick);
     ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
+    // Actions are rebuilt per session, alongside the WorldView: a fresh
+    // connection means a freshly spawned NPC, so per-session action state
+    // (e.g. "already went to work") starts clean.
+    let mut registry = Arc::new(ActionRegistry::from_spec(&plan.cfg.spec));
+    let mut depot_uuid = plan.depot_uuid();
+    let my_uuid = plan.cfg.spec.uuid.clone();
+    let mut running: Option<Running> = None;
     // Last depot role logged, so only the changes are reported.
     let mut last_depot_role: Option<DepotRole> = None;
+    // Last scheduled action started, so only changes become events.
+    let mut last_action: Option<&'static str> = None;
+    // The assignment is asked for once per session; the manager re-pushes the
+    // spec when it is done (or leaves it pending to retry next session).
+    let mut assign_requested = false;
+    // Edited or imported schedules: the pattern may have appeared or vanished.
+    let mut sched_rx = ctx.svc.schedule.subscribe();
+    sched_rx.borrow_and_update();
 
-    loop {
+    let outcome = loop {
         tokio::select! {
             biased;
-            _ = &mut *stop_rx => return SessionOutcome::Stop,
+            _ = &mut *stop_rx => break SessionOutcome::Stop,
 
             maybe_frame = receiver.recv() => {
                 match maybe_frame {
@@ -283,20 +355,35 @@ async fn session_loop(
                         let _ = world.apply(&g);
                     }
                     Some(StandardizedFrame::InitAck { player_id }) => {
-                        debug!(npc = %name, %player_id, "stray init_ack");
+                        debug!(npc = %ctx.login, %player_id, "stray init_ack");
                     }
                     Some(StandardizedFrame::Error { message }) => {
-                        warn!(npc = %name, %message, "horizon error");
-                        return SessionOutcome::Disconnected;
+                        warn!(npc = %ctx.login, %message, "horizon error");
+                        break SessionOutcome::Disconnected;
                     }
                     Some(StandardizedFrame::Other { name: ev, .. }) => {
-                        debug!(npc = %name, event = %ev, "ignoring non-GORC frame");
+                        debug!(npc = %ctx.login, event = %ev, "ignoring non-GORC frame");
                     }
-                    None => return SessionOutcome::Disconnected,
+                    None => break SessionOutcome::Disconnected,
                 }
             }
 
             _ = ticker.tick() => {
+                // A spec pushed by the manager (admin edit, assignment): rebuild
+                // the actions in place. A running action finishes on the old one.
+                if ctx.cfg_rx.has_changed().unwrap_or(false) {
+                    let cfg = ctx.cfg_rx.borrow_and_update().clone();
+                    *plan = Plan::resolve(ctx, cfg).await;
+                    registry = Arc::new(ActionRegistry::from_spec(&plan.cfg.spec));
+                    depot_uuid = plan.depot_uuid();
+                    info!(npc = %ctx.login, actions = ?plan.cfg.spec.action_profile, "spec reloaded");
+                    ctx.svc.events.info(ctx.id, "spec_reloaded", "configuration updated", None);
+                } else if sched_rx.has_changed().unwrap_or(false) {
+                    sched_rx.borrow_and_update();
+                    let cfg = plan.cfg.clone();
+                    *plan = Plan::resolve(ctx, cfg).await;
+                }
+
                 // Remember the NPC's spawn position as home, once per session,
                 // before it first moves: an NPC spawns in its habitation, so its
                 // first known position is home (used by `go_home`). Runs even
@@ -316,36 +403,67 @@ async fn session_loop(
                     }
                 }
 
+                // First spawn of an unassigned NPC: report where it stands so the
+                // manager makes it a storekeeper of its village (or a villager).
+                if plan.cfg.assign_pending && !assign_requested {
+                    if let Some(ev) = first_position_event(ctx.id, &world) {
+                        assign_requested = true;
+                        info!(npc = %ctx.login, "position known; asking for a role");
+                        let _ = ctx.runtime_tx.send(ev);
+                    }
+                }
+
+                // An admin cancelled the manual task in flight.
+                let cancel = ctx.tasks.cancel.lock().unwrap().take();
+                if let (Some(c), Some(r)) = (cancel, running.as_ref()) {
+                    if r.task_id == Some(c) {
+                        r.handle.abort();
+                        running = None;
+                        *ctx.current.write().unwrap() = None;
+                        info!(npc = %ctx.login, task = c, "manual task cancelled");
+                        ctx.svc.events.info(ctx.id, "task_cancelled", format!("task {c} cancelled"), Some(json!({ "task_id": c })));
+                    }
+                }
+
+                if let Some(r) = running.as_ref() {
+                    if r.handle.is_finished() {
+                        running = None;
+                        *ctx.current.write().unwrap() = None;
+                    }
+                }
+
                 // Off-shift and settled at home: no reason to hold a Horizon
                 // session open. `go_home` is schedule-gated to the off-window,
                 // so by the time the NPC is `AtHome` its trip home is complete
                 // and we never cut it short. Drop the session; the outer loop
-                // waits out the off-shift window and reconnects at the next shift.
+                // waits out the off-shift window and reconnects at the next
+                // shift. A manual task keeps the session up until it ends.
+                let schedule = ctx.svc.schedule.load();
+                let manual_running = running.as_ref().is_some_and(|r| r.task_id.is_some());
                 if state.status() == NpcStatus::AtHome
-                    && off_shift_now(&schedule, pattern, clock)
+                    && !manual_running
+                    && !ctx.tasks.pending.load(Ordering::SeqCst)
+                    && off_shift_now(&schedule, plan.pattern.as_deref(), &plan.clock)
                 {
-                    return SessionOutcome::OffShift;
+                    break SessionOutcome::OffShift;
                 }
 
-                let mut slot = current.lock().await;
-                if let Some(h) = slot.as_ref() {
-                    if h.is_finished() {
-                        slot.take();
-                    }
-                }
-                if slot.is_some() {
+                if running.is_some() {
                     continue;
                 }
 
                 // Which actions does the shift schedule permit this planetary
                 // hour? `None` when the NPC has no schedule (no gating).
-                let allowed = pattern.and_then(|p| schedule.allowed_actions_at(p, clock.now()));
+                let allowed = plan
+                    .pattern
+                    .as_deref()
+                    .and_then(|p| schedule.allowed_actions_at(p, plan.clock.now()));
 
                 // Cargo-depot role this tick: prefer the authoritative
                 // `reception_owner` claim replicated on the depot; fall back to
                 // the deterministic election when it is not replicated at all —
                 // or when the claim is stale (see `is_off_shift_worker`).
-                let depot_role = match depot_uuid {
+                let depot_role = match depot_uuid.as_deref() {
                     Some(d) => {
                         let owner = world
                             .objects
@@ -360,13 +478,13 @@ async fn session_loop(
                             .and_then(|v| v.as_str())
                             .filter(|o| !o.is_empty() && *o != my_uuid)
                             .is_some_and(|o| {
-                                workforce.is_off_shift_worker(d, o, &schedule, clock.now())
+                                ctx.svc.workforce.is_off_shift_worker(d, o, &schedule, plan.clock.now())
                             });
-                        match crate::depot::role_from_owner(owner.as_ref(), my_uuid)
+                        match crate::depot::role_from_owner(owner.as_ref(), &my_uuid)
                             .filter(|_| !stale)
                         {
                             Some(r) => r,
-                            None => workforce.role_for(d, my_uuid, &schedule, clock.now()),
+                            None => ctx.svc.workforce.role_for(d, &my_uuid, &schedule, plan.clock.now()),
                         }
                     }
                     None => DepotRole::Uncoordinated,
@@ -374,36 +492,12 @@ async fn session_loop(
                 // The role decides whether the NPC may touch the reception at
                 // all, so a silent flip is the hardest depot stall to diagnose.
                 if last_depot_role != Some(depot_role) {
-                    info!(npc = %name, role = ?depot_role, "depot role");
+                    info!(npc = %ctx.login, role = ?depot_role, "depot role");
                     last_depot_role = Some(depot_role);
                 }
 
-                let probe = ActionContext {
-                    npc_name: name.to_string(),
-                    world: Arc::clone(&world),
-                    state: Arc::clone(&state),
-                    send: sender.clone(),
-                    rng: StdRng::from_entropy(),
-                    allowed_actions: allowed.clone(),
-                    depot_role,
-                };
-                let Some(action) = registry.pick(&probe) else {
-                    continue;
-                };
-
-                let action_name = action.name();
-                debug!(npc = %name, action = %action_name, "starting action");
-
-                // Stamp the start before spawning so the `once`/`min_interval`
-                // gates see this run on the very next tick.
-                registry.mark_started(action_name);
-                let run_timeout = registry.timing_of(action_name).and_then(|t| t.timeout);
-
-                let name_owned = name.to_string();
-                let action_name_owned = action_name.to_string();
-                let registry_for_task = Arc::clone(&registry);
-                let mut ctx = ActionContext {
-                    npc_name: name.to_string(),
+                let make_ctx = |allowed| ActionContext {
+                    npc_name: ctx.login.clone(),
                     world: Arc::clone(&world),
                     state: Arc::clone(&state),
                     send: sender.clone(),
@@ -411,31 +505,138 @@ async fn session_loop(
                     allowed_actions: allowed,
                     depot_role,
                 };
-                let action_clone = Arc::clone(&action);
-                let h = tokio::spawn(async move {
-                    let result = match run_timeout {
-                        Some(d) => match time::timeout(d, action_clone.run(&mut ctx)).await {
-                            Ok(r) => r,
-                            Err(_) => {
-                                warn!(
-                                    npc = %name_owned,
-                                    action = %action_name_owned,
-                                    timeout_ms = d.as_millis(),
-                                    "action timed out; aborting run"
-                                );
-                                Ok(())
-                            }
-                        },
-                        None => action_clone.run(&mut ctx).await,
-                    };
-                    if let Err(e) = result {
-                        warn!(npc = %name_owned, action = %action_name_owned, error = %e, "action failed");
+
+                // Manual tasks first: they pre-empt the schedule.
+                if ctx.tasks.pending.load(Ordering::SeqCst) {
+                    match db::tasks::claim_next(&ctx.svc.pool, ctx.id).await {
+                        Ok(Some(task)) => {
+                            info!(npc = %ctx.login, task = task.id, kind = %task.kind, "starting manual task");
+                            ctx.svc.events.info(
+                                ctx.id,
+                                "task_started",
+                                format!("task {} ({}) started", task.id, task.kind),
+                                Some(json!({ "task_id": task.id, "kind": task.kind, "params": task.params.0 })),
+                            );
+                            *ctx.current.write().unwrap() = Some(CurrentAction {
+                                name: manual::label(&task),
+                                source: "manual",
+                                task_id: Some(task.id),
+                                started_at: OffsetDateTime::now_utc(),
+                            });
+                            let task_id = task.id;
+                            let action_ctx = make_ctx(None);
+                            let spec = Arc::clone(&plan.cfg.spec);
+                            let pool = ctx.svc.pool.clone();
+                            let events = ctx.svc.events.clone();
+                            let npc_id = ctx.id;
+                            let h = tokio::spawn(
+                                async move {
+                                    manual::execute(task, action_ctx, spec, pool, events, npc_id).await;
+                                }
+                                .in_current_span(),
+                            );
+                            running = Some(Running { handle: h, task_id: Some(task_id) });
+                            continue;
+                        }
+                        Ok(None) => ctx.tasks.pending.store(false, Ordering::SeqCst),
+                        Err(e) => warn!(npc = %ctx.login, error = %e, "cannot read manual tasks"),
                     }
-                    // Stamp completion so the cooldown gate measures from here.
-                    registry_for_task.mark_finished(&action_name_owned);
+                }
+
+                let probe = make_ctx(allowed.clone());
+                let Some(action) = registry.pick(&probe) else {
+                    continue;
+                };
+
+                let action_name = action.name();
+                debug!(npc = %ctx.login, action = %action_name, "starting action");
+                if last_action != Some(action_name) {
+                    last_action = Some(action_name);
+                    ctx.svc.events.emit(Some(ctx.id), "action_started", "debug", action_name, None);
+                }
+                *ctx.current.write().unwrap() = Some(CurrentAction {
+                    name: action_name.to_string(),
+                    source: "schedule",
+                    task_id: None,
+                    started_at: OffsetDateTime::now_utc(),
                 });
-                *slot = Some(h);
+
+                // Stamp the start before spawning so the `once`/`min_interval`
+                // gates see this run on the very next tick.
+                registry.mark_started(action_name);
+                let run_timeout = registry.timing_of(action_name).and_then(|t| t.timeout);
+
+                let login = ctx.login.clone();
+                let registry_for_task = Arc::clone(&registry);
+                let mut action_ctx = make_ctx(allowed);
+                let events = ctx.svc.events.clone();
+                let npc_id = ctx.id;
+                let h = tokio::spawn(
+                    async move {
+                        let result = match run_timeout {
+                            Some(d) => match time::timeout(d, action.run(&mut action_ctx)).await {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    warn!(
+                                        npc = %login,
+                                        action = %action_name,
+                                        timeout_ms = d.as_millis(),
+                                        "action timed out; aborting run"
+                                    );
+                                    events.warn(npc_id, "action_timeout", action_name, Some(json!({ "timeout_ms": d.as_millis() as u64 })));
+                                    Ok(())
+                                }
+                            },
+                            None => action.run(&mut action_ctx).await,
+                        };
+                        if let Err(e) = result {
+                            warn!(npc = %login, action = %action_name, error = %e, "action failed");
+                            events.warn(npc_id, "action_failed", format!("{action_name}: {e}"), None);
+                        }
+                        // Stamp completion so the cooldown gate measures from here.
+                        registry_for_task.mark_finished(action_name);
+                    }
+                    .in_current_span(),
+                );
+                running = Some(Running { handle: h, task_id: None });
             }
         }
+    };
+
+    if let Some(r) = running.take() {
+        r.handle.abort();
+        if let Some(task_id) = r.task_id {
+            let reason = match outcome {
+                SessionOutcome::Stop => "NPC stopped",
+                _ => "Horizon session lost",
+            };
+            let _ = db::tasks::finish(&ctx.svc.pool, task_id, "failed", Some(reason)).await;
+            ctx.svc.events.warn(ctx.id, "task_failed", format!("task {task_id}: {reason}"), Some(json!({ "task_id": task_id })));
+        }
     }
+    outcome
+}
+
+/// The assignment request for an NPC whose planet-frame position resolves,
+/// with the cargo_depots it sees as fallback workplaces.
+fn first_position_event(id: Uuid, world: &WorldView) -> Option<RuntimeEvent> {
+    let wd = WorldData::shared()?;
+    let radius = wd.radius_m();
+    let planet_pos = driving::my_planet_position(world, radius)?;
+    let depots = world
+        .objects
+        .iter()
+        .filter(|o| o.object_type == "cargo_depot")
+        .filter_map(|o| {
+            let uuid = Uuid::parse_str(&o.uuid).ok()?;
+            let pos = match &o.parent_id {
+                Some(parent) if !parent.is_empty() => {
+                    driving::object_point_to_planet(world, parent, o.position, radius)?
+                }
+                _ => o.position,
+            };
+            Some(DepotCandidate { uuid, scenename: o.scenename.clone(), planet_pos: pos })
+        })
+        .collect();
+    Some(RuntimeEvent::FirstPosition { id, planet_pos, depots })
 }

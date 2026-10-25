@@ -1,0 +1,46 @@
+{
+	"doors": [],
+	"footprint": {
+		"center": [
+			0.0,
+			0.411,
+			0.0
+		],
+		"size": [
+			0.668,
+			0.835,
+			1.018
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [
+		{
+			"corners": [
+				[
+					-0.33,
+					-0.51
+				],
+				[
+					0.33,
+					-0.51
+				],
+				[
+					0.33,
+					0.51
+				],
+				[
+					-0.33,
+					0.51
+				]
+			],
+			"path": "CollisionShape3D",
+			"y_max": 0.83,
+			"y_min": -0.01
+		}
+	],
+	"scenename": "scenes/_universe/props/containers/crate_canister.tscn",
+	"schema_version": 1,
+	"seats": []
+}

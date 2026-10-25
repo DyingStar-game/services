@@ -1,539 +1,593 @@
+//! Owns every live NPC runtime and keeps them in line with the database: an NPC
+//! runs when the global switch is on and its own `enabled` is set. Admin writes
+//! go to the database and then [`NpcManager::poke`] the reconciler, which
+//! spawns, despawns and hot-pushes changed specs to running NPCs.
+
 use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
+    collections::HashMap,
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
 use futures_util::future::join_all;
-use tokio::sync::{Mutex, Notify, oneshot};
-use tracing::{info, warn};
-
 use serde::Serialize;
+use serde_json::{Value, json};
+use sqlx::PgPool;
+use time::OffsetDateTime;
+use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
+use tracing::{Instrument, info, info_span, warn};
+use uuid::Uuid;
 
 use crate::{
     clock::{ClockParams, PlanetClock},
     config::Config,
+    crypto::PasswordBox,
+    db::{self, npcs::NpcRow},
     depot::DepotWorkforce,
     error::{NpcError, Result},
+    events::EventSink,
+    horizon::messages::Vec3,
+    keycloak::{KcAdmin, TokenManager},
+    logs::{LogHub, NPC_SPAN},
     npc::{
-        names::NamePool,
-        runtime::{self, NpcHandle},
-        spec::{NpcSpec, RosterFile},
+        assign,
+        names::NameGenerator,
+        runtime::{self, RuntimeCtx},
+        spec::NpcSpec,
     },
     resources_dynamic::PlanetCatalogHandle,
-    schedule::Schedule,
+    roles::RoleTemplates,
+    schedule::ScheduleStore,
+    usim::Usim,
+    world::view::WorldView,
 };
 
-/// A snapshot of one NPC's planetary time and the activity its schedule assigns
-/// right now — for the admin API, to eyeball the rota as the day drifts.
-#[derive(Debug, Serialize)]
-pub struct NpcScheduleReport {
+/// Safety net: re-read the database this often even without a poke.
+const RECONCILE_EVERY: Duration = Duration::from_secs(60);
+
+/// What every runtime shares.
+pub struct Services {
+    pub config: Arc<Config>,
+    pub pool: PgPool,
+    pub clock_params: Arc<ClockParams>,
+    pub planets: PlanetCatalogHandle,
+    pub schedule: Arc<ScheduleStore>,
+    pub workforce: Arc<DepotWorkforce>,
+    pub tokens: Arc<TokenManager>,
+    pub events: EventSink,
+}
+
+impl Services {
+    /// The planet key of a spec (its workplace's, else the service default).
+    pub fn planet_of(&self, spec: &NpcSpec) -> String {
+        spec.place_where_work
+            .as_ref()
+            .and_then(|p| p.planet.clone())
+            .unwrap_or_else(|| self.config.planet_internal_name.clone())
+    }
+
+    pub async fn clock_for(&self, spec: &NpcSpec) -> (String, f64, PlanetClock) {
+        let planet = self.planet_of(spec);
+        let rotation_h = self.planets.rotation_h_or(&planet, self.config.rotation_h_fallback).await;
+        (planet, rotation_h, PlanetClock::new(Arc::clone(&self.clock_params), rotation_h))
+    }
+}
+
+/// What a runtime runs on, pushed again whenever the row changes.
+#[derive(Clone)]
+pub struct NpcConfig {
+    pub spec: Arc<NpcSpec>,
+    /// The automatic storekeeper/villager assignment is still owed.
+    pub assign_pending: bool,
+    /// `updated_at` of the row this was built from.
+    pub version: OffsetDateTime,
+}
+
+impl NpcConfig {
+    fn from_row(row: &NpcRow) -> Result<Self> {
+        Ok(Self {
+            spec: Arc::new(row.to_spec()?),
+            assign_pending: row.assignment_pending(),
+            version: row.updated_at,
+        })
+    }
+}
+
+/// Manual tasks waiting for a runtime: a flag (so the runtime only queries the
+/// database when there is something to claim) and a cancel request.
+#[derive(Default)]
+pub struct TaskSignal {
+    pub pending: AtomicBool,
+    pub cancel: std::sync::Mutex<Option<i64>>,
+    pub notify: Notify,
+}
+
+impl TaskSignal {
+    pub fn kick(&self) {
+        self.pending.store(true, Ordering::SeqCst);
+        self.notify.notify_one();
+    }
+}
+
+/// The action an NPC is running right now.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentAction {
     pub name: String,
+    /// `schedule` or `manual`.
+    pub source: &'static str,
+    pub task_id: Option<i64>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+}
+
+pub type CurrentSlot = Arc<RwLock<Option<CurrentAction>>>;
+
+/// Shared slot holding an NPC's live [`WorldView`], published by its runtime on
+/// every session and read by the admin API. `None` between sessions.
+pub type WorldSlot = Arc<RwLock<Option<Arc<WorldView>>>>;
+
+/// Shared slot holding an NPC's live [`NpcState`](crate::npc::state::NpcState).
+pub type StateSlot = Arc<RwLock<Option<Arc<crate::npc::state::NpcState>>>>;
+
+pub struct NpcHandle {
+    pub id: Uuid,
+    pub login: String,
+    cfg_tx: watch::Sender<NpcConfig>,
+    stop_tx: oneshot::Sender<()>,
+    join: tokio::task::JoinHandle<()>,
+    pub world: WorldSlot,
+    pub state: StateSlot,
+    pub current: CurrentSlot,
+    pub tasks: Arc<TaskSignal>,
+    pub connected: Arc<AtomicBool>,
+    pub started_at: OffsetDateTime,
+}
+
+/// Sent by runtimes to the manager.
+pub enum RuntimeEvent {
+    /// The NPC's position is known for the first time this session and its
+    /// assignment is owed.
+    FirstPosition { id: Uuid, planet_pos: Vec3, depots: Vec<DepotCandidate> },
+}
+
+/// A cargo_depot the NPC sees, as a fallback workplace.
+#[derive(Debug, Clone)]
+pub struct DepotCandidate {
+    pub uuid: Uuid,
+    pub scenename: Option<String>,
+    pub planet_pos: Vec3,
+}
+
+/// Live status of one NPC for the admin API.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveStatus {
+    pub running: bool,
+    pub connected: bool,
+    /// FSM status (`at_work`, `going_home`…) while connected.
+    pub status: Option<String>,
+    pub current_action: Option<CurrentAction>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub running_since: Option<OffsetDateTime>,
+}
+
+impl LiveStatus {
+    fn stopped() -> Self {
+        Self { running: false, connected: false, status: None, current_action: None, running_since: None }
+    }
+}
+
+/// Planetary time and routine of one NPC right now.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Routine {
+    pub pattern: Option<String>,
+    /// The pattern is set but unknown (deleted, never imported).
+    pub pattern_missing: bool,
     pub planet: String,
     pub rotation_h: f64,
-    pub schedule: Option<String>,
     pub day: u32,
     pub hour: u32,
-    /// Scheduled activity (`work`/`transmission`/`meal`/`mandatory`/`off`), or
-    /// `null` when the NPC has no schedule.
     pub activity: Option<String>,
+    /// Actions the schedule allows now; `null` = no gating.
+    pub allowed_actions: Option<Vec<String>>,
+    /// The pattern grid, one line per rota-day.
+    pub days: Option<Vec<String>>,
 }
 
-/// Roster counts for the admin API.
+/// Counts for the admin panel header.
 #[derive(Debug, Serialize)]
-pub struct RosterStatus {
-    /// Entries in the roster file.
+#[serde(rename_all = "camelCase")]
+pub struct Counts {
     pub total: usize,
-    /// How many of the first roster entries should be live.
-    pub target: usize,
-    /// Roster NPCs live right now. Trails `target` while a staggered ramp runs.
+    pub enabled: usize,
     pub running: usize,
+    pub connected: usize,
 }
 
-/// The YAML roster, in file order, and how many of its first entries should be
-/// live. Ad-hoc NPCs (`POST /npcs`) are not part of it.
-struct Roster {
-    specs: Vec<NpcSpec>,
-    /// Desired live count. `None` = every entry, including ones a reload adds.
-    target: Option<usize>,
-    /// Bumped on every change, so a reconcile pass notices it went stale.
-    revision: u64,
-}
-
-impl Roster {
-    fn target(&self) -> usize {
-        self.target.map_or(self.specs.len(), |n| n.min(self.specs.len()))
-    }
-
-    /// Target after adding `delta`, clamped to `[0, specs.len()]`.
-    fn scaled(&self, delta: i64) -> usize {
-        (self.target() as i64)
-            .saturating_add(delta)
-            .clamp(0, self.specs.len() as i64) as usize
-    }
-}
-
-/// Owns every live NPC task and the name pool. Cloned via `Arc` everywhere.
 pub struct NpcManager {
-    config: Arc<Config>,
-    names: Arc<NamePool>,
-    clock_params: Arc<ClockParams>,
-    planets: PlanetCatalogHandle,
-    schedule: Arc<Schedule>,
-    /// Shared roster index for cargo-depot coordination (deterministic fallback
-    /// election). Maintained on spawn/despawn, read-only from each runtime.
-    workforce: Arc<DepotWorkforce>,
-    npcs: Mutex<HashMap<String, NpcHandle>>,
-    roster: Mutex<Roster>,
-    /// Wakes the reconciler (see `spawn_reconciler`) after a roster change.
+    pub svc: Arc<Services>,
+    pub kc: Arc<KcAdmin>,
+    pub usim: Option<Arc<Usim>>,
+    pub roles: Arc<RoleTemplates>,
+    pub names: NameGenerator,
+    pub passwords: PasswordBox,
+    pub logs: Arc<LogHub>,
+    npcs: Mutex<HashMap<Uuid, NpcHandle>>,
     reconcile: Notify,
+    revision: AtomicU64,
+    runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    runtime_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<RuntimeEvent>>>,
 }
 
 impl NpcManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        config: Arc<Config>,
-        clock_params: Arc<ClockParams>,
-        planets: PlanetCatalogHandle,
-        schedule: Arc<Schedule>,
-    ) -> Self {
-        let names = match NamePool::from_file(&config.names_path) {
-            Ok(p) => Arc::new(p),
-            Err(e) => {
-                warn!(error = %e, path = %config.names_path, "names file unreadable; using empty pool");
-                Arc::new(NamePool::new(Vec::new()))
-            }
-        };
-        Self {
+        svc: Arc<Services>,
+        kc: Arc<KcAdmin>,
+        usim: Option<Arc<Usim>>,
+        roles: Arc<RoleTemplates>,
+        names: NameGenerator,
+        passwords: PasswordBox,
+        logs: Arc<LogHub>,
+    ) -> Arc<Self> {
+        let (runtime_tx, runtime_rx) = mpsc::unbounded_channel();
+        Arc::new(Self {
+            svc,
+            kc,
+            usim,
+            roles,
             names,
-            clock_params,
-            planets,
-            schedule,
-            workforce: Arc::new(DepotWorkforce::new()),
+            passwords,
+            logs,
             npcs: Mutex::new(HashMap::new()),
-            roster: Mutex::new(Roster {
-                specs: Vec::new(),
-                target: config.npc_active_count,
-                revision: 0,
-            }),
             reconcile: Notify::new(),
-            config,
-        }
+            revision: AtomicU64::new(0),
+            runtime_tx,
+            runtime_rx: std::sync::Mutex::new(Some(runtime_rx)),
+        })
     }
 
-    /// (Re)load the roster file. Live roster NPCs whose UUID left the file are
-    /// despawned; the rest is up to the reconciler. NPCs whose entry changed
-    /// keep running on their old spec until they are despawned and respawned.
-    pub async fn reload_roster(&self) -> Result<RosterStatus> {
-        let path = &self.config.roster_path;
-        let specs = match std::fs::read_to_string(path) {
-            Ok(raw) => serde_yaml::from_str::<RosterFile>(&raw)?.npcs,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!(%path, "no roster file; roster is empty");
-                Vec::new()
-            }
-            Err(e) => return Err(NpcError::Io(e)),
-        };
-        info!(count = specs.len(), %path, "loaded roster");
-
-        let new_uuids: HashSet<&str> = specs.iter().map(|s| s.uuid.as_str()).collect();
-        let dropped: HashSet<String> = {
-            let mut roster = self.roster.lock().await;
-            let dropped = roster
-                .specs
-                .iter()
-                .filter(|s| !new_uuids.contains(s.uuid.as_str()))
-                .map(|s| s.uuid.clone())
-                .collect();
-            roster.specs = specs;
-            roster.revision += 1;
-            dropped
-        };
-        if !dropped.is_empty() {
-            let running = self.running_by_uuid().await;
-            let names = dropped.iter().filter_map(|u| running.get(u));
-            self.despawn_all(names).await;
-        }
-        self.reconcile.notify_one();
-        Ok(self.roster_status().await)
+    pub fn pool(&self) -> &PgPool {
+        &self.svc.pool
     }
 
-    /// Run the first `count` roster entries (`None` = all of them).
-    pub async fn set_roster_target(&self, count: Option<usize>) -> RosterStatus {
-        {
-            let mut roster = self.roster.lock().await;
-            roster.target = count;
-            roster.revision += 1;
-        }
-        self.reconcile.notify_one();
-        self.roster_status().await
+    pub fn events(&self) -> &EventSink {
+        &self.svc.events
     }
 
-    /// Run `delta` more (or, negative, fewer) roster entries than the target.
-    pub async fn scale_roster(&self, delta: i64) -> RosterStatus {
-        {
-            let mut roster = self.roster.lock().await;
-            roster.target = Some(roster.scaled(delta));
-            roster.revision += 1;
-        }
-        self.reconcile.notify_one();
-        self.roster_status().await
-    }
-
-    pub async fn roster_status(&self) -> RosterStatus {
-        let (total, target, uuids) = {
-            let roster = self.roster.lock().await;
-            let uuids: HashSet<String> = roster.specs.iter().map(|s| s.uuid.clone()).collect();
-            (roster.specs.len(), roster.target(), uuids)
-        };
-        let running = self
-            .npcs
-            .lock()
-            .await
-            .values()
-            .filter(|h| uuids.contains(&h.spec.uuid))
-            .count();
-        RosterStatus { total, target, running }
-    }
-
-    /// Start the background task that keeps the live roster NPCs in line with
-    /// the target. Changes made before it starts are picked up on its first run.
-    pub fn spawn_reconciler(self: &Arc<Self>) {
+    /// Start the reconciler and the runtime-event handler.
+    pub fn start(self: &Arc<Self>) {
         let mgr = Arc::clone(self);
         tokio::spawn(async move {
             loop {
-                mgr.reconcile.notified().await;
-                mgr.reconcile_roster().await;
+                if let Err(e) = mgr.reconcile_once().await {
+                    warn!(error = %e, "reconcile pass failed");
+                }
+                tokio::select! {
+                    _ = mgr.reconcile.notified() => {}
+                    _ = tokio::time::sleep(RECONCILE_EVERY) => {}
+                }
+            }
+        });
+
+        let mut rx = self.runtime_rx.lock().unwrap().take().expect("manager started twice");
+        let mgr = Arc::clone(self);
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                let mgr = Arc::clone(&mgr);
+                tokio::spawn(async move {
+                    match ev {
+                        RuntimeEvent::FirstPosition { id, planet_pos, depots } => {
+                            if let Err(e) = assign::assign(&mgr, id, planet_pos, &depots).await {
+                                warn!(npc_id = %id, error = %e, "assignment failed");
+                                mgr.events().warn(id, "assign_failed", e.to_string(), None);
+                            }
+                        }
+                    }
+                });
             }
         });
     }
 
-    /// Despawn every live roster NPC past the target, then spawn the missing
-    /// ones in file order, `spawn_stagger_ms` apart. A roster change mid-ramp
-    /// restarts the pass, so scaling down doesn't wait for a ramp to finish.
-    async fn reconcile_roster(&self) {
-        let stagger = Duration::from_millis(self.config.spawn_stagger_ms);
+    /// Ask the reconciler for a pass (after any write).
+    pub fn poke(&self) {
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        self.reconcile.notify_one();
+    }
+
+    /// Bring the live NPCs in line with the database. A poke during the
+    /// staggered spawn ramp restarts the pass, so turning things off never
+    /// waits for a ramp to finish.
+    async fn reconcile_once(&self) -> Result<()> {
+        let stagger = Duration::from_millis(self.svc.config.spawn_stagger_ms);
         'pass: loop {
-            let (specs, target, revision) = {
-                let roster = self.roster.lock().await;
-                (roster.specs.clone(), roster.target(), roster.revision)
+            let revision = self.revision.load(Ordering::SeqCst);
+            let settings = db::settings::get(self.pool()).await?;
+            let rows = db::npcs::all(self.pool()).await?;
+            let desired: Vec<&NpcRow> = if settings.npcs_enabled {
+                rows.iter().filter(|r| r.enabled).collect()
+            } else {
+                Vec::new()
             };
-            let running = self.running_by_uuid().await;
+            let wanted: HashMap<Uuid, &NpcRow> = desired.iter().map(|r| (r.id, *r)).collect();
 
-            // Last in, first out: the excess comes off the end of the roster.
-            let excess = specs[target..].iter().rev().filter_map(|s| running.get(&s.uuid));
-            self.despawn_all(excess).await;
+            // Despawn what is no longer wanted.
+            let extra: Vec<Uuid> = {
+                let npcs = self.npcs.lock().await;
+                npcs.keys().filter(|id| !wanted.contains_key(id)).copied().collect()
+            };
+            join_all(extra.iter().map(|id| self.despawn(*id, "disabled"))).await;
 
-            let mut first = true;
-            for spec in &specs[..target] {
-                if running.contains_key(&spec.uuid) {
-                    continue;
+            // Hot-push changed rows to the running ones.
+            {
+                let npcs = self.npcs.lock().await;
+                for (id, handle) in npcs.iter() {
+                    let Some(row) = wanted.get(id) else { continue };
+                    if handle.cfg_tx.borrow().version == row.updated_at {
+                        continue;
+                    }
+                    match NpcConfig::from_row(row) {
+                        Ok(cfg) => {
+                            self.svc.workforce.insert_spec(&cfg.spec);
+                            let _ = handle.cfg_tx.send(cfg);
+                        }
+                        Err(e) => warn!(npc_id = %id, error = %e, "invalid NPC configuration; keeping the old one"),
+                    }
                 }
+            }
+
+            // Spawn the missing ones, oldest first.
+            let running: Vec<Uuid> = self.npcs.lock().await.keys().copied().collect();
+            let mut first = true;
+            for row in desired.iter().filter(|r| !running.contains(&r.id)) {
                 if !first {
                     tokio::time::sleep(stagger).await;
                 }
                 first = false;
-                if self.roster.lock().await.revision != revision {
+                if self.revision.load(Ordering::SeqCst) != revision {
                     continue 'pass;
                 }
-                if let Err(e) = self.spawn(spec.clone()).await {
-                    warn!(error = %e, uuid = %spec.uuid, "failed to spawn NPC from roster");
+                if let Err(e) = self.spawn(row).await {
+                    warn!(npc_id = %row.id, error = %e, "failed to spawn NPC");
+                    self.events().warn(row.id, "spawn_failed", e.to_string(), None);
                 }
             }
-            return;
+            return Ok(());
         }
     }
 
-    /// Live NPCs by UUID → name.
-    async fn running_by_uuid(&self) -> HashMap<String, String> {
-        self.npcs
-            .lock()
-            .await
-            .values()
-            .map(|h| (h.spec.uuid.clone(), h.name.clone()))
-            .collect()
-    }
-
-    /// Despawn several NPCs concurrently, logging (not failing on) errors.
-    async fn despawn_all<'a>(&self, names: impl IntoIterator<Item = &'a String>) {
-        let results = join_all(names.into_iter().map(|n| async move { (n, self.despawn(n).await) })).await;
-        for (name, res) in results {
-            if let Err(e) = res {
-                warn!(error = %e, npc = %name, "failed to despawn roster NPC");
-            }
-        }
-    }
-
-    /// Spawn a new NPC. Returns the assigned name.
-    pub async fn spawn(&self, mut spec: NpcSpec) -> Result<String> {
-        let name = match spec.name.clone() {
-            Some(n) => n,
-            None => {
-                let n = self.names.take();
-                spec.name = Some(n.clone());
-                n
-            }
-        };
-
+    async fn spawn(&self, row: &NpcRow) -> Result<()> {
+        let cfg = NpcConfig::from_row(row)?;
         let mut npcs = self.npcs.lock().await;
-        if npcs.contains_key(&name) {
-            return Err(NpcError::AlreadyExists(name));
+        if npcs.contains_key(&row.id) {
+            return Err(NpcError::AlreadyExists(row.login.clone()));
         }
-
         // Register in the depot workforce before spawning so the fallback
         // election sees this NPC as soon as its runtime starts ticking.
-        self.workforce.insert_spec(&spec);
+        self.svc.workforce.insert_spec(&cfg.spec);
 
+        let (cfg_tx, cfg_rx) = watch::channel(cfg);
         let (stop_tx, stop_rx) = oneshot::channel();
-        let cfg = Arc::clone(&self.config);
-        let clock_params = Arc::clone(&self.clock_params);
-        let planets = self.planets.clone();
-        let schedule = Arc::clone(&self.schedule);
-        let workforce = Arc::clone(&self.workforce);
-        let name_for_task = name.clone();
-        let spec_for_task = spec.clone();
-        // Slot the runtime publishes its live WorldView into, so the admin API
-        // can report what this NPC actually sees (see `world_status`).
-        let world: runtime::WorldSlot = Arc::new(std::sync::RwLock::new(None));
-        let world_for_task = Arc::clone(&world);
-        let state: runtime::StateSlot = Arc::new(std::sync::RwLock::new(None));
-        let state_for_task = Arc::clone(&state);
-        let join = tokio::spawn(async move {
-            runtime::run(
-                cfg,
-                clock_params,
-                planets,
-                schedule,
-                workforce,
-                name_for_task,
-                spec_for_task,
-                world_for_task,
-                state_for_task,
-                stop_rx,
-            )
-            .await;
-        });
+        let handle_world: WorldSlot = Arc::new(RwLock::new(None));
+        let handle_state: StateSlot = Arc::new(RwLock::new(None));
+        let current: CurrentSlot = Arc::new(RwLock::new(None));
+        let tasks = Arc::new(TaskSignal::default());
+        // Tasks queued while the NPC was not running.
+        tasks.pending.store(true, Ordering::SeqCst);
+        let connected = Arc::new(AtomicBool::new(false));
+
+        let ctx = RuntimeCtx {
+            svc: Arc::clone(&self.svc),
+            id: row.id,
+            login: row.login.clone(),
+            cfg_rx,
+            world_slot: Arc::clone(&handle_world),
+            state_slot: Arc::clone(&handle_state),
+            current: Arc::clone(&current),
+            tasks: Arc::clone(&tasks),
+            connected: Arc::clone(&connected),
+            runtime_tx: self.runtime_tx.clone(),
+        };
+        // Every log line of this NPC (and of the actions it spawns) is filed
+        // in its ring buffer through this span (see `logs`).
+        let span = info_span!(NPC_SPAN, id = %row.id, name = %row.display_name);
+        let join = tokio::spawn(runtime::run(ctx, stop_rx).instrument(span));
 
         npcs.insert(
-            name.clone(),
+            row.id,
             NpcHandle {
-                name: name.clone(),
-                spec,
+                id: row.id,
+                login: row.login.clone(),
+                cfg_tx,
                 stop_tx,
                 join,
-                world,
-                state,
+                world: handle_world,
+                state: handle_state,
+                current,
+                tasks,
+                connected,
+                started_at: OffsetDateTime::now_utc(),
             },
         );
-        info!(npc = %name, "spawned NPC");
-        Ok(name)
-    }
-
-    /// Stop and remove an NPC by name.
-    pub async fn despawn(&self, name: &str) -> Result<()> {
-        let handle = {
-            let mut npcs = self.npcs.lock().await;
-            npcs.remove(name)
-                .ok_or_else(|| NpcError::NotFound(name.to_string()))?
-        };
-        let _ = handle.stop_tx.send(());
-        let _ = handle.join.await;
-        self.workforce.remove_uuid(&handle.spec.uuid);
-        self.names.release(handle.name);
-        info!(npc = %name, "despawned NPC");
+        info!(npc = %row.display_name, login = %row.login, "spawned NPC");
+        self.events().info(row.id, "spawned", "runtime started", None);
         Ok(())
     }
 
-    /// List every live NPC's spec.
-    pub async fn list(&self) -> Vec<NpcSpec> {
-        self.npcs
-            .lock()
-            .await
-            .values()
-            .map(|h| h.spec.clone())
-            .collect()
+    /// Stop an NPC's runtime (closing its Horizon session). No-op when it is
+    /// not running.
+    async fn despawn(&self, id: Uuid, reason: &str) {
+        let Some(handle) = self.npcs.lock().await.remove(&id) else { return };
+        let _ = handle.stop_tx.send(());
+        let _ = handle.join.await;
+        self.svc.workforce.remove_uuid(&id.to_string());
+        self.svc.tokens.forget(id).await;
+        info!(login = %handle.login, reason, "despawned NPC");
+        self.events().info(id, "despawned", format!("runtime stopped ({reason})"), None);
     }
 
-    /// Current planetary time and scheduled activity for every live NPC.
-    /// What each NPC currently sees on its workplace object: the properties the
-    /// depot actions gate on, plus whether the object is in view at all.
-    ///
-    /// Every depot behaviour is driven by properties replicated onto the depot
-    /// (`pnj_zones`, `pnj_reception_deposited_item`, `pnj_box_temp_zones`,
-    /// `reception_owner`). When an NPC stands idle, the question is always which
-    /// of those is missing — and nothing else exposes it, because the WorldView
-    /// lives inside the runtime task.
-    pub async fn world_status(&self) -> Vec<serde_json::Value> {
+    /// Delete an NPC for good: runtime, Keycloak user, row, logs.
+    pub async fn delete_npc(&self, id: Uuid) -> Result<()> {
+        let row = db::npcs::require(self.pool(), id).await?;
+        self.despawn(id, "deleted").await;
+        self.kc.delete_user(id).await?;
+        db::npcs::delete(self.pool(), id).await?;
+        self.logs.remove(&id.to_string());
+        info!(login = %row.login, "deleted NPC");
+        self.events().global("npc_deleted", format!("{} ({}) deleted", row.display_name, row.login), Some(json!({ "id": id })));
+        Ok(())
+    }
+
+    pub async fn live(&self, id: Uuid) -> LiveStatus {
+        let npcs = self.npcs.lock().await;
+        npcs.get(&id).map(live_of).unwrap_or_else(LiveStatus::stopped)
+    }
+
+    pub async fn live_all(&self) -> HashMap<Uuid, LiveStatus> {
+        self.npcs.lock().await.iter().map(|(id, h)| (*id, live_of(h))).collect()
+    }
+
+    pub async fn counts(&self) -> Result<Counts> {
+        let (total, enabled): (i64, i64) =
+            sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE enabled) FROM npcs")
+                .fetch_one(self.pool())
+                .await?;
+        let npcs = self.npcs.lock().await;
+        Ok(Counts {
+            total: total as usize,
+            enabled: enabled as usize,
+            running: npcs.len(),
+            connected: npcs.values().filter(|h| h.connected.load(Ordering::Relaxed)).count(),
+        })
+    }
+
+    /// Planetary time and routine of `row` right now.
+    pub async fn routine(&self, row: &NpcRow) -> Result<Routine> {
+        let spec = row.to_spec()?;
+        let (planet, rotation_h, clock) = self.svc.clock_for(&spec).await;
+        let t = clock.now();
+        let schedule = self.svc.schedule.load();
+        let pattern = spec.schedule.clone();
+        let known = pattern.as_deref().is_some_and(|p| schedule.has_pattern(p));
+        let days = match pattern.as_deref() {
+            Some(p) => db::patterns::get(self.pool(), p).await?.map(|p| p.days),
+            None => None,
+        };
+        let allowed = pattern.as_deref().and_then(|p| schedule.allowed_actions_at(p, t)).map(|s| {
+            let mut v: Vec<String> = s.into_iter().collect();
+            v.sort();
+            v
+        });
+        Ok(Routine {
+            pattern_missing: pattern.is_some() && !known,
+            activity: pattern
+                .as_deref()
+                .and_then(|p| schedule.activity_at(p, t))
+                .map(|a| a.key().to_string()),
+            pattern,
+            planet,
+            rotation_h,
+            day: t.day,
+            hour: t.hour,
+            allowed_actions: allowed,
+            days,
+        })
+    }
+
+    /// Wake an NPC's runtime about a new task (no-op when not running: the
+    /// task is picked up at its next spawn).
+    pub async fn kick_tasks(&self, id: Uuid) {
+        if let Some(h) = self.npcs.lock().await.get(&id) {
+            h.tasks.kick();
+        }
+    }
+
+    /// Ask a running NPC to abort task `task_id` if it is running it.
+    pub async fn cancel_task(&self, id: Uuid, task_id: i64) {
+        if let Some(h) = self.npcs.lock().await.get(&id) {
+            *h.tasks.cancel.lock().unwrap() = Some(task_id);
+            h.tasks.notify.notify_one();
+        }
+    }
+
+    /// What each running NPC sees on its workplace object (debug view): the
+    /// properties the depot actions gate on, its position and FSM status.
+    pub async fn world_status(&self) -> Vec<Value> {
         let npcs = self.npcs.lock().await;
         let mut out = Vec::with_capacity(npcs.len());
-        for handle in npcs.values() {
-            let depot = handle.spec.place_where_work.as_ref().map(|p| p.uuid.clone());
-            // The FSM status answers the other half of "why is this NPC idle":
-            // one stuck mid-trip (`GoingToWork`, waiting on an `npc_arrived`
-            // that never came) is indistinguishable from one with nothing to do.
-            let status = handle
-                .state
-                .read()
-                .unwrap()
-                .as_ref()
-                .map(|s| format!("{:?}", s.status()));
-            let world = handle.world.read().unwrap().clone();
+        for h in npcs.values() {
+            let spec = Arc::clone(&h.cfg_tx.borrow().spec);
+            let depot = spec.place_where_work.as_ref().map(|p| p.uuid.clone());
+            let status = h.state.read().unwrap().as_ref().map(|s| format!("{:?}", s.status()));
+            let trip = h.state.read().unwrap().as_ref().and_then(|s| s.get("drive_to_factory"));
+            let world = h.world.read().unwrap().clone();
             let Some(world) = world else {
-                // Between sessions: off shift, or reconnecting.
-                out.push(serde_json::json!({
-                    "name": handle.name,
-                    "connected": false,
-                    "status": status,
-                    "work_uuid": depot,
+                out.push(json!({
+                    "id": h.id, "login": h.login, "name": spec.name, "connected": false,
+                    "status": status, "work_uuid": depot, "drive_to_factory": trip,
                 }));
                 continue;
             };
             let depot_view = depot.as_ref().and_then(|d| world.objects.get(d)).map(|o| {
-                serde_json::json!({
-                    "object_type": o.object_type,
-                    "in_view": true,
-                    // The full property set, so a missing key is as visible as a
-                    // wrong one. Depots carry a handful of keys; this stays small.
-                    "props": o.props,
-                })
+                json!({ "object_type": o.object_type, "in_view": true, "props": o.props })
             });
-            out.push(serde_json::json!({
-                "name": handle.name,
+            out.push(json!({
+                "id": h.id,
+                "login": h.login,
+                "name": spec.name,
                 "connected": true,
                 "my_uuid": world.my_uuid,
                 "status": status,
                 "work_uuid": depot,
-                // Where the NPC actually stands, and in whose frame. An NPC that
-                // never left its habitation reports the habitation as parent.
                 "my_parent": world.my_parent(),
                 "my_position": world.my_position(),
-                // The server-side flag the travel actions wait on.
                 "npc_arrived": world.npc_arrived(),
                 "objects_in_view": world.objects.len(),
                 "players_in_view": world.players.len(),
-                "depot": depot_view.unwrap_or(serde_json::json!({"in_view": false})),
+                "depot": depot_view.unwrap_or(json!({"in_view": false})),
+                "drive_to_factory": trip,
             }));
         }
         out
     }
 
-    pub async fn schedule_status(&self) -> Vec<NpcScheduleReport> {
-        let specs: Vec<NpcSpec> = self.list().await;
-        let mut out = Vec::with_capacity(specs.len());
-        for spec in specs {
-            let planet_key = spec
-                .place_where_work
-                .as_ref()
-                .and_then(|p| p.planet.clone())
-                .unwrap_or_else(|| self.config.planet_internal_name.clone());
-            let rotation_h = self
-                .planets
-                .rotation_h_or(&planet_key, self.config.rotation_h_fallback)
-                .await;
-            let t = PlanetClock::new(Arc::clone(&self.clock_params), rotation_h).now();
-            let activity = spec
-                .schedule
-                .as_ref()
-                .and_then(|p| self.schedule.activity_at(p, t))
-                .map(|a| format!("{a:?}").to_lowercase());
-            out.push(NpcScheduleReport {
-                name: spec.name.unwrap_or_default(),
-                planet: planet_key,
-                rotation_h,
-                schedule: spec.schedule,
-                day: t.day,
-                hour: t.hour,
-                activity,
-            });
-        }
-        out
+    /// The live FSM state (status + blackboard) of a running NPC.
+    pub async fn state_snapshot(&self, id: Uuid) -> Option<Value> {
+        let npcs = self.npcs.lock().await;
+        let h = npcs.get(&id)?;
+        let state = h.state.read().unwrap().clone()?;
+        let world = h.world.read().unwrap().clone();
+        Some(json!({
+            "state": state.snapshot(),
+            "position": world.as_ref().and_then(|w| w.my_position()),
+            "parent": world.as_ref().and_then(|w| w.my_parent()),
+        }))
+    }
+
+    /// Stop every runtime (shutdown).
+    pub async fn shutdown(&self) {
+        let ids: Vec<Uuid> = self.npcs.lock().await.keys().copied().collect();
+        join_all(ids.iter().map(|id| self.despawn(*id, "shutdown"))).await;
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn roster(len: usize, target: Option<usize>) -> Roster {
-        let specs = (0..len)
-            .map(|i| serde_yaml::from_str(&format!("uuid: \"u{i}\"")).unwrap())
-            .collect();
-        Roster { specs, target, revision: 0 }
-    }
-
-    #[test]
-    fn target_is_capped_by_roster_size() {
-        assert_eq!(roster(5, None).target(), 5);
-        assert_eq!(roster(5, Some(3)).target(), 3);
-        assert_eq!(roster(5, Some(50)).target(), 5);
-    }
-
-    #[test]
-    fn scaled_clamps_to_roster_bounds() {
-        let r = roster(10, Some(4));
-        assert_eq!(r.scaled(3), 7);
-        assert_eq!(r.scaled(-3), 1);
-        assert_eq!(r.scaled(50), 10);
-        assert_eq!(r.scaled(-50), 0);
-        assert_eq!(roster(10, None).scaled(-4), 6);
-    }
-
-    fn write_roster(path: &std::path::Path, count: usize) {
-        let mut yaml = String::from("npcs:\n");
-        for i in 0..count {
-            yaml.push_str(&format!("  - name: npc{i}\n    uuid: \"u{i}\"\n"));
-        }
-        std::fs::write(path, yaml).unwrap();
-    }
-
-    async fn live_names(mgr: &NpcManager) -> Vec<String> {
-        let mut names: Vec<String> = mgr.npcs.lock().await.keys().cloned().collect();
-        names.sort();
-        names
-    }
-
-    // Paused time: the stagger sleeps resolve instantly. Horizon points at a
-    // closed local port, so the runtimes just sit in their reconnect backoff.
-    #[tokio::test(start_paused = true)]
-    async fn reconcile_follows_target_and_reload() {
-        let dir = std::env::temp_dir().join(format!("npc-roster-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("npcs.yaml");
-        write_roster(&path, 5);
-
-        let mut config = Config::from_env();
-        config.horizon_url = "ws://127.0.0.1:1".into();
-        config.roster_path = path.to_string_lossy().into_owned();
-        config.npc_active_count = Some(2);
-        config.spawn_stagger_ms = 100;
-        let mgr = NpcManager::new(
-            Arc::new(config),
-            Arc::new(ClockParams::new(5, 0, None, 1.0)),
-            PlanetCatalogHandle::empty(),
-            Arc::new(Schedule::empty()),
-        );
-
-        mgr.reload_roster().await.unwrap();
-        mgr.reconcile_roster().await;
-        assert_eq!(live_names(&mgr).await, ["npc0", "npc1"]);
-
-        mgr.scale_roster(2).await;
-        mgr.reconcile_roster().await;
-        assert_eq!(live_names(&mgr).await, ["npc0", "npc1", "npc2", "npc3"]);
-
-        mgr.scale_roster(-3).await;
-        mgr.reconcile_roster().await;
-        assert_eq!(live_names(&mgr).await, ["npc0"]);
-
-        mgr.set_roster_target(None).await;
-        mgr.reconcile_roster().await;
-        assert_eq!(mgr.roster_status().await.running, 5);
-
-        // Entries dropped from the file are despawned on reload.
-        write_roster(&path, 3);
-        let status = mgr.reload_roster().await.unwrap();
-        assert_eq!((status.total, status.target, status.running), (3, 3, 3));
-        assert_eq!(live_names(&mgr).await, ["npc0", "npc1", "npc2"]);
-
-        std::fs::remove_dir_all(&dir).unwrap();
+fn live_of(h: &NpcHandle) -> LiveStatus {
+    LiveStatus {
+        running: true,
+        connected: h.connected.load(Ordering::Relaxed),
+        status: h
+            .state
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s.status()).ok())
+            .and_then(|v| v.as_str().map(str::to_string)),
+        current_action: h.current.read().unwrap().clone(),
+        running_since: Some(h.started_at),
     }
 }

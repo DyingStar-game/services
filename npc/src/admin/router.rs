@@ -1,23 +1,49 @@
-use std::sync::Arc;
-
-use axum::{Router, routing::{delete, get, post, put}};
+use axum::{
+    Router, middleware,
+    routing::{delete, get, post, put},
+};
 use tower_http::trace::TraceLayer;
 
-use crate::npc::manager::NpcManager;
+use super::{misc, npcs, schedule};
+use crate::{auth, state::AppState};
 
-use super::handlers;
+pub fn build_router(st: AppState) -> Router {
+    let admin = Router::new()
+        .route("/settings", get(misc::settings).put(misc::set_settings))
+        .route("/npcs", get(npcs::list).post(npcs::create))
+        .route("/npcs/bulk", post(npcs::bulk))
+        .route("/npcs/{id}", get(npcs::get).patch(npcs::patch).delete(npcs::delete))
+        .route("/npcs/{id}/spawn", post(npcs::spawn))
+        .route("/npcs/{id}/despawn", post(npcs::despawn))
+        .route("/npcs/{id}/reassign", post(npcs::reassign))
+        .route("/npcs/{id}/reset-credentials", post(npcs::reset_credentials))
+        .route("/npcs/{id}/logs", get(npcs::logs))
+        .route("/npcs/{id}/events", get(npcs::npc_events))
+        .route("/npcs/{id}/tasks", get(npcs::list_tasks).post(npcs::create_task))
+        .route("/npcs/{id}/tasks/{task_id}", delete(npcs::cancel_task))
+        .route("/events", get(npcs::all_events))
+        .route("/task-kinds", get(npcs::task_kinds))
+        .route("/schedule/patterns", get(schedule::list).post(schedule::create))
+        .route(
+            "/schedule/patterns/{name}",
+            get(schedule::get).put(schedule::update).delete(schedule::delete),
+        )
+        .route("/schedule/import", post(schedule::import))
+        .route(
+            "/schedule/activity-actions",
+            get(schedule::activity_actions).put(schedule::set_activity_actions),
+        )
+        .route("/schedule/legend", get(schedule::legend))
+        .route("/villages", get(misc::villages))
+        .route("/villages/{code}/workplace", put(misc::set_workplace).delete(misc::delete_workplace))
+        .route("/debug/world", get(misc::debug_world))
+        .route("/debug/routes/{from}/{to}", get(misc::debug_route))
+        .route("/health/keycloak", get(misc::keycloak_health))
+        .layer(middleware::from_fn_with_state(st.clone(), auth::admin_layer));
 
-pub fn build_router(manager: Arc<NpcManager>) -> Router {
     Router::new()
-        .route("/healthz", get(handlers::healthz))
-        .route("/npcs", get(handlers::list_npcs).post(handlers::create_npc))
-        .route("/npcs/schedule", get(handlers::schedule_status))
-        .route("/npcs/world", get(handlers::world_status))
-        .route("/npcs/roster", get(handlers::roster_status))
-        .route("/npcs/roster/active", put(handlers::set_roster_active))
-        .route("/npcs/roster/scale", post(handlers::scale_roster))
-        .route("/npcs/roster/reload", post(handlers::reload_roster))
-        .route("/npcs/{name}", delete(handlers::delete_npc))
+        .route("/healthz", get(misc::healthz))
+        .nest("/api/admin", admin)
         .layer(TraceLayer::new_for_http())
-        .with_state(manager)
+        .with_state(st)
 }

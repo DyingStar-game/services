@@ -98,7 +98,14 @@ List of task a NPC can play (actions):
  - validate_mission
  - pay_players
  - load_into_vehicle
- - drive_to
+ - drive_to — first case implemented as `drive_to_factory` (Mining village →
+   garage kiosk → truck → by road → Factory village; see the README). The road
+   graph (`world_data`) and the controller (`actions/driving`) are generic, so
+   other destinations only need their own action. On the road the driver keeps
+   right, follows or overtakes slower traffic, steers round what stands in its
+   lane, gives way to oncoming traffic and pedestrians, and waits 60 s at a
+   blocked road before going round it off the road (`driving/traffic.rs`, ADR
+   `docs/adr/0012` at the repository root).
 
 
 ## Planetary shift schedule (25 h day)
@@ -130,9 +137,16 @@ At startup (and on a periodic refresh) the service fetches
 (default `PLANET_INTERNAL_NAME`). If resourcesDynamic is unreachable, NPCs fall
 back to `ROTATION_H_FALLBACK` (25.0) and keep running.
 
-### Schedules (`src/schedule.rs`, `config/schedules.yaml`)
+### Schedules (`src/schedule.rs`, database `schedule_patterns` / `activity_actions`)
 
-Each NPC references a pattern by name via its roster `schedule:` field. A pattern
+The patterns and the activity mapping live in the database: `config/schedules.yaml`
+is imported on first boot (empty table) and on demand (`POST /api/admin/schedule/import`,
+mode `missing` keeps the panel's edits, `overwrite` restores the file; or
+`npc import-schedules [--overwrite] [file]`). The admin panel edits the grids and
+the mapping; every write swaps the schedules in force (`ScheduleStore`) and running
+NPCs pick it up on their next tick.
+
+Each NPC references a pattern by name (`schedulePattern` of its row). A pattern
 is a grid of planetary hours — one line per rota-day, **exactly 25 chars**, one
 char per hour:
 
@@ -142,7 +156,7 @@ a activités obligatoires (mandatory)   . off-shift
 ```
 
 Each hour maps to an **activity**, and each activity to a set of allowed action
-names (code-default, YAML-overridable via `activity_actions`):
+names (code-default, overridden by the `activity_actions` rows):
 
 | activity        | char | allowed actions                                             |
 |-----------------|------|-------------------------------------------------------------|
@@ -156,12 +170,23 @@ names (code-default, YAML-overridable via `activity_actions`):
 `(schedule, clock.now())` and only those actions are eligible — layered on top of
 the NPC's static `action_profile` and each action's `can_run`.
 
+Besides `magasinier_1..5`, `config/schedules.yaml` holds the mining-village rota families
+(ADR `docs/adr/0003` at the repository root):
+
+- `equipe_1..5`: copies of the storekeepers, for every 24/7 role;
+- `jour_1..5`: day posts, with `jour_k` resting on day k;
+- `soir_1..3`: the bar;
+- `enfant`, `retraite`, `refugie`.
+
+The file's `activity_actions` adds `drive_to_factory` to work. The letter `l` (leisure)
+has no action yet and is parsed as off-shift.
+
 ### MVP activity actions
 
 `go_home`, `go_to_meal` and `mandatory_activity` are one generic behaviour
 (`src/actions/go_to_place.rs`): walk to a place, wait for arrival, then idle
 there for the window. `go_to_meal`/`mandatory_activity` target `meal_place` /
-`mandatory_place` from the roster; `go_home` needs no config — the runtime
+`mandatory_place` of the NPC; `go_home` needs no config — the runtime
 remembers the NPC's **spawn position** as home (an NPC spawns in its
 habitation), so it returns there (an optional `home:` overrides this).
 `going_to_work` was generalised to resume work from *any* settled status
@@ -181,13 +206,12 @@ wherever it currently stands, asks the server to walk there
 The order is expressed in the NPC's own frame (its `parent_id`, empty = root),
 the same frame Horizon echoes its position back in, so no coordinate conversion
 is involved. The action stands down until that position is known, since there is
-nothing to draw a point around. Radius and pause are tuned per NPC from the
-roster:
+nothing to draw a point around. Radius and pause are tuned per NPC in its
+`actionConfig` (admin panel; villagers get the one of `config/roles.yaml`):
 
-```yaml
-    action_profile:
-      - take_a_walk
-    take_a_walk: { radius_m: 100.0, pause_s: 30, max_distance_m: null }
+```json
+"actionProfile": ["take_a_walk"],
+"actionConfig": { "take_a_walk": { "radius_m": 100.0, "pause_s": 30, "max_distance_m": null } }
 ```
 
 `max_distance_m` leashes the stroll to that many metres around the NPC's

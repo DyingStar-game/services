@@ -4,19 +4,21 @@ pub mod timing;
 pub mod trip;
 
 pub mod depot_common;
+pub mod driving;
 pub mod depot_reception_coordinator;
 pub mod depot_store_item;
 pub mod depot_store_reception_to_temp_area;
 pub mod detect_player_and_greet;
+pub mod drive_to_factory;
 pub mod go_to_place;
 pub mod go_to_point;
 pub mod going_to_work;
+pub mod manual;
 pub mod reception_players;
 pub mod take_a_walk;
 
 // stubs — compile, registered, but `can_run` returns false
 pub mod check_vehicle_components;
-pub mod drive_truck;
 pub mod go_sell_object;
 
 pub mod conversations;

@@ -1,14 +1,38 @@
 services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: npc
+      POSTGRES_PASSWORD: npc
+      POSTGRES_DB: npc
+    volumes:
+      - npc-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U npc"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - backend
+
   app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     env_file: ../.env
+    environment:
+      DATABASE_URL: postgres://npc:npc@db:5432/npc
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "${ADMIN_PORT:-9400}:9400"
     restart: unless-stopped
     networks:
       - backend
+
+volumes:
+  npc-db:
 
 networks:
   backend:

@@ -92,7 +92,10 @@ impl ActionRegistry {
             )),
             // Ambient strolling: hop to a random point nearby, pause, repeat.
             Arc::new(super::take_a_walk::TakeAWalk::new(spec.take_a_walk.clone())),
-            Arc::new(super::drive_truck::DriveTruck),
+            // Mining village → garage kiosk → truck → by road → Factory village.
+            Arc::new(super::drive_to_factory::DriveToFactory::new(
+                spec.drive_to_factory.clone(),
+            )),
             Arc::new(super::check_vehicle_components::CheckVehicleComponents),
             Arc::new(super::go_sell_object::GoSellObject),
         ]

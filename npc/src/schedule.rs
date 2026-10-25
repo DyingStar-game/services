@@ -1,18 +1,30 @@
 //! Shift schedules: per-NPC grids of planetary hours mapping each hour of the
 //! rotating rota to an [`Activity`], and each activity to the set of actions the
-//! NPC may run during it. Loaded from `config/schedules.yaml`.
+//! NPC may run during it. Stored in the database (imported from
+//! `config/schedules.yaml`, edited from the admin panel) and hot-swapped through
+//! [`ScheduleStore`].
 //!
 //! The schedule is a *gate layered on top of* the existing `action_profile` +
 //! `can_run` scheduler: at each tick the runtime asks the schedule which actions
 //! are allowed at the current [`PlanetTime`](crate::clock::PlanetTime), and the
 //! [`ActionRegistry`](crate::actions::ActionRegistry) keeps only those.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
+use arc_swap::ArcSwap;
 use serde::Deserialize;
-use tracing::warn;
+use sqlx::PgPool;
+use tokio::sync::watch;
+use tracing::{info, warn};
 
-use crate::clock::PlanetTime;
+use crate::{clock::PlanetTime, error::Result};
+
+/// Grid letters a pattern may use (see `config/schedules.yaml`). `l` (leisure)
+/// has no behaviour yet and reads as off-shift.
+pub const PATTERN_LETTERS: &str = "Ttra.l";
 
 /// What an NPC is meant to be doing during a given planetary hour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -102,19 +114,40 @@ pub struct Schedule {
 #[derive(Debug, Default, Deserialize)]
 pub struct ScheduleFile {
     #[serde(default)]
-    schedules: HashMap<String, RawPattern>,
+    pub schedules: BTreeMap<String, RawPattern>,
     /// Optional override of the code-default activity → action-name mapping.
     /// Keys: `work`, `transmission`, `meal`, `mandatory`, `off`.
     #[serde(default)]
-    activity_actions: Option<HashMap<String, Vec<String>>>,
+    pub activity_actions: Option<HashMap<String, Vec<String>>>,
     /// Optional override of the always-allowed (ambient) actions.
     #[serde(default)]
-    always_allowed: Option<Vec<String>>,
+    pub always_allowed: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
-struct RawPattern {
-    days: Vec<String>,
+pub struct RawPattern {
+    pub days: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Check a pattern grid as the admin panel and the import accept it: 1 to 14
+/// days, all the same width, only [`PATTERN_LETTERS`]. Stricter than the
+/// runtime parser, which reads unknown letters as off-shift.
+pub fn validate_pattern(name: &str, days: &[String]) -> std::result::Result<(), String> {
+    if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        || name.is_empty()
+        || name.len() > 64
+    {
+        return Err(format!("pattern name '{name}' must match [a-z0-9_]{{1,64}}"));
+    }
+    if days.is_empty() || days.len() > 14 {
+        return Err(format!("pattern '{name}' must have 1 to 14 days, has {}", days.len()));
+    }
+    if let Some(bad) = days.iter().flat_map(|d| d.chars()).find(|c| !PATTERN_LETTERS.contains(*c)) {
+        return Err(format!("pattern '{name}' uses '{bad}'; allowed letters: {PATTERN_LETTERS}"));
+    }
+    ShiftPattern::parse(name, days).map(|_| ()).map_err(|e| e.to_string())
 }
 
 impl Schedule {
@@ -162,6 +195,48 @@ impl Schedule {
     pub fn from_yaml(text: &str) -> anyhow::Result<Self> {
         let file: ScheduleFile = serde_yaml::from_str(text)?;
         Ok(Self::from_file(file))
+    }
+
+    /// Build from database rows: `(name, days)` patterns and `(activity,
+    /// actions)` mapping rows (activity `always` = ambient actions). Activities
+    /// without a row keep their code default.
+    pub fn from_parts(
+        patterns: impl IntoIterator<Item = (String, Vec<String>)>,
+        activity_actions: impl IntoIterator<Item = (String, Vec<String>)>,
+    ) -> Self {
+        let mut file = ScheduleFile::default();
+        for (name, days) in patterns {
+            file.schedules.insert(name, RawPattern { days, description: None });
+        }
+        let mut mapping = HashMap::new();
+        for (activity, actions) in activity_actions {
+            if activity == "always" {
+                file.always_allowed = Some(actions);
+            } else {
+                mapping.insert(activity, actions);
+            }
+        }
+        file.activity_actions = Some(mapping);
+        Self::from_file(file)
+    }
+
+    /// Names of the known patterns, sorted.
+    pub fn pattern_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.patterns.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// The effective activity → actions mapping (`always` = ambient), for the
+    /// admin panel.
+    pub fn activity_actions(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out: BTreeMap<String, Vec<String>> = self
+            .activity_actions
+            .iter()
+            .map(|(a, v)| (a.key().to_string(), v.clone()))
+            .collect();
+        out.insert("always".into(), self.always_allowed.clone());
+        out
     }
 
     /// Whether a pattern by this name is known.
@@ -234,6 +309,59 @@ impl Schedule {
             .collect();
         set.extend(self.always_allowed.iter().cloned());
         Some(set)
+    }
+}
+
+impl Activity {
+    /// Key used in `activity_actions` (YAML and database).
+    pub fn key(&self) -> &'static str {
+        match self {
+            Activity::Work => "work",
+            Activity::Transmission => "transmission",
+            Activity::Meal => "meal",
+            Activity::Mandatory => "mandatory",
+            Activity::Off => "off",
+        }
+    }
+}
+
+/// The shift schedules in force, swapped whole when an admin edits a pattern
+/// or the activity mapping. Readers take a cheap snapshot (`load`) per tick;
+/// `subscribe` wakes the NPCs waiting out an off-shift window.
+pub struct ScheduleStore {
+    current: ArcSwap<Schedule>,
+    version: watch::Sender<u64>,
+}
+
+impl ScheduleStore {
+    pub fn new(schedule: Schedule) -> Self {
+        Self { current: ArcSwap::from_pointee(schedule), version: watch::Sender::new(0) }
+    }
+
+    pub fn load(&self) -> Arc<Schedule> {
+        self.current.load_full()
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.version.subscribe()
+    }
+
+    pub fn replace(&self, schedule: Schedule) {
+        self.current.store(Arc::new(schedule));
+        self.version.send_modify(|v| *v += 1);
+    }
+
+    /// Rebuild from the database.
+    pub async fn reload(&self, pool: &PgPool) -> Result<()> {
+        let patterns = crate::db::patterns::list(pool).await?;
+        let mapping = crate::db::patterns::list_activity_actions(pool).await?;
+        let count = patterns.len();
+        self.replace(Schedule::from_parts(
+            patterns.into_iter().map(|p| (p.name, p.days)),
+            mapping,
+        ));
+        info!(patterns = count, "shift schedules loaded");
+        Ok(())
     }
 }
 
@@ -348,6 +476,44 @@ schedules:
         // Malformed pattern is skipped, so it simply isn't present.
         let s = Schedule::from_yaml(bad).unwrap();
         assert!(!s.has_pattern("x"));
+    }
+
+    #[test]
+    fn from_parts_builds_patterns_and_mapping() {
+        let s = Schedule::from_parts(
+            [("p".to_string(), vec!["TTTTTaaarTTTTTaar........".to_string()])],
+            [
+                ("work".to_string(), vec!["drive_to_factory".to_string()]),
+                ("always".to_string(), vec![]),
+            ],
+        );
+        let work = s.allowed_actions_at("p", pt(0, 0)).unwrap();
+        assert!(work.contains("drive_to_factory"));
+        assert!(!work.contains("depot_store_item"), "row replaces the code default");
+        assert!(!work.contains("detect_player_and_greet"), "empty `always` row clears ambient");
+        // No `meal` row: code default kept.
+        assert!(s.allowed_actions_at("p", pt(0, 8)).unwrap().contains("go_to_meal"));
+        assert_eq!(s.pattern_names(), ["p"]);
+    }
+
+    #[test]
+    fn validates_pattern_grids() {
+        let ok = vec!["TTTTTaaarTTTTTaar........".to_string(); 5];
+        assert!(validate_pattern("magasinier_1", &ok).is_ok());
+        assert!(validate_pattern("Bad-Name", &ok).is_err());
+        assert!(validate_pattern("p", &[]).is_err());
+        assert!(validate_pattern("p", &["TTx".to_string()]).is_err());
+        assert!(validate_pattern("p", &["TTT".to_string(), "TT".to_string()]).is_err());
+    }
+
+    #[test]
+    fn store_swaps_and_notifies() {
+        let store = ScheduleStore::new(Schedule::empty());
+        let rx = store.subscribe();
+        assert!(!store.load().has_pattern("magasinier_1"));
+        store.replace(Schedule::from_yaml(YAML).unwrap());
+        assert!(store.load().has_pattern("magasinier_1"));
+        assert!(rx.has_changed().unwrap());
     }
 
     #[test]

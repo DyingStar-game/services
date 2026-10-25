@@ -144,3 +144,14 @@ npcs:
     # max_distance_m: null = aucune limite ; mettre p.ex. 300.0 pour le garder
     # a 300 m de son point de spawn (sinon les sauts successifs derivent).
     take_a_walk: { radius_m: 100.0, pause_s: 30, max_distance_m: null }
+  # --- Chauffeur : du village Mining ou il spawn au village Factory, en camion ---
+  # Va au garage du village, demande un camion au kiosque, monte cote
+  # conducteur, roule par la route jusqu'au Factory (routing.yaml), se gare et
+  # descend. Une fois par session.
+  - name: Gaston
+    uuid: "5f0b1c52-3e2a-4d0b-9a57-6c1f2e8d4b90"
+    action_profile:
+      - detect_player_and_greet
+      - drive_to_factory
+    # destination: null = le Factory choisi pour son village (routing.yaml)
+    drive_to_factory: { destination: null, max_speed_kmh: 40 }

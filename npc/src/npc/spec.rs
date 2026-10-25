@@ -92,6 +92,21 @@ pub struct TakeAWalkConfig {
     pub max_distance_m: Option<f64>,
 }
 
+/// Per-NPC configuration of the `drive_to_factory` action.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DriveToFactoryConfig {
+    /// Factory village to drive to (e.g. `F0003`). `None` = the one chosen for
+    /// the NPC's Mining village in `config/routing.yaml` (static `factory_for`,
+    /// else the nearest by road).
+    #[serde(default)]
+    pub destination: Option<String>,
+
+    /// Speed cap (km/h) for this NPC. `None` = `max_speed_kmh` of the routing
+    /// config.
+    #[serde(default)]
+    pub max_speed_kmh: Option<f64>,
+}
+
 /// Description of a single NPC, supplied either by the YAML roster or by the
 /// admin REST endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +168,11 @@ pub struct NpcSpec {
     /// default — only `action_profile` gates it.
     #[serde(default)]
     pub take_a_walk: Option<TakeAWalkConfig>,
+
+    /// Config of the `drive_to_factory` action. Optional: everything has a
+    /// sane default — only `action_profile` gates it.
+    #[serde(default)]
+    pub drive_to_factory: Option<DriveToFactoryConfig>,
 }
 
 /// YAML schema for `config/npcs.yaml`.

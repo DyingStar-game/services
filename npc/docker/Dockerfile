@@ -13,7 +13,9 @@ COPY Cargo.toml Cargo.lock* ./
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 RUN cargo build --release && rm -rf src
 
-# Copy real source and rebuild.
+# Copy real source and rebuild. The migrations are embedded at compile time
+# (`sqlx::migrate!`).
+COPY migrations ./migrations
 COPY src ./src
 RUN touch src/main.rs && cargo build --release
 

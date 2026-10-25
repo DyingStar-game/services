@@ -1,21 +1,16 @@
 use std::env;
 
 /// Service configuration loaded from environment variables.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// WebSocket URL of the Horizon server.
     pub horizon_url: String,
     /// Bind address for the admin REST API (e.g. `0.0.0.0:9400`).
     pub admin_bind: String,
-    /// Path to the YAML roster of NPCs loaded at startup.
-    pub roster_path: String,
-    /// Path to the text file containing the pool of NPC display names.
-    pub names_path: String,
-    /// How many of the first roster entries to run at startup. `None` = all of
-    /// them. Changed at runtime through `/npcs/roster/*`.
-    pub npc_active_count: Option<usize>,
-    /// Delay (ms) between two consecutive roster spawns, so ramping up many
-    /// NPCs doesn't open all their Horizon sessions in the same instant.
+    /// PostgreSQL URL of the NPC database (roster, schedules, tasks, events).
+    pub database_url: String,
+    /// Delay (ms) between two consecutive spawns, so ramping up many NPCs
+    /// doesn't open all their Horizon sessions in the same instant.
     pub spawn_stagger_ms: u64,
     /// Interval (ms) between action-scheduler ticks.
     pub tick_interval_ms: u64,
@@ -27,8 +22,45 @@ pub struct Config {
     pub reconnect_backoff_initial_ms: u64,
     /// Maximum reconnect backoff (ms).
     pub reconnect_backoff_max_ms: u64,
-    /// HMAC-SHA256 secret used to sign NPC JWTs. Must match what Horizon expects.
-    pub jwt_secret: String,
+
+    /// Keycloak base URL reachable from the service (e.g. `http://keycloak:8080`),
+    /// for the token endpoint and the Admin REST API.
+    pub keycloak_url: String,
+    /// Realm of the NPC accounts.
+    pub keycloak_realm: String,
+    /// Confidential client NPCs log in with (password grant).
+    pub npc_login_client_id: String,
+    pub npc_login_client_secret: String,
+    /// Service account of this service (`svc-npc`): manages the NPC users and
+    /// reads universesimulator.
+    pub service_client_id: String,
+    pub service_client_secret: String,
+    /// Base64 of the 32-byte AES key sealing NPC passwords in the database.
+    pub npc_password_key: String,
+
+    /// Issuer and JWKS of the tokens accepted on the admin API.
+    pub oidc_issuer: String,
+    pub oidc_jwks_url: String,
+    /// Expected `aud` of admin tokens; unset = not checked.
+    pub oidc_audience: Option<String>,
+    /// Dev only: accept `X-Player-Id` / `X-Player-Roles` instead of a token.
+    pub auth_dev_bypass: bool,
+    /// `production` refuses the dev bypass.
+    pub app_env: String,
+
+    /// universesimulator base URL (without `/api`); finds a village's main
+    /// warehouse for its storekeepers. Empty = not used.
+    pub universesimulator_url: String,
+
+    /// Days of NPC events kept in the database.
+    pub events_retention_days: u32,
+    /// Log lines kept in memory per NPC for the admin panel.
+    pub log_buffer_lines: usize,
+    /// Role templates (storekeeper, villager).
+    pub roles_path: String,
+    /// First and last name lists for generated NPC names.
+    pub first_names_path: String,
+    pub last_names_path: String,
 
     /// Base URL of the resourcesDynamic REST API (source of per-planet rotation
     /// periods), e.g. `http://host:3001`.
@@ -46,7 +78,8 @@ pub struct Config {
     pub rota_days: u32,
     /// Aligns which rota day "day 0" lands on.
     pub rota_epoch_offset_days: i64,
-    /// Path to the shift-schedules YAML.
+    /// Path to the shift-schedules YAML, imported into the database on first
+    /// boot and on demand (`POST /api/admin/schedule/import`).
     pub schedules_path: String,
 
     /// Test hook: pin planetary time to this exact Unix second.
@@ -63,15 +96,8 @@ impl Config {
         let admin_bind =
             env::var("ADMIN_BIND").unwrap_or_else(|_| "0.0.0.0:9400".to_string());
 
-        let roster_path =
-            env::var("ROSTER_PATH").unwrap_or_else(|_| "config/npcs.yaml".to_string());
-
-        let names_path =
-            env::var("NAMES_PATH").unwrap_or_else(|_| "config/names.txt".to_string());
-
-        let npc_active_count = env::var("NPC_ACTIVE_COUNT")
-            .ok()
-            .and_then(|v| v.parse().ok());
+        let database_url = env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://npc:npc@localhost:5432/npc".to_string());
 
         let spawn_stagger_ms = env::var("SPAWN_STAGGER_MS")
             .ok()
@@ -98,8 +124,48 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(30_000);
 
-        let jwt_secret = env::var("JWT_SECRET")
-            .unwrap_or_else(|_| "changeme".to_string());
+        let keycloak_url = env::var("KEYCLOAK_URL")
+            .unwrap_or_else(|_| "http://keycloak:8080".to_string())
+            .trim_end_matches('/')
+            .to_string();
+        let keycloak_realm = env::var("KEYCLOAK_REALM").unwrap_or_else(|_| "dyingstar".to_string());
+        let npc_login_client_id =
+            env::var("NPC_LOGIN_CLIENT_ID").unwrap_or_else(|_| "npc-login".to_string());
+        let npc_login_client_secret = env::var("NPC_LOGIN_CLIENT_SECRET").unwrap_or_default();
+        let service_client_id =
+            env::var("SERVICE_CLIENT_ID").unwrap_or_else(|_| "svc-npc".to_string());
+        let service_client_secret = env::var("SERVICE_CLIENT_SECRET").unwrap_or_default();
+        let npc_password_key = env::var("NPC_PASSWORD_KEY").unwrap_or_default();
+
+        // An empty variable (a Helm value left blank) counts as unset.
+        let non_empty = |name: &str| env::var(name).ok().filter(|v| !v.trim().is_empty());
+        let oidc_issuer = non_empty("OIDC_ISSUER")
+            .unwrap_or_else(|| format!("{keycloak_url}/realms/{keycloak_realm}"));
+        let oidc_jwks_url = non_empty("OIDC_JWKS_URL").unwrap_or_else(|| {
+            format!("{keycloak_url}/realms/{keycloak_realm}/protocol/openid-connect/certs")
+        });
+        let oidc_audience = env::var("OIDC_AUDIENCE").ok().filter(|s| !s.is_empty());
+        let auth_dev_bypass = env::var("AUTH_DEV_BYPASS").is_ok_and(|v| v == "true" || v == "1");
+        let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+
+        let universesimulator_url = env::var("UNIVERSESIMULATOR_URL")
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_string();
+
+        let events_retention_days = env::var("NPC_EVENTS_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(7);
+        let log_buffer_lines = env::var("NPC_LOG_BUFFER_LINES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500);
+        let roles_path = env::var("ROLES_PATH").unwrap_or_else(|_| "config/roles.yaml".to_string());
+        let first_names_path = env::var("FIRST_NAMES_PATH")
+            .unwrap_or_else(|_| "config/names/first.txt".to_string());
+        let last_names_path = env::var("LAST_NAMES_PATH")
+            .unwrap_or_else(|_| "config/names/last.txt".to_string());
 
         let resources_dynamic_http = env::var("RESOURCES_DYNAMIC_HTTP")
             .unwrap_or_else(|_| "http://localhost:3001".to_string());
@@ -142,15 +208,30 @@ impl Config {
         Self {
             horizon_url,
             admin_bind,
-            roster_path,
-            names_path,
-            npc_active_count,
+            database_url,
             spawn_stagger_ms,
             tick_interval_ms,
             action_startup_delay_ms,
             reconnect_backoff_initial_ms,
             reconnect_backoff_max_ms,
-            jwt_secret,
+            keycloak_url,
+            keycloak_realm,
+            npc_login_client_id,
+            npc_login_client_secret,
+            service_client_id,
+            service_client_secret,
+            npc_password_key,
+            oidc_issuer,
+            oidc_jwks_url,
+            oidc_audience,
+            auth_dev_bypass,
+            app_env,
+            universesimulator_url,
+            events_retention_days,
+            log_buffer_lines,
+            roles_path,
+            first_names_path,
+            last_names_path,
             resources_dynamic_http,
             planet_internal_name,
             rotation_h_fallback,
@@ -161,5 +242,43 @@ impl Config {
             clock_override_unix,
             clock_time_scale,
         }
+    }
+}
+
+impl Config {
+    pub fn is_production(&self) -> bool {
+        self.app_env == "production"
+    }
+
+    /// Keycloak token endpoint of the realm.
+    pub fn token_url(&self) -> String {
+        format!(
+            "{}/realms/{}/protocol/openid-connect/token",
+            self.keycloak_url, self.keycloak_realm
+        )
+    }
+}
+
+/// Secrets are never logged: the startup log prints the config through this.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let db_target = self.database_url.rsplit('@').next().unwrap_or_default();
+        f.debug_struct("Config")
+            .field("horizon_url", &self.horizon_url)
+            .field("admin_bind", &self.admin_bind)
+            .field("database", &db_target)
+            .field("keycloak_url", &self.keycloak_url)
+            .field("keycloak_realm", &self.keycloak_realm)
+            .field("npc_login_client_id", &self.npc_login_client_id)
+            .field("service_client_id", &self.service_client_id)
+            .field("oidc_issuer", &self.oidc_issuer)
+            .field("auth_dev_bypass", &self.auth_dev_bypass)
+            .field("universesimulator_url", &self.universesimulator_url)
+            .field("resources_dynamic_http", &self.resources_dynamic_http)
+            .field("planet_internal_name", &self.planet_internal_name)
+            .field("schedules_path", &self.schedules_path)
+            .field("spawn_stagger_ms", &self.spawn_stagger_ms)
+            .field("tick_interval_ms", &self.tick_interval_ms)
+            .finish_non_exhaustive()
     }
 }

@@ -1,0 +1,22 @@
+{
+	"doors": [],
+	"footprint": {
+		"center": [
+			0.0,
+			0.075,
+			0.0
+		],
+		"size": [
+			1.2,
+			0.15,
+			0.8
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [],
+	"scenename": "scenes/_universe/props/containers/pallet_plate.tscn",
+	"schema_version": 1,
+	"seats": []
+}

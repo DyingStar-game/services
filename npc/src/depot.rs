@@ -217,6 +217,7 @@ mod tests {
             depot_store_reception_to_temp_area: None,
             depot_store_item: None,
             take_a_walk: None,
+            drive_to_factory: None,
         }
     }
 
