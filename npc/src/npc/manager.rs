@@ -47,6 +47,10 @@ use crate::{
 
 /// Safety net: re-read the database this often even without a poke.
 const RECONCILE_EVERY: Duration = Duration::from_secs(60);
+/// How often the warehouses of the Mining villages are re-read from
+/// universesimulator (and how soon after a failed read).
+const WORKPLACES_EVERY: Duration = Duration::from_secs(600);
+const WORKPLACES_RETRY: Duration = Duration::from_secs(60);
 
 /// What every runtime shares.
 pub struct Services {
@@ -274,6 +278,33 @@ impl NpcManager {
                 }
             }
         });
+
+        if self.usim.is_some() {
+            let mgr = Arc::clone(self);
+            tokio::spawn(async move {
+                let mut first = true;
+                loop {
+                    let wait = match assign::resolve_all_workplaces(&mgr).await {
+                        Ok(sweep) => {
+                            if first || sweep.written > 0 {
+                                info!(
+                                    written = sweep.written,
+                                    without_warehouse = sweep.missing,
+                                    "village workplaces read from universesimulator"
+                                );
+                            }
+                            first = false;
+                            WORKPLACES_EVERY
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "cannot read village workplaces from universesimulator");
+                            WORKPLACES_RETRY
+                        }
+                    };
+                    tokio::time::sleep(wait).await;
+                }
+            });
+        }
 
         let mut rx = self.runtime_rx.lock().unwrap().take().expect("manager started twice");
         let mgr = Arc::clone(self);
