@@ -145,7 +145,7 @@ export const missionZoneSchema = z.union([
   z
     .object({
       kind: z.literal('poi'),
-      poiId: z.string().uuid(),
+      poiId: z.guid(),
     })
     .strict(),
 ]);

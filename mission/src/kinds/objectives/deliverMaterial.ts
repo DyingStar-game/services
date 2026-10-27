@@ -10,7 +10,7 @@ import { placeToLocation, zoneMatches, type PoiGeometryMap } from '../../service
 import type { MeasureContext, ObjectiveKind } from '../types.js';
 import { STATE_TTL_MS, isStateFresh, loadPlayerState } from './playerState.js';
 
-const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
+const poiZone = z.object({ kind: z.literal('poi'), poiId: z.guid() }).strict();
 
 const paramsSchema = z
   .object({

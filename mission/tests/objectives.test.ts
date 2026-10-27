@@ -218,3 +218,21 @@ describe('transport summary names its quantity (tests 25-26)', () => {
     expect(placeholders(transportKind.summary.fr)).toEqual(placeholders(transportKind.summary.en));
   });
 });
+
+describe('POI ids made by persistence', () => {
+  // Godot makes the UUIDs of persistence's objects without RFC version or variant digits
+  // (a cargo depot of Tarsis III); Inventory takes them as POI ids (`z.guid()`).
+  const GODOT_POI = '8276a47f-c581-27a0-e40a-58bdb7e7b27b';
+
+  it('are taken by every kind pointing at a POI', () => {
+    const zone = { kind: 'poi', poiId: GODOT_POI };
+    expect(visitKind.paramsSchema.safeParse({ zone }).success).toBe(true);
+    expect(deliverMaterialKind.paramsSchema.safeParse({ goodType: 'metal', zone }).success).toBe(true);
+    expect(transportKind.paramsSchema.safeParse({ goodType: 'metal', source: zone, zone }).success).toBe(true);
+  });
+
+  it('still refuses what is not a UUID', () => {
+    const zone = { kind: 'poi', poiId: 'cargo-depot' };
+    expect(visitKind.paramsSchema.safeParse({ zone }).success).toBe(false);
+  });
+});
