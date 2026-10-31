@@ -76,6 +76,10 @@ futures-util = "0.3"
 # Async traits
 async-trait = "0.1"
 
+# Global allocator: the Docker image is a static musl binary, whose built-in
+# malloc contends badly under many tokio worker threads.
+mimalloc = "0.1"
+
 [dev-dependencies]
 # Paused virtual time in tests (#[tokio::test(start_paused = true)])
 tokio = { version = "1", features = ["full", "test-util"] }
