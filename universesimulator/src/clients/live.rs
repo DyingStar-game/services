@@ -97,6 +97,11 @@ struct HoldCreated {
     id: Uuid,
 }
 
+#[derive(Deserialize)]
+struct PoiCreated {
+    id: Uuid,
+}
+
 #[async_trait]
 impl InventoryClient for HttpInventory {
     async fn stacks(&self, h: Holder) -> Result<Vec<StackView>> {
@@ -141,6 +146,22 @@ impl InventoryClient for HttpInventory {
     async fn release_hold(&self, hold_id: Uuid) -> Result<()> {
         let _: Value = self.0.post(&format!("/holds/{hold_id}/release"), &json!({})).await?;
         Ok(())
+    }
+
+    async fn create_poi(&self, poi: &NewPoi) -> Result<Uuid> {
+        let body = json!({
+            "owner": { "type": poi.owner_type, "id": poi.owner_id },
+            "name": poi.name,
+            "scene": poi.scene,
+            "metadata": { "persistence": poi.persistence_id },
+            "x": poi.x,
+            "y": poi.y,
+            "z": poi.z,
+            "radiusM": poi.radius_m,
+            "visibility": "public",
+        });
+        let created: PoiCreated = self.0.post("/pois", &body).await?;
+        Ok(created.id)
     }
 }
 

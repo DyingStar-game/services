@@ -34,6 +34,7 @@ pub struct FakeState {
     pub wallets: HashMap<Uuid, i64>,
     pub minted: Vec<(Uuid, i64)>,
     pub items: HashMap<Uuid, PoiItem>,
+    pub pois: HashMap<Uuid, NewPoi>,
 }
 
 pub struct FakeWorld {
@@ -77,16 +78,17 @@ impl FakeWorld {
         });
     }
 
-    /// Completes a mission the way the mission service would: for `deliver_items`
-    /// objectives, goods are moved into the target holder.
+    /// Completes a mission the way the mission service would: for `deliver_material`
+    /// objectives, goods are moved into the warehouse the delivery POI stands for.
     pub fn complete_mission(&self, id: Uuid) {
         self.with(|s| {
             let Some(m) = s.missions.get_mut(&id) else { return };
             m.status = "completed".into();
             for o in &m.mission.objectives {
-                if o["type"] == "deliver_items" {
-                    let to = Holder::warehouse(o["params"]["to"]["holderId"].as_str().unwrap().parse().unwrap());
-                    let good = o["params"]["itemId"].as_str().unwrap().to_string();
+                if o["type"] == "deliver_material" {
+                    let poi: Uuid = o["params"]["zone"]["poiId"].as_str().unwrap().parse().unwrap();
+                    let to = Holder::warehouse(s.pois[&poi].persistence_id);
+                    let good = o["params"]["goodType"].as_str().unwrap().to_string();
                     let qty = o["targetQuantity"].as_i64().unwrap_or(0);
                     *s.stacks.entry((to, good)).or_default() += qty;
                 }
@@ -238,6 +240,12 @@ impl InventoryClient for FakeWorld {
             h.active = false;
             Ok(())
         })
+    }
+
+    async fn create_poi(&self, poi: &NewPoi) -> Result<Uuid> {
+        let id = Uuid::new_v4();
+        self.with(|s| s.pois.insert(id, poi.clone()));
+        Ok(id)
     }
 }
 

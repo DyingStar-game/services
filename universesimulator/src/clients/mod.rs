@@ -75,6 +75,24 @@ pub struct StackView {
     pub available: i64,
 }
 
+/// A POI to create in `inventory` (`POST /api/internal/pois`): a point in the frame of the body
+/// named by `scene`, owned by `owner_type` / `owner_id`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewPoi {
+    pub owner_type: &'static str,
+    pub owner_id: Uuid,
+    pub name: String,
+    pub scene: String,
+    /// The persistence object it stands for, kept in its `metadata.persistence`: `inventory`
+    /// takes a `parentId` for another POI only.
+    pub persistence_id: Uuid,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub radius_m: f64,
+}
+
 #[async_trait]
 pub trait InventoryClient: Send + Sync {
     async fn stacks(&self, holder: Holder) -> Result<Vec<StackView>>;
@@ -87,6 +105,8 @@ pub trait InventoryClient: Send + Sync {
     async fn create_hold(&self, holder: Holder, good_type: &str, quantity: i64, ref_id: &str) -> Result<Uuid>;
     async fn consume_hold(&self, hold_id: Uuid, to: Holder) -> Result<()>;
     async fn release_hold(&self, hold_id: Uuid) -> Result<()>;
+    /// Creates a POI; returns the id `inventory` gave it.
+    async fn create_poi(&self, poi: &NewPoi) -> Result<Uuid>;
 }
 
 // ── Mission ──────────────────────────────────────────────────────────────────

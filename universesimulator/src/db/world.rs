@@ -154,9 +154,11 @@ pub struct Warehouse {
     pub y: Option<f64>,
     pub z: Option<f64>,
     pub active: bool,
+    /// Its POI in `inventory`, once a mission pointed at it.
+    pub inventory_poi_id: Option<Uuid>,
 }
 
-const WAREHOUSE_COLS: &str = "w.id, w.village_id, w.code, w.name, w.scenename, w.x, w.y, w.z, w.active";
+const WAREHOUSE_COLS: &str = "w.id, w.village_id, w.code, w.name, w.scenename, w.x, w.y, w.z, w.active, w.inventory_poi_id";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,6 +188,16 @@ pub async fn active_warehouses(pool: &PgPool, federation: Uuid) -> Result<Vec<Wa
     .bind(federation)
     .fetch_all(pool)
     .await?)
+}
+
+/// Records the POI `inventory` made for a warehouse.
+pub async fn set_warehouse_poi(pool: &PgPool, id: Uuid, poi: Uuid) -> Result<()> {
+    sqlx::query("UPDATE warehouses SET inventory_poi_id = $2, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(poi)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn get_warehouse(pool: &PgPool, id: Uuid) -> Result<Option<Warehouse>> {

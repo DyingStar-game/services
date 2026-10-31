@@ -282,7 +282,11 @@ async fn mining_order_delivers_to_the_main_warehouse(pool: PgPool) {
     assert_eq!(leg.quantity, 200);
     assert_eq!(leg.to_warehouse_id, Some(id(D1)));
     let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
-    assert_eq!(mission.objectives[0]["params"]["to"]["holderId"], id(D1).to_string());
+    // Delivered at the POI `inventory` made for the main warehouse, recorded on it.
+    assert_eq!(mission.objectives[0]["type"], "deliver_material");
+    let poi: Uuid = mission.objectives[0]["params"]["zone"]["poiId"].as_str().unwrap().parse().unwrap();
+    assert_eq!(fake.with(|s| s.pois[&poi].persistence_id), id(D1));
+    assert_eq!(world::get_warehouse(&st.pool, id(D1)).await.unwrap().unwrap().inventory_poi_id, Some(poi));
 
     fake.complete_mission(leg.mission_id.unwrap());
     simulation::tick(&st, true).await.unwrap();

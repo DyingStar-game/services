@@ -6,7 +6,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::{stocks, TickReport};
-use crate::clients::{Holder, MissionSummary, NewMission, INSUFFICIENT_FUNDS_CODES};
+use crate::clients::{Holder, MissionSummary, NewMission, NewPoi, INSUFFICIENT_FUNDS_CODES};
 use crate::db::{catalog::{self, Federation, Resource}, history, orders::{self, Leg, SupplyOrder}, world::{self, Warehouse}};
 use crate::error::{AppError, Result};
 use crate::pricing;
@@ -85,7 +85,12 @@ async fn publish(st: &AppState, fed: &Federation, leg: &Leg) -> Result<bool> {
     };
     let names = village_names(st, &leg).await?;
     let reward = reward(st, fed, &order, &leg, &resource).await?;
-    let mission = build_mission(fed, &order, &leg, &resource, from.as_ref(), &to, &names, reward);
+    let from_poi = match &from {
+        Some(w) => Some(warehouse_poi(st, fed, w).await?),
+        None => None,
+    };
+    let to_poi = warehouse_poi(st, fed, &to).await?;
+    let mission = build_mission(fed, &order, &leg, &resource, from.as_ref().zip(from_poi), (&to, to_poi), &names, reward);
     let created = match st.clients.mission.create(&mission).await {
         Ok(m) => m,
         Err(e) if e.upstream_code() == Some("DUPLICATE_SCRIPT_ID") => find_by_script(st, fed, &mission.script_id).await?,
@@ -161,6 +166,36 @@ async fn reward(st: &AppState, fed: &Federation, order: &SupplyOrder, leg: &Leg,
     })
 }
 
+/// The POI `inventory` holds for a warehouse, created the first time a mission points at it:
+/// `mission` resolves its objectives' places there, and `inventory` makes up its own ids.
+async fn warehouse_poi(st: &AppState, fed: &Federation, w: &Warehouse) -> Result<Uuid> {
+    if let Some(id) = w.inventory_poi_id {
+        return Ok(id);
+    }
+    let (Some(x), Some(y), Some(z)) = (w.x, w.y, w.z) else {
+        return Err(AppError::conflict("NO_POSITION", format!("warehouse {} has no position", w.code)));
+    };
+    let poi = NewPoi {
+        owner_type: "political",
+        owner_id: fed.political_entity_id,
+        name: w.name.clone(),
+        // Depots stand on the federation's planet, their position relative to its centre.
+        scene: fed.planet_internal_name.clone(),
+        persistence_id: w.id,
+        x,
+        y,
+        z,
+        radius_m: WAREHOUSE_POI_RADIUS_M,
+    };
+    let id = st.clients.inventory.create_poi(&poi).await?;
+    world::set_warehouse_poi(&st.pool, w.id, id).await?;
+    info!(warehouse = %w.code, poi = %id, "warehouse POI created");
+    Ok(id)
+}
+
+/// Radius of a warehouse's POI: a cargo depot and its loading area.
+const WAREHOUSE_POI_RADIUS_M: f64 = 40.0;
+
 fn location(w: &Warehouse, village: &str) -> Value {
     json!({
         "warehouseId": w.id,
@@ -178,14 +213,14 @@ pub fn build_mission(
     order: &SupplyOrder,
     leg: &Leg,
     resource: &Resource,
-    from: Option<&Warehouse>,
-    to: &Warehouse,
+    from: Option<(&Warehouse, Uuid)>,
+    (to, to_poi): (&Warehouse, Uuid),
     (from_village, to_village): &(Option<String>, String),
     reward: i64,
 ) -> NewMission {
     let payload = json!({ "source": "universesimulator", "orderId": order.id, "legId": leg.id, "seq": leg.seq, "resource": resource.code });
     let (title, category, objective) = match from {
-        Some(from) => (
+        Some((from, from_poi)) => (
             format!("Transport {} {} {} → {}", leg.quantity, resource.unit, resource.name, to_village),
             "transport",
             json!({
@@ -202,7 +237,12 @@ pub fn build_mission(
                 "unit": resource.unit,
                 "locationFrom": location(from, from_village.as_deref().unwrap_or_default()),
                 "locationTo": location(to, to_village),
-                "params": { "itemId": resource.inventory_good_type },
+                // `mission`'s `transport` kind (strict): the good, its pickup and delivery POIs.
+                "params": {
+                    "goodType": resource.inventory_good_type,
+                    "source": { "kind": "poi", "poiId": from_poi },
+                    "zone": { "kind": "poi", "poiId": to_poi },
+                },
                 "payload": payload,
             }),
         ),
@@ -210,12 +250,16 @@ pub fn build_mission(
             format!("Mine {} {} {} for {}", leg.quantity, resource.unit, resource.name, to_village),
             "mining",
             json!({
-                "type": "deliver_items",
+                "type": "deliver_material",
                 "title": format!("Mine {} {} of {} and deliver it to {}", leg.quantity, resource.unit, resource.name, to_village),
                 "targetQuantity": leg.quantity,
                 "unit": resource.unit,
                 "locationTo": location(to, to_village),
-                "params": { "itemId": resource.inventory_good_type, "to": { "holderType": "warehouse", "holderId": to.id } },
+                // `mission`'s `deliver_material` kind (strict): the good and its delivery POI.
+                "params": {
+                    "goodType": resource.inventory_good_type,
+                    "zone": { "kind": "poi", "poiId": to_poi },
+                },
                 "payload": payload,
             }),
         ),
