@@ -209,7 +209,7 @@ pub async fn run(mut ctx: RuntimeCtx, mut stop_rx: oneshot::Receiver<()>) {
                 info!(npc = %ctx.login, "stop requested before connection");
                 return;
             }
-            s = HorizonClient::connect(&ctx.svc.config.horizon_url, &token) => s,
+            s = HorizonClient::connect_with_config(&ctx.svc.config, &token) => s,
         };
         let (sender, mut receiver, my_uuid) = match session {
             Ok(s) => s,

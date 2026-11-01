@@ -5,6 +5,16 @@ use std::env;
 pub struct Config {
     /// WebSocket URL of the Horizon server.
     pub horizon_url: String,
+    /// How the NPCs reach Horizon: WebSocket + JSON (`horizon_url`), or
+    /// WebTransport + bitcode (`horizon_wt_url`).
+    pub horizon_transport: HorizonTransport,
+    /// WebTransport URL of the Horizon server (`https://host:port`).
+    pub horizon_wt_url: String,
+    /// Compression of Horizon's WebTransport listener (`[server.webtransport]
+    /// compression`): both sides must agree, it decides the frames' header byte.
+    pub horizon_compression: horizon_protocol::Codec,
+    /// Accept any certificate on WebTransport (self-signed, local dev only).
+    pub horizon_wt_insecure: bool,
     /// Bind address for the admin REST API (e.g. `0.0.0.0:9400`).
     pub admin_bind: String,
     /// PostgreSQL URL of the NPC database (roster, schedules, tasks, events).
@@ -85,10 +95,48 @@ pub struct Config {
     pub clock_time_scale: f64,
 }
 
+/// See [`Config::horizon_transport`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HorizonTransport {
+    WebSocketJson,
+    WebTransportBitcode,
+}
+
+impl HorizonTransport {
+    fn from_env_value(value: &str) -> Option<Self> {
+        match value {
+            "ws" | "websocket" => Some(Self::WebSocketJson),
+            "wt" | "webtransport" => Some(Self::WebTransportBitcode),
+            _ => None,
+        }
+    }
+}
+
+fn codec_from_env_value(value: &str) -> Option<horizon_protocol::Codec> {
+    match value {
+        "none" => Some(horizon_protocol::Codec::None),
+        "zstd" => Some(horizon_protocol::Codec::Zstd),
+        "lz4" => Some(horizon_protocol::Codec::Lz4),
+        _ => None,
+    }
+}
+
 impl Config {
     pub fn from_env() -> Self {
         let horizon_url = env::var("HORIZON_URL")
             .unwrap_or_else(|_| "ws://server.dyingstar-game.space:7040".to_string());
+
+        let horizon_transport = env::var("HORIZON_TRANSPORT")
+            .ok()
+            .and_then(|v| HorizonTransport::from_env_value(&v))
+            .unwrap_or(HorizonTransport::WebSocketJson);
+        let horizon_wt_url = env::var("HORIZON_WT_URL")
+            .unwrap_or_else(|_| "https://server.dyingstar-game.space:30001".to_string());
+        let horizon_compression = env::var("HORIZON_COMPRESSION")
+            .ok()
+            .and_then(|v| codec_from_env_value(&v))
+            .unwrap_or(horizon_protocol::Codec::Zstd);
+        let horizon_wt_insecure = env::var("HORIZON_WT_INSECURE").is_ok_and(|v| v == "true" || v == "1");
 
         let admin_bind =
             env::var("ADMIN_BIND").unwrap_or_else(|_| "0.0.0.0:9400".to_string());
@@ -200,6 +248,10 @@ impl Config {
 
         Self {
             horizon_url,
+            horizon_transport,
+            horizon_wt_url,
+            horizon_compression,
+            horizon_wt_insecure,
             admin_bind,
             database_url,
             spawn_stagger_ms,
@@ -256,6 +308,10 @@ impl std::fmt::Debug for Config {
         let db_target = self.database_url.rsplit('@').next().unwrap_or_default();
         f.debug_struct("Config")
             .field("horizon_url", &self.horizon_url)
+            .field("horizon_transport", &self.horizon_transport)
+            .field("horizon_wt_url", &self.horizon_wt_url)
+            .field("horizon_compression", &self.horizon_compression)
+            .field("horizon_wt_insecure", &self.horizon_wt_insecure)
             .field("admin_bind", &self.admin_bind)
             .field("database", &db_target)
             .field("keycloak_url", &self.keycloak_url)

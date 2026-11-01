@@ -57,6 +57,10 @@ Environment (see `.env.example`):
 | Var | Default | Purpose |
 |---|---|---|
 | `HORIZON_URL` | `ws://server.dyingstar-game.space:7040` | Horizon WebSocket URL |
+| `HORIZON_TRANSPORT` | `ws` | `ws`: WebSocket + JSON to `HORIZON_URL`; `wt`: WebTransport + bitcode to `HORIZON_WT_URL` (inputs on the reliable stream, transforms received as datagrams) |
+| `HORIZON_WT_URL` | `https://server.dyingstar-game.space:30001` | Horizon WebTransport URL (`[server.webtransport]`, UDP) |
+| `HORIZON_COMPRESSION` | `zstd` | Compression of Horizon's WebTransport listener (`none`, `zstd`, `lz4`); must match the server |
+| `HORIZON_WT_INSECURE` | `false` | Accept any certificate on WebTransport (self-signed, local dev only) |
 | `ADMIN_BIND` | `0.0.0.0:9400` | Admin REST bind |
 | `DATABASE_URL` | `postgres://npc:npc@localhost:5432/npc` | Roster, schedules, tasks, events |
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` | `http://keycloak:8080` / `dyingstar` | Token endpoint + Admin REST |
