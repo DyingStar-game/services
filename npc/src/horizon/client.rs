@@ -23,7 +23,7 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    config::Config,
+    config::{Config, HorizonTransport},
     error::{NpcError, Result},
     horizon::{
         gorc,
@@ -56,6 +56,11 @@ impl HorizonSender {
     pub fn __test_new(tx: mpsc::Sender<Value>) -> Self {
         Self { tx }
     }
+
+    /// A sender over a transport's writer task (see [`super::webtransport`]).
+    pub(crate) fn from_channel(tx: mpsc::Sender<Value>) -> Self {
+        Self { tx }
+    }
 }
 
 /// Receiver side: a stream of normalised inbound frames.
@@ -64,6 +69,18 @@ pub type HorizonReceiver = mpsc::Receiver<StandardizedFrame>;
 pub struct HorizonClient;
 
 impl HorizonClient {
+    /// Connect the way `cfg.horizon_transport` says: WebSocket + JSON to
+    /// `horizon_url`, or WebTransport + bitcode to `horizon_wt_url`.
+    pub async fn connect_with_config(
+        cfg: &Config,
+        token: &str,
+    ) -> Result<(HorizonSender, HorizonReceiver, String)> {
+        match cfg.horizon_transport {
+            HorizonTransport::WebSocketJson => Self::connect(&cfg.horizon_url, token).await,
+            HorizonTransport::WebTransportBitcode => super::webtransport::connect(cfg, token).await,
+        }
+    }
+
     /// Connect, send `player/init { token }`, await `init_ack`, then start
     /// reader & writer tasks. Returns a sender, a receiver and the assigned
     /// player UUID.
@@ -89,7 +106,12 @@ impl HorizonClient {
     ) -> (HorizonSender, HorizonReceiver, String) {
         let mut backoff = cfg.reconnect_backoff_initial_ms;
         loop {
-            match Self::connect(url, token).await {
+            let attempt = if cfg.horizon_transport == HorizonTransport::WebSocketJson {
+                Self::connect(url, token).await
+            } else {
+                Self::connect_with_config(cfg, token).await
+            };
+            match attempt {
                 Ok(t) => return t,
                 Err(e) => {
                     warn!(error = %e, backoff_ms = backoff, "Horizon connect failed; retrying");
