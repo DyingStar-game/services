@@ -53,6 +53,8 @@ export interface CreateMissionInput {
   category?: MissionCategory;
   issuerType?: MissionIssuerType;
   issuerId?: string | null;
+  /** In-fiction giver (faction + optional division), shown by the game. */
+  giver?: { faction: string; division?: string | null } | null;
   rewards?: RewardComponent[] | null;
   prerequisites?: PrerequisiteSpec[];
   /** Availability zones (empty = global). */
@@ -128,6 +130,8 @@ export interface MissionFilters {
   category?: MissionCategory;
   issuerType?: MissionIssuerType;
   issuerId?: string;
+  giverFaction?: string;
+  giverDivision?: string;
   visibility?: MissionVisibility;
   groupId?: string;
   groupClaimable?: boolean;
@@ -295,6 +299,8 @@ export async function listMissions(filters: MissionFilters, limit: number, offse
   if (filters.category) conditions.push(eq(missions.category, filters.category));
   if (filters.issuerType) conditions.push(eq(missions.issuerType, filters.issuerType));
   if (filters.issuerId) conditions.push(eq(missions.issuerId, filters.issuerId));
+  if (filters.giverFaction) conditions.push(eq(missions.giverFaction, filters.giverFaction));
+  if (filters.giverDivision) conditions.push(eq(missions.giverDivision, filters.giverDivision));
   if (filters.visibility) conditions.push(eq(missions.visibility, filters.visibility));
   if (filters.groupId) conditions.push(eq(missions.groupId, filters.groupId));
   if (filters.groupClaimable !== undefined) conditions.push(eq(missions.groupClaimable, filters.groupClaimable));
@@ -421,6 +427,8 @@ export async function createMission(
           category: input.category ?? 'divers',
           issuerType: input.issuerType ?? 'system',
           issuerId: input.issuerId ?? null,
+          giverFaction: input.giver?.faction ?? null,
+          giverDivision: input.giver?.division ?? null,
           rewards: spec.rewards.length > 0 ? spec.rewards : null,
           prerequisites: spec.prerequisites,
           zones: input.zones ?? [],

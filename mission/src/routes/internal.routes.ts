@@ -89,6 +89,8 @@ internalRoutes.get(
         category: req.query.category as never,
         issuerType: req.query.issuerType as never,
         issuerId: req.query.issuerId as string | undefined,
+        giverFaction: req.query.giverFaction as string | undefined,
+        giverDivision: req.query.giverDivision as string | undefined,
         visibility: req.query.visibility as never,
         groupId: req.query.groupId as string | undefined,
         groupClaimable: req.query.groupClaimable as never,
