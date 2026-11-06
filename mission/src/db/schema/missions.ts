@@ -126,6 +126,14 @@ export const missions = pgTable(
     issuerType: text('issuer_type').$type<MissionIssuerType>().notNull().default('system'),
     /** Opaque issuer UUID (corporation, city or player); null for the system. */
     issuerId: uuid('issuer_id'),
+    /**
+     * In-fiction mission giver shown to the players (the game owns the catalogue: name,
+     * colour, logo). Free slugs, e.g. faction `ares` + division `mining`; null = no
+     * named giver (player missions, or a giver the game falls back on from `issuerType`).
+     */
+    giverFaction: text('giver_faction'),
+    /** Division of `giverFaction` (a subsidiary, a department…); null = the faction itself. */
+    giverDivision: text('giver_division'),
     status: text('status').$type<MissionStatus>().notNull().default('available'),
     /**
      * Reward components; immutable after creation (the escrow is taken against them).

@@ -37,6 +37,17 @@ const booleanQuery = z
   .enum(['true', 'false'])
   .transform((v) => v === 'true');
 
+/** A mission giver id: lowercase slug owned by the game's catalogue (`ares`, `mining`). */
+const giverSlug = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/);
+
+/** In-fiction giver of a service-created mission (faction, optional division). */
+export const missionGiverSchema = z
+  .object({
+    faction: giverSlug,
+    division: giverSlug.nullish(),
+  })
+  .strict();
+
 /** Optional filter on a mission listing. */
 export const missionListQuery = limitQuery.extend({
   status: z.enum(MISSION_STATUSES).optional(),
@@ -44,6 +55,8 @@ export const missionListQuery = limitQuery.extend({
   category: z.enum(MISSION_CATEGORIES).optional(),
   issuerType: z.enum(MISSION_ISSUER_TYPES).optional(),
   issuerId: uuidSchema.optional(),
+  giverFaction: giverSlug.optional(),
+  giverDivision: giverSlug.optional(),
   visibility: z.enum(MISSION_VISIBILITIES).optional(),
   groupId: uuidSchema.optional(),
   groupClaimable: booleanQuery.optional(),
@@ -193,6 +206,8 @@ export const createMissionBody = z.object({
   category: z.enum(MISSION_CATEGORIES).default('divers'),
   issuerType: z.enum(MISSION_ISSUER_TYPES).default('system'),
   issuerId: uuidSchema.nullish(),
+  /** In-fiction giver shown to the players (service-created missions only). */
+  giver: missionGiverSchema.nullish(),
   /** Reward components; empty/omitted for reputation-only missions. */
   rewards: rewardsSchema.optional(),
   /** Prerequisite gates checked at acceptance (kind registry). */

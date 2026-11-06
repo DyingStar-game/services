@@ -185,6 +185,8 @@ paths:
         - $ref: '#/components/parameters/MissionCategory'
         - $ref: '#/components/parameters/IssuerType'
         - $ref: '#/components/parameters/IssuerId'
+        - $ref: '#/components/parameters/GiverFaction'
+        - $ref: '#/components/parameters/GiverDivision'
         - $ref: '#/components/parameters/Visibility'
         - $ref: '#/components/parameters/GroupId'
         - $ref: '#/components/parameters/GroupClaimable'
@@ -737,6 +739,8 @@ paths:
         - $ref: '#/components/parameters/MissionCategory'
         - $ref: '#/components/parameters/IssuerType'
         - $ref: '#/components/parameters/IssuerId'
+        - $ref: '#/components/parameters/GiverFaction'
+        - $ref: '#/components/parameters/GiverDivision'
         - $ref: '#/components/parameters/Visibility'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
@@ -1278,6 +1282,16 @@ components:
       name: issuerId
       in: query
       schema: { type: string, format: uuid }
+    GiverFaction:
+      name: giverFaction
+      in: query
+      description: In-fiction giver faction slug (e.g. `ares`)
+      schema: { $ref: '#/components/schemas/GiverSlug' }
+    GiverDivision:
+      name: giverDivision
+      in: query
+      description: Division slug of the giver faction (e.g. `mining`)
+      schema: { $ref: '#/components/schemas/GiverSlug' }
     Visibility:
       name: visibility
       in: query
@@ -1350,6 +1364,22 @@ components:
     IssuerType:
       type: string
       enum: [system, corporation, city, politics, player, npc]
+    GiverSlug:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9_-]{0,31}$'
+    MissionGiver:
+      type: object
+      description: >
+        In-fiction giver shown to the players. Free slugs owned by the game's catalogue
+        (name, colour, logo); a new faction needs no change here.
+      required: [faction]
+      additionalProperties: false
+      properties:
+        faction: { $ref: '#/components/schemas/GiverSlug' }
+        division:
+          oneOf:
+            - { $ref: '#/components/schemas/GiverSlug' }
+            - { type: 'null' }
     ObjectiveType:
       type: string
       description: >
@@ -1456,6 +1486,8 @@ components:
         category: { $ref: '#/components/schemas/MissionCategory' }
         issuerType: { $ref: '#/components/schemas/IssuerType' }
         issuerId: { type: [string, 'null'], format: uuid }
+        giverFaction: { type: [string, 'null'], description: In-fiction giver faction (null = none) }
+        giverDivision: { type: [string, 'null'], description: Division of the giver faction }
         status: { $ref: '#/components/schemas/MissionStatus' }
         rewards:
           type: [array, 'null']
@@ -1680,6 +1712,7 @@ components:
         category: { $ref: '#/components/schemas/MissionCategory' }
         issuerType: { $ref: '#/components/schemas/IssuerType' }
         issuerId: { type: [string, 'null'], format: uuid }
+        giver: { $ref: '#/components/schemas/MissionGiver' }
         rewards:
           type: array
           description: Reward components (empty/omitted for reputation-only missions)
