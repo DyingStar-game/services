@@ -344,6 +344,18 @@ export const settleBody = z.object({ playerId: uuidSchema });
 /** Verify the service objectives of a holder's assignment (internal). */
 export const internalVerifyBody = z.object({ playerId: uuidSchema });
 
+/** Goods moved between a player and a warehouse (game server, a crate shelved or taken off). */
+export const goodsMoveBody = z.object({
+  playerId: uuidSchema,
+  goodType: z.string().trim().min(1).max(128),
+  quantity: z.number().int().positive(),
+  direction: z.enum(['drop', 'load']),
+  /** Inventory holder id of the warehouse: the cargo depot's uuid. */
+  warehouseId: z.string().trim().min(1).max(128),
+  /** Unique per move, so a retried call counts nothing twice. */
+  key: z.string().trim().min(1).max(200),
+});
+
 /** Assign a mission to a holder (player or NPC) on the game server's behalf. */
 export const internalAssignBody = z.object({
   playerId: uuidSchema,

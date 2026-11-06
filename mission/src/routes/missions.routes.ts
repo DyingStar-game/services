@@ -205,6 +205,12 @@ missionsRoutes.post(
   validate(completeBody),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
+    // A mission that does not complete on its own is turned in at a town hall kiosk: the game
+    // server validates it there (internal complete), never the player from anywhere.
+    const mission = await requireMission(req.params.missionId);
+    if (!mission.autoComplete) {
+      throw new HttpError(403, 'TURN_IN_AT_KIOSK', 'This mission is turned in at a town hall kiosk');
+    }
     res.json(await completeMission(req.params.missionId, player.id, { partial: req.body.partial }));
   }),
 );

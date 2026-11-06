@@ -37,9 +37,11 @@ import { runExpirySweep } from '../scheduler.js';
 import { getInternalMissionDetail } from '../services/detail.service.js';
 import { upsertPlayerStates } from '../services/playerStates.service.js';
 import { findPoisInUse } from '../services/poiUsage.service.js';
+import { recordGoodsMove } from '../services/goodsMoves.service.js';
 import {
   createMissionBody,
   eventBody,
+  goodsMoveBody,
   internalAssignBody,
   internalCompleteBody,
   missionIdParams,
@@ -226,6 +228,19 @@ internalRoutes.post(
   validate(objectiveParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json(await confirmObjective(req.params.missionId, req.params.objectiveId));
+  }),
+);
+
+/**
+ * POST /missions/goods-moves — Goods a player put into, or took out of, a warehouse (game server: a
+ * crate shelved in a cargo depot, or taken off a shelf). Counted by the `via: 'warehouse'` objectives.
+ */
+internalRoutes.post(
+  '/missions/goods-moves',
+  requireServiceRole(SERVICE_ROLES.missionProgress),
+  validate(goodsMoveBody),
+  asyncHandler(async (req, res) => {
+    res.json(await recordGoodsMove(req.body));
   }),
 );
 

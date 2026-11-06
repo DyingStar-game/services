@@ -18,8 +18,26 @@ const paramsSchema = z
     source: poiZone,
     /** Delivery POI: the assignee must be here with the goods carried. */
     zone: poiZone,
+    /**
+     * The good delivered, when the trip transforms it (ore loaded at the mine, refined on the way,
+     * ingots delivered): defaults to `goodType`. Only counted with `via: 'warehouse'`.
+     */
+    deliverGoodType: z.string().trim().min(1).max(128).optional(),
+    /**
+     * How delivery is measured. `zone` (default): the goods the assignee carries while inside the
+     * zone POI. `warehouse`: the goods put INTO the zone's warehouse (the POI's
+     * `metadata.persistence`), reported by the game server as goods moves — walking in with the
+     * crates is not delivering them.
+     */
+    via: z.enum(['zone', 'warehouse']).default('zone'),
   })
   .strict();
+
+/** Progress of a `via: 'warehouse'` objective: what the goods moves put into its warehouse, capped. */
+function warehouseProgress(ctx: MeasureContext): number {
+  const delivered = Number(((ctx.objective.state ?? {}) as { delivered?: number }).delivered ?? 0);
+  return Math.min(delivered, ctx.objective.targetQuantity);
+}
 
 async function resolveZonePois(poiId: string): Promise<PoiGeometryMap> {
   try {
@@ -68,6 +86,17 @@ export const transportKind: ObjectiveKind = {
         properties: { kind: { const: 'poi' }, poiId: { type: 'string', format: 'uuid' } },
         additionalProperties: false,
       },
+      deliverGoodType: {
+        type: 'string',
+        maxLength: 128,
+        description: 'Good delivered when the trip transforms it (default: goodType); via warehouse only',
+      },
+      via: {
+        type: 'string',
+        enum: ['zone', 'warehouse'],
+        default: 'zone',
+        description: "'zone' = carried inside the zone; 'warehouse' = put into the zone's warehouse (goods moves)",
+      },
     },
     additionalProperties: false,
   },
@@ -78,7 +107,9 @@ export const transportKind: ObjectiveKind = {
   },
   categories: ['transport', 'delivery', 'mining'],
   async measure(ctx: MeasureContext): Promise<number> {
-    const { goodType, source, zone } = paramsSchema.parse(ctx.objective.params ?? {});
+    const { goodType, source, zone, via } = paramsSchema.parse(ctx.objective.params ?? {});
+    // Loaded at the source warehouse, delivered into the zone's: both reported as goods moves.
+    if (via === 'warehouse') return warehouseProgress(ctx);
     const state = await loadPlayerState(ctx, ctx.playerId);
     if (!state) return 0;
     if (!isStateFresh(state)) return 0; // stale
