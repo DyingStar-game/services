@@ -125,6 +125,8 @@ pub struct NewMission {
     pub escrow: Option<serde_json::Value>,
     pub script_id: String,
     pub objectives: Vec<serde_json::Value>,
+    /// false: the mission waits, objectives done, to be turned in at a town hall kiosk.
+    pub auto_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -22,9 +22,8 @@
   "resources": [
     { "code": "water", "name": "Water", "category": "water", "unit": "l", "inventoryGoodType": "water", "massPerUnitKg": 1.0, "basePrice": 2.0 },
     { "code": "food_ration", "name": "Food ration", "category": "food", "unit": "unit", "inventoryGoodType": "food_ration", "massPerUnitKg": 0.5, "basePrice": 8.0 },
-    { "code": "ore_fer", "name": "Iron ore", "category": "ore", "unit": "kg", "inventoryGoodType": "ore_fer", "massPerUnitKg": 1.0, "basePrice": 5.0 },
-    { "code": "ore_cuivre", "name": "Copper ore", "category": "ore", "unit": "kg", "inventoryGoodType": "ore_cuivre", "massPerUnitKg": 1.0, "basePrice": 9.0 },
-    { "code": "ore_titane", "name": "Titanium ore", "category": "ore", "unit": "kg", "inventoryGoodType": "ore_titane", "massPerUnitKg": 1.0, "basePrice": 25.0 }
+    { "code": "ore.gold", "name": "Crushed gold ore", "category": "ore", "unit": "l", "inventoryGoodType": "ore.gold", "massPerUnitKg": 0.8, "basePrice": 30.0 },
+    { "code": "ingot.gold", "name": "Gold ingots", "category": "ore", "unit": "l", "inventoryGoodType": "ingot.gold", "massPerUnitKg": 0.8, "basePrice": 60.0, "refinedFrom": "ore.gold" }
   ],
   "villages": {
     "defaults": {
@@ -39,35 +38,29 @@
       "capacities": [
         { "resource": "water", "capacity": 20000, "initialStock": 800 },
         { "resource": "food_ration", "capacity": 10000, "initialStock": 400 },
-        { "resource": "ore_fer", "capacity": 50000, "initialStock": 0 },
-        { "resource": "ore_cuivre", "capacity": 50000, "initialStock": 0 },
-        { "resource": "ore_titane", "capacity": 20000, "initialStock": 0 }
+        { "resource": "ore.gold", "capacity": 5000, "initialStock": 0 },
+        { "resource": "ingot.gold", "capacity": 5000, "initialStock": 0 }
       ]
     },
     "byType": {
       "factory": {
         "policies": [
-          { "resource": "ore_fer", "minThreshold": 500, "targetLevel": 2000, "perThousand": true },
-          { "resource": "ore_cuivre", "minThreshold": 200, "targetLevel": 800, "perThousand": true }
+          { "resource": "ingot.gold", "minThreshold": 40, "targetLevel": 120, "perThousand": true }
         ],
         "flows": [
           { "resource": "water", "ratePerHour": 120, "perThousand": true, "source": "industry", "label": "Wells and recyclers" },
           { "resource": "food_ration", "ratePerHour": 60, "perThousand": true, "source": "industry", "label": "Hydroponic farms" },
-          { "resource": "ore_fer", "ratePerHour": -40, "perThousand": true, "source": "industry", "label": "Foundries" },
-          { "resource": "ore_cuivre", "ratePerHour": -12, "perThousand": true, "source": "industry", "label": "Electronics" }
+          { "resource": "ingot.gold", "ratePerHour": -4, "perThousand": true, "source": "industry", "label": "Foundries" }
         ],
         "capacities": [
           { "resource": "water", "capacity": 50000, "initialStock": 4000 },
           { "resource": "food_ration", "capacity": 30000, "initialStock": 2000 },
-          { "resource": "ore_fer", "capacity": 50000, "initialStock": 1500 },
-          { "resource": "ore_cuivre", "capacity": 50000, "initialStock": 500 }
+          { "resource": "ingot.gold", "capacity": 5000, "initialStock": 80 }
         ]
       },
       "mining": {
         "mineralSources": [
-          { "resource": "ore_fer", "remainingUnits": 2000000, "maxUnitsPerMission": 500 },
-          { "resource": "ore_cuivre", "remainingUnits": 500000, "maxUnitsPerMission": 300 },
-          { "resource": "ore_titane", "remainingUnits": 100000, "maxUnitsPerMission": 100 }
+          { "resource": "ore.gold", "remainingUnits": 2000000, "maxUnitsPerMission": 60 }
         ]
       }
     },
