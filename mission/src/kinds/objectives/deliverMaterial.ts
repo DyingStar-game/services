@@ -8,6 +8,7 @@ import { getStack } from '../../services/inventory.client.js';
 import { resolvePois } from '../../services/inventory.client.js';
 import { placeToLocation, zoneMatches, type PoiGeometryMap } from '../../services/zones.service.js';
 import type { MeasureContext, ObjectiveKind } from '../types.js';
+import { viaJsonSchema, viaSchema, warehouseProgress } from './warehouse.js';
 import { STATE_TTL_MS, isStateFresh, loadPlayerState } from './playerState.js';
 
 const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
@@ -25,6 +26,8 @@ const paramsSchema = z
      * target contributes nothing, no matter how much they carry.
      */
     scope: z.enum(['assignee', 'all']).default('assignee'),
+    /** How delivery is measured: carried in the zone, or put into its warehouse (see warehouse.ts). */
+    via: viaSchema,
   })
   .strict();
 
@@ -123,6 +126,7 @@ export const deliverMaterialKind: ObjectiveKind = {
         description:
           "who counts: 'assignee' = the measured carrier only; 'all' = the sum over every active assignee currently inside the target",
       },
+      via: viaJsonSchema,
     },
     additionalProperties: false,
   },
@@ -133,7 +137,8 @@ export const deliverMaterialKind: ObjectiveKind = {
   },
   categories: ['delivery', 'transport', 'mining'],
   async measure(ctx: MeasureContext): Promise<number> {
-    const { goodType, zone, scope } = paramsSchema.parse(ctx.objective.params ?? {});
+    const { goodType, zone, scope, via } = paramsSchema.parse(ctx.objective.params ?? {});
+    if (via === 'warehouse') return warehouseProgress(ctx);
     const geometry = await resolveZonePois(zone.poiId);
 
     // Group delivery: pool every active assignee currently inside the target.

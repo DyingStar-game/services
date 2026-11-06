@@ -64,7 +64,7 @@ Contract: [`openapi.yaml`](openapi.yaml) (also served at `GET /openapi.yaml`).
 
 ```http
 POST /api/internal/warehouse-deliveries
-{ "idempotencyKey": "drop-…", "warehouse": { "poiUuid": "…" }, "resource": { "code": "ore_fer" },
+{ "idempotencyKey": "drop-…", "warehouse": { "poiUuid": "…" }, "resource": { "code": "ore.gold" },
   "quantity": 500, "deliverer": { "type": "player", "id": "…" } }
 → 201 { "acceptedQuantity": 500, "rejectedQuantity": 0, "stock": 1500, "delivery": { … } }
 ```

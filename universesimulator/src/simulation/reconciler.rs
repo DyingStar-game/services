@@ -1,4 +1,6 @@
-//! Learns mission outcomes by polling the mission service and moves the goods (ADR 0007).
+//! Learns mission outcomes by polling the mission service (ADR 0007). The goods are moved by the
+//! players themselves (shelved in the destination warehouse): a completed leg moves nothing, it
+//! only closes the bookkeeping — a hold left by an older publication is still consumed.
 
 use std::collections::HashMap;
 
@@ -7,7 +9,7 @@ use uuid::Uuid;
 
 use super::TickReport;
 use crate::clients::Holder;
-use crate::db::{catalog::Federation, orders::{self, Leg}, world};
+use crate::db::{catalog::{self, Federation}, orders::{self, Leg}, world};
 use crate::error::{AppError, Result};
 use crate::state::AppState;
 
@@ -49,9 +51,23 @@ async fn complete(st: &AppState, leg: &Leg) -> Result<()> {
             Err(e) => return Err(e),
         }
     }
+    // What was mined, and where: the destination's own source, or the mine of a mining_transport
+    // (the input of the refined resource delivered).
+    let mined = match order.kind.as_str() {
+        "mining" => Some((leg.to_village_id, order.resource_id)),
+        "mining_transport" => {
+            let resource = catalog::get_resource(&st.pool, order.resource_id).await?;
+            let input = match resource.and_then(|r| r.refined_from) {
+                Some(code) => catalog::find_resource(&st.pool, Some(&code), None).await?.map(|r| r.id),
+                None => Some(order.resource_id),
+            };
+            leg.from_village_id.zip(input)
+        }
+        _ => None,
+    };
     let mut tx = st.pool.begin().await?;
-    if order.kind == "mining" {
-        world::consume_mineral_source(&mut tx, leg.to_village_id, order.resource_id, leg.quantity).await?;
+    if let Some((village, resource)) = mined {
+        world::consume_mineral_source(&mut tx, village, resource, leg.quantity).await?;
     }
     orders::complete_leg(&mut tx, leg).await?;
     tx.commit().await?;

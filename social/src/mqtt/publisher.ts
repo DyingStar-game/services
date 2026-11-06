@@ -5,9 +5,12 @@
  * player whose subscription is not live simply vanishes in the broker (the presence
  * check in `notifications.service` avoids even publishing for offline players).
  *
- * Authentication mirrors the chat clients: our own Keycloak service account token,
- * sent as the MQTT password (mosquitto-go-auth forwards it to chatauth, which allows
- * the service client on `notify/#`). The token is fetched per connection attempt and
+ * Authentication mirrors the chat clients: our own Keycloak service account token, sent
+ * as the MQTT USERNAME — mosquitto-go-auth's jwt backend (remote mode) reads the token from
+ * the username and forwards it to chatauth, which allows the service client on `notify/#`;
+ * the password only has to be non-empty. Sent as the password, the broker forwarded the
+ * client id instead ("Bearer svc-social") and refused every connection: no notification
+ * ever reached a player. The token is fetched per connection attempt and
  * connections never auto-reconnect with a stale token: a failed attempt is retried
  * after a cooldown, with a fresh one. Without `MOSQUITTO_URL` the publisher is off;
  * without `MQTT_CLIENT_SECRET` it connects anonymously (dev broker only).
@@ -70,11 +73,13 @@ async function ensureClient(): Promise<MqttClient | null> {
 
   connecting = (async () => {
     try {
-      const password = env.mqtt.clientSecret ? await getToken() : undefined;
+      const token = env.mqtt.clientSecret ? await getToken() : undefined;
       destroyClient();
       const c = connect(env.mqtt.url, {
-        username: env.mqtt.clientId,
-        password,
+        // The jwt backend reads the token from the username (see the header); anonymous dev
+        // broker: no credentials at all.
+        username: token,
+        password: token ? 'jwt' : undefined,
         clean: true,
         reconnectPeriod: 0,
         connectTimeout: CONNECT_TIMEOUT_MS,

@@ -151,6 +151,9 @@ pub struct Resource {
     pub inventory_good_type: String,
     pub mass_per_unit_kg: f64,
     pub base_price: f64,
+    /// The resource it is refined from (its `code`): ingots from crushed ore. A shortage of it is
+    /// met with its input, refined at the destination.
+    pub refined_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,6 +168,9 @@ pub struct ResourceInput {
     #[serde(default = "default_mass")]
     pub mass_per_unit_kg: f64,
     pub base_price: f64,
+    /// Code of the resource it is refined from (declared before it in the seed).
+    #[serde(default)]
+    pub refined_from: Option<String>,
 }
 
 fn default_unit() -> String {
@@ -176,13 +182,13 @@ fn default_mass() -> f64 {
 }
 
 pub async fn list_resources(pool: &PgPool) -> Result<Vec<Resource>> {
-    Ok(sqlx::query_as("SELECT id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price FROM resources ORDER BY code")
+    Ok(sqlx::query_as("SELECT id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from FROM resources ORDER BY code")
         .fetch_all(pool)
         .await?)
 }
 
 pub async fn get_resource(pool: &PgPool, id: Uuid) -> Result<Option<Resource>> {
-    Ok(sqlx::query_as("SELECT id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price FROM resources WHERE id = $1")
+    Ok(sqlx::query_as("SELECT id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from FROM resources WHERE id = $1")
         .bind(id)
         .fetch_optional(pool)
         .await?)
@@ -191,7 +197,7 @@ pub async fn get_resource(pool: &PgPool, id: Uuid) -> Result<Option<Resource>> {
 /// Finds a resource by code or inventory good type.
 pub async fn find_resource(pool: &PgPool, code: Option<&str>, good_type: Option<&str>) -> Result<Option<Resource>> {
     Ok(sqlx::query_as(
-        "SELECT id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price FROM resources
+        "SELECT id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from FROM resources
          WHERE ($1::TEXT IS NOT NULL AND code = $1) OR ($2::TEXT IS NOT NULL AND inventory_good_type = $2)",
     )
     .bind(code)
@@ -203,12 +209,12 @@ pub async fn find_resource(pool: &PgPool, code: Option<&str>, good_type: Option<
 pub async fn upsert_resource(pool: &PgPool, r: &ResourceInput) -> Result<Resource> {
     Ok(sqlx::query_as(
         r#"
-        INSERT INTO resources (code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO resources (code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (code) DO UPDATE SET
             name = $2, category = $3, unit = $4, inventory_good_type = $5,
-            mass_per_unit_kg = $6, base_price = $7, updated_at = now()
-        RETURNING id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price
+            mass_per_unit_kg = $6, base_price = $7, refined_from = $8, updated_at = now()
+        RETURNING id, code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from
         "#,
     )
     .bind(&r.code)
@@ -218,6 +224,7 @@ pub async fn upsert_resource(pool: &PgPool, r: &ResourceInput) -> Result<Resourc
     .bind(&r.inventory_good_type)
     .bind(r.mass_per_unit_kg)
     .bind(r.base_price)
+    .bind(&r.refined_from)
     .fetch_one(pool)
     .await?)
 }

@@ -265,9 +265,13 @@ async fn transport_order_goes_village_by_village(pool: PgPool) {
     assert_eq!(second.from_warehouse_id, Some(id(D2)), "taken where the first leg delivered");
     assert_eq!(second.to_warehouse_id, Some(id(D1)));
 
+    // The players move the goods (shelved, counted by the mission): nothing is reserved at the
+    // source, nothing moved by the simulator when the leg completes.
+    assert!(first.hold_id.is_none() && second.hold_id.is_none());
+    let water_before = water(&fake, D1);
     fake.complete_mission(second.mission_id.unwrap());
     simulation::tick(&st, true).await.unwrap();
-    assert_eq!(water(&fake, D1), 300);
+    assert_eq!(water(&fake, D1), water_before);
     let order = orders::get_order(&st.pool, second.order_id).await.unwrap().unwrap();
     assert_eq!(order.status, "completed");
 }
@@ -326,13 +330,79 @@ async fn cancelled_missions_are_retried_then_fail(pool: PgPool) {
     assert_eq!(r.legs_retried, 1);
     let retried = legs(&st).await.into_iter().find(|l| l.id == first.id).unwrap();
     assert_eq!(retried.status, "published");
-    assert_eq!(retried.hold_id, first.hold_id);
     assert_ne!(retried.mission_id, first.mission_id);
     fake.set_mission_status(retried.mission_id.unwrap(), "cancelled");
     let r = simulation::tick(&st, true).await.unwrap();
     assert!(r.orders_failed >= 1);
     assert_eq!(orders::get_order(&st.pool, first.order_id).await.unwrap().unwrap().status, "failed");
-    assert!(fake.with(|s| !s.holds[&first.hold_id.unwrap()].active));
+}
+
+/// Ingots refined from the ore the mining village holds: the city's shortage is met with the ore.
+async fn ingots(st: &AppState) -> catalog::Resource {
+    catalog::upsert_resource(&st.pool, &catalog::ResourceInput {
+        code: "ingot_fer".into(),
+        name: "Iron ingots".into(),
+        category: "ore".into(),
+        unit: "kg".into(),
+        inventory_good_type: "ingot_fer".into(),
+        mass_per_unit_kg: 1.0,
+        base_price: 20.0,
+        refined_from: Some("ore_fer".into()),
+    })
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn missions_are_measured_on_warehouses_and_turned_in_at_a_town_hall(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    simulation::tick(&st, true).await.unwrap();
+    let leg = legs(&st).await.into_iter().find(|l| l.mission_id.is_some()).unwrap();
+    let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
+    assert!(!mission.auto_complete);
+    assert_eq!(mission.objectives[0]["params"]["via"], "warehouse");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_shortage_of_ingots_ships_the_ore_to_refine(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let ingot = ingots(&st).await;
+    // The mining village holds crushed ore; the city needs ingots.
+    fake.set_quantity(Holder::warehouse(id(D1)), "ore_fer", 500);
+    world::upsert_policy(&st.pool, &world::VillagePolicy { village_id: id(V3), resource_id: ingot.id, min_threshold: 100, target_level: 300 }).await.unwrap();
+    simulation::tick(&st, true).await.unwrap();
+    let (transport, _) = orders::list_orders(&st.pool, &orders::OrderFilter { kind: Some("transport".into()), resource: Some(ingot.id), ..Default::default() }).await.unwrap();
+    assert_eq!(transport.len(), 1);
+    assert_eq!(transport[0].origin_village_id, Some(id(V1)));
+    let leg = legs(&st).await.into_iter().find(|l| l.order_id == transport[0].id && l.seq == 0).unwrap();
+    assert_eq!(leg.from_warehouse_id, Some(id(D1)), "picked up where the ore is");
+    let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
+    let params = &mission.objectives[0]["params"];
+    assert_eq!(params["goodType"], "ore_fer", "the ore is loaded");
+    assert_eq!(params["deliverGoodType"], "ingot_fer", "the ingots are delivered");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn ingots_nobody_has_the_ore_for_are_mined_and_delivered_in_one_mission(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let ingot = ingots(&st).await;
+    world::upsert_policy(&st.pool, &world::VillagePolicy { village_id: id(V3), resource_id: ingot.id, min_threshold: 100, target_level: 300 }).await.unwrap();
+    simulation::tick(&st, true).await.unwrap();
+    let (orders_mt, _) = orders::list_orders(&st.pool, &orders::OrderFilter { kind: Some("mining_transport".into()), ..Default::default() }).await.unwrap();
+    assert_eq!(orders_mt.len(), 1);
+    assert_eq!(orders_mt[0].origin_village_id, Some(id(V1)), "mined where the ore is");
+    assert_eq!(orders_mt[0].destination_village_id, id(V3));
+    assert_eq!(orders_mt[0].quantity, 200, "capped by maxUnitsPerMission");
+    let leg = legs(&st).await.into_iter().find(|l| l.order_id == orders_mt[0].id).unwrap();
+    assert_eq!(leg.to_warehouse_id, Some(id(D3A)));
+    let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
+    assert_eq!(mission.objectives[0]["type"], "deliver_material");
+    assert_eq!(mission.objectives[0]["params"]["goodType"], "ingot_fer");
+
+    fake.complete_mission(leg.mission_id.unwrap());
+    simulation::tick(&st, true).await.unwrap();
+    let source = world::list_mineral_sources(&st.pool, None, Some(id(V1))).await.unwrap().remove(0);
+    assert_eq!(source.remaining_units, Some(800), "the mine's ore was spent");
 }
 
 #[sqlx::test(migrations = "./migrations")]

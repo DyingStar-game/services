@@ -194,6 +194,7 @@ paths:
           enum:
           - transport
           - mining
+          - mining_transport
       - name: resource
         in: query
         schema:
@@ -1710,6 +1711,7 @@ components:
           enum:
           - transport
           - mining
+          - mining_transport
         federationId:
           $ref: '#/components/schemas/Uuid'
         resourceId:
@@ -1809,6 +1811,7 @@ components:
           enum:
           - transport
           - mining
+          - mining_transport
         resourceId:
           $ref: '#/components/schemas/Uuid'
         fromVillageId:

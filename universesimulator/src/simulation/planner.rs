@@ -1,5 +1,10 @@
 //! Turns village shortages into supply orders: mining where the village has a mineral source,
 //! otherwise transport from the nearest village with a surplus (ADR 0006, 0007, 0013).
+//!
+//! A refined resource (ingots, `refined_from` crushed ore) is met with its INPUT: a transport of the
+//! input from the nearest village holding a surplus of it (refined on the way, delivered as the
+//! resource), or else one mission that mines it in the nearest village with a source and delivers
+//! the result (`mining_transport`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -37,6 +42,7 @@ pub async fn graph(st: &AppState, fed: &Federation) -> Result<Graph> {
 
 pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut TickReport) -> Result<()> {
     let resources: HashMap<_, _> = catalog::list_resources(&st.pool).await?.into_iter().map(|r| (r.id, r)).collect();
+    let by_code: HashMap<_, _> = resources.values().map(|r| (r.code.clone(), r.id)).collect();
     let policies = world::list_policies(&st.pool, None, Some(fed.id)).await?;
     let targets: HashMap<_, _> = policies.iter().map(|p| ((p.village_id, p.resource_id), p.target_level)).collect();
     let sources: HashMap<_, _> = world::list_mineral_sources(&st.pool, Some(fed.id), None)
@@ -60,6 +66,56 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
             continue;
         };
         if orders::open_order_count(&st.pool, p.village_id, p.resource_id).await? > 0 {
+            continue;
+        }
+        // What is shipped or mined for it: the resource itself, or the input it is refined from.
+        let input = input_of(res, &by_code);
+        if input != p.resource_id {
+            let src_key = |v: Uuid| (v, input);
+            let surplus_of = |v: Uuid, promised: &HashMap<(Uuid, Uuid), i64>| {
+                let avail = stocks.village(v, input).available() - promised.get(&src_key(v)).copied().unwrap_or(0);
+                surplus(avail, targets.get(&src_key(v)).copied())
+            };
+            let path = graph
+                .nearest_source(p.village_id, |v| v != p.village_id && surplus_of(v, &promised) >= qty)
+                .or_else(|| graph.nearest_source(p.village_id, |v| v != p.village_id && surplus_of(v, &promised) > 0));
+            if let Some(path) = path {
+                let origin = path.hops[0].from;
+                qty = qty.min(surplus_of(origin, &promised));
+                create_transport_order(st, fed, p.resource_id, qty, &path, "auto_shortage", None).await?;
+                *incoming.entry(key).or_default() += qty;
+                *promised.entry(src_key(origin)).or_default() += qty;
+                report.orders_created += 1;
+                info!(from = %origin, to = %p.village_id, resource = %res.code, qty, "refining transport order");
+                continue;
+            }
+            // Nobody holds the input: mine it where it is found, refine it, deliver the result.
+            let Some(path) = graph.nearest_source(p.village_id, |v| sources.contains_key(&src_key(v))) else {
+                warn!(village = %p.village_id, resource = %res.code, qty, "no source of its input reachable");
+                continue;
+            };
+            let mine = path.hops[0].from;
+            let src = &sources[&src_key(mine)];
+            let amount = src.remaining_units.map_or(src.max_units_per_mission, |left| left.min(src.max_units_per_mission)).min(qty);
+            if amount <= 0 {
+                continue;
+            }
+            let order = NewOrder {
+                kind: "mining_transport",
+                federation_id: fed.id,
+                resource_id: p.resource_id,
+                quantity: amount,
+                origin: Some(mine),
+                destination: p.village_id,
+                path: path.nodes(),
+                trigger: "auto_mining",
+                created_by: None,
+                legs: vec![NewLeg { from: Some(mine), to: p.village_id, distance_m: path.hops.iter().map(|h| h.distance_m).sum() }],
+            };
+            orders::create_order(&st.pool, &order).await?;
+            *incoming.entry(key).or_default() += amount;
+            report.orders_created += 1;
+            info!(mine = %mine, to = %p.village_id, resource = %res.code, amount, "mining + transport order");
             continue;
         }
 
@@ -137,6 +193,12 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
         info!(from = %origin, to = %p.village_id, resource = %res.code, qty, hops = path.hops.len(), "transport order");
     }
     Ok(())
+}
+
+/// The resource shipped or mined to meet a shortage of [res]: its input when it is refined from one
+/// (ingots from crushed ore), else itself.
+pub fn input_of(res: &catalog::Resource, by_code: &HashMap<String, Uuid>) -> Uuid {
+    res.refined_from.as_ref().and_then(|code| by_code.get(code).copied()).unwrap_or(res.id)
 }
 
 pub async fn create_transport_order(

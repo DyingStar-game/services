@@ -6,6 +6,7 @@ import { missionObjectives } from '../../db/schema/index.js';
 import { getStack, resolvePois } from '../../services/inventory.client.js';
 import { zoneMatches, type PoiGeometryMap } from '../../services/zones.service.js';
 import type { MeasureContext, ObjectiveKind } from '../types.js';
+import { viaJsonSchema, viaSchema, warehouseProgress } from './warehouse.js';
 import { isStateFresh, loadPlayerState, stateLocation } from './playerState.js';
 
 const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
@@ -18,6 +19,13 @@ const paramsSchema = z
     source: poiZone,
     /** Delivery POI: the assignee must be here with the goods carried. */
     zone: poiZone,
+    /**
+     * The good delivered, when the trip transforms it (ore loaded at the mine, refined on the way,
+     * ingots delivered): defaults to `goodType`. Only counted with `via: 'warehouse'`.
+     */
+    deliverGoodType: z.string().trim().min(1).max(128).optional(),
+    /** How delivery is measured: carried in the zone, or put into its warehouse (see warehouse.ts). */
+    via: viaSchema,
   })
   .strict();
 
@@ -68,6 +76,12 @@ export const transportKind: ObjectiveKind = {
         properties: { kind: { const: 'poi' }, poiId: { type: 'string', format: 'uuid' } },
         additionalProperties: false,
       },
+      deliverGoodType: {
+        type: 'string',
+        maxLength: 128,
+        description: 'Good delivered when the trip transforms it (default: goodType); via warehouse only',
+      },
+      via: viaJsonSchema,
     },
     additionalProperties: false,
   },
@@ -78,7 +92,9 @@ export const transportKind: ObjectiveKind = {
   },
   categories: ['transport', 'delivery', 'mining'],
   async measure(ctx: MeasureContext): Promise<number> {
-    const { goodType, source, zone } = paramsSchema.parse(ctx.objective.params ?? {});
+    const { goodType, source, zone, via } = paramsSchema.parse(ctx.objective.params ?? {});
+    // Loaded at the source warehouse, delivered into the zone's: both reported as goods moves.
+    if (via === 'warehouse') return warehouseProgress(ctx);
     const state = await loadPlayerState(ctx, ctx.playerId);
     if (!state) return 0;
     if (!isStateFresh(state)) return 0; // stale

@@ -524,6 +524,10 @@ paths:
         mission in proportionally to the weighted progress of its required objectives
         (`allowPartial` missions only): the caller receives the matching credits share,
         never any item, and the assignment becomes terminal.
+
+        A mission created with `autoComplete: false` is turned in at a town hall kiosk:
+        the game server completes it (internal route) and this route answers 403
+        `TURN_IN_AT_KIOSK`.
       parameters:
         - $ref: '#/components/parameters/MissionId'
       requestBody:
@@ -992,6 +996,43 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /api/internal/missions/goods-moves:
+    post:
+      tags: [internal]
+      summary: Goods a player put into, or took out of, a warehouse
+      description: >
+        Requires the `mission:progress` service role. Sent by the game server when a crate is
+        shelved in a cargo depot (`drop`) or taken off a shelf (`load`). Counted by the
+        `deliver_material` and `transport` objectives created with `via: warehouse`: the
+        objective's warehouse is the `metadata.persistence` of its zone (or source) POI. A
+        transport counts its drops only after a load at its source, of `deliverGoodType`
+        (default `goodType`). Each `key` counts once per objective. The player's missions are
+        then re-measured (auto-completing ones complete).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [playerId, goodType, quantity, direction, warehouseId, key]
+              properties:
+                playerId: { type: string, format: uuid }
+                goodType: { type: string, maxLength: 128 }
+                quantity: { type: integer, minimum: 1 }
+                direction: { type: string, enum: [drop, load] }
+                warehouseId: { type: string, description: Inventory holder id of the warehouse (the cargo depot uuid) }
+                key: { type: string, maxLength: 200, description: Unique per move }
+      responses:
+        '200':
+          description: Objectives that counted the move
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  applied: { type: array, items: { type: string, format: uuid } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/internal/missions/{missionId}/verify:
     post:
       tags: [internal]

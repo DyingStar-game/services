@@ -1,12 +1,16 @@
-//! Publishes pending legs: reserve the goods (inventory hold), price the leg, create the mission
-//! escrowed on the federation treasury (ADR 0007, 0008, 0009).
+//! Publishes pending legs: check the goods are there, price the leg, create the mission escrowed on
+//! the federation treasury (ADR 0007, 0008, 0009).
+//!
+//! The goods are NOT reserved any more (no inventory hold): players move them physically — a crate
+//! taken off a shelf of the source warehouse, shelved in the destination's — and the mission counts
+//! those moves (`via: warehouse`). It is turned in at the town hall of the destination village.
 
 use serde_json::{json, Value};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::{stocks, TickReport};
-use crate::clients::{Holder, MissionSummary, NewMission, NewPoi, INSUFFICIENT_FUNDS_CODES};
+use crate::clients::{MissionSummary, NewMission, NewPoi, INSUFFICIENT_FUNDS_CODES};
 use crate::db::{catalog::{self, Federation, Resource}, history, orders::{self, Leg, SupplyOrder}, world::{self, Warehouse}};
 use crate::error::{AppError, Result};
 use crate::pricing;
@@ -43,16 +47,22 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
 async fn publish(st: &AppState, fed: &Federation, leg: &Leg) -> Result<bool> {
     let order = orders::get_order(&st.pool, leg.order_id).await?.ok_or_else(|| AppError::NotFound("order".into()))?;
     let resource = catalog::get_resource(&st.pool, order.resource_id).await?.ok_or_else(|| AppError::NotFound("resource".into()))?;
+    // The goods picked up: the input of a refined resource (crushed ore for ingots), else itself.
+    let input = match &resource.refined_from {
+        Some(code) => catalog::find_resource(&st.pool, Some(code), None).await?.unwrap_or_else(|| resource.clone()),
+        None => resource.clone(),
+    };
 
     let leg = if leg.status == "pending" {
         let to_village = world::get_village(&st.pool, leg.to_village_id).await?.ok_or_else(|| AppError::NotFound("village".into()))?;
         let to = to_village
             .main_warehouse_id
             .ok_or_else(|| AppError::conflict("NO_WAREHOUSE", format!("village {} has no warehouse", to_village.code)))?;
-        let (hold, from) = match leg.from_village_id {
-            None => (None, None),
-            Some(from_village) => {
-                let Some(from) = source_warehouse(st, &order, leg, from_village, &resource).await? else {
+        // A transport picks its goods up at a warehouse that still has them; a mining leg (and the
+        // mine of a mining_transport) has nothing to pick up.
+        let from = match leg.from_village_id {
+            Some(from_village) if order.kind == "transport" => {
+                let Some(from) = source_warehouse(st, &order, leg, from_village, &input).await? else {
                     if leg.seq == 0 {
                         warn!(order = %order.id, "origin no longer has the goods; order failed");
                         orders::close_order(&st.pool, order.id, "failed", Some("origin stock insufficient")).await?;
@@ -60,19 +70,12 @@ async fn publish(st: &AppState, fed: &Federation, leg: &Leg) -> Result<bool> {
                     }
                     return Err(AppError::conflict("INSUFFICIENT_GOODS", "no warehouse holds the goods of this leg"));
                 };
-                match st.clients.inventory.create_hold(Holder::warehouse(from), &resource.inventory_good_type, leg.quantity, &leg.id.to_string()).await {
-                    Ok(id) => (Some(id), Some(from)),
-                    Err(e) if e.upstream_code() == Some("INSUFFICIENT_GOODS") && leg.seq == 0 => {
-                        warn!(order = %order.id, "origin no longer has the goods; order failed");
-                        orders::close_order(&st.pool, order.id, "failed", Some("origin stock insufficient")).await?;
-                        return Ok(false);
-                    }
-                    Err(e) => return Err(e),
-                }
+                Some(from)
             }
+            _ => None,
         };
-        orders::set_leg_held(&st.pool, leg.id, hold, from, to).await?;
-        Leg { status: "held".into(), hold_id: hold, from_warehouse_id: from, to_warehouse_id: Some(to), ..leg.clone() }
+        orders::set_leg_held(&st.pool, leg.id, None, from, to).await?;
+        Leg { status: "held".into(), hold_id: None, from_warehouse_id: from, to_warehouse_id: Some(to), ..leg.clone() }
     } else {
         leg.clone()
     };
@@ -90,7 +93,7 @@ async fn publish(st: &AppState, fed: &Federation, leg: &Leg) -> Result<bool> {
         None => None,
     };
     let to_poi = warehouse_poi(st, fed, &to).await?;
-    let mission = build_mission(fed, &order, &leg, &resource, from.as_ref().zip(from_poi), (&to, to_poi), &names, reward);
+    let mission = build_mission(fed, &order, &leg, (&resource, &input), from.as_ref().zip(from_poi), (&to, to_poi), &names, reward);
     let created = match st.clients.mission.create(&mission).await {
         Ok(m) => m,
         Err(e) if e.upstream_code() == Some("DUPLICATE_SCRIPT_ID") => find_by_script(st, fed, &mission.script_id).await?,
@@ -162,6 +165,11 @@ async fn reward(st: &AppState, fed: &Federation, order: &SupplyOrder, leg: &Leg,
     };
     Ok(match order.kind.as_str() {
         "mining" => pricing::mining_reward(&params, leg.quantity, unit_price, urgency),
+        // Mining it, then carrying it the whole way: both rewards.
+        "mining_transport" => {
+            pricing::mining_reward(&params, leg.quantity, unit_price, urgency)
+                + pricing::transport_reward(&params, leg.quantity, resource.mass_per_unit_kg, leg.distance_m, unit_price, urgency)
+        }
         _ => pricing::transport_reward(&params, leg.quantity, resource.mass_per_unit_kg, leg.distance_m, unit_price, urgency),
     })
 }
@@ -208,58 +216,84 @@ fn location(w: &Warehouse, village: &str) -> Value {
     })
 }
 
+/// The mission of a leg. Three kinds, every one measured on the warehouses (`via: warehouse`: the
+/// goods taken off a shelf, the goods shelved) and turned in at the destination's town hall:
+///   - transport: load [input] at the source warehouse, deliver [resource] at the destination's
+///     (the same good, or its refined form — crushed ore loaded, ingots delivered);
+///   - mining: mine [resource] and deliver it at the destination's warehouse;
+///   - mining_transport: mine [input] where [from_village] has a source, deliver [resource] at the
+///     destination's warehouse.
+// One value per part of the mission text and params: grouping them would only hide what each is.
+#[allow(clippy::too_many_arguments)]
 pub fn build_mission(
     fed: &Federation,
     order: &SupplyOrder,
     leg: &Leg,
-    resource: &Resource,
+    (resource, input): (&Resource, &Resource),
     from: Option<(&Warehouse, Uuid)>,
     (to, to_poi): (&Warehouse, Uuid),
     (from_village, to_village): &(Option<String>, String),
     reward: i64,
 ) -> NewMission {
     let payload = json!({ "source": "universesimulator", "orderId": order.id, "legId": leg.id, "seq": leg.seq, "resource": resource.code });
-    let (title, category, objective) = match from {
-        Some((from, from_poi)) => (
-            format!("Transport {} {} {} → {}", leg.quantity, resource.unit, resource.name, to_village),
-            "transport",
+    let zone = json!({ "kind": "poi", "poiId": to_poi });
+    let (title, category, objective) = match (order.kind.as_str(), from) {
+        ("transport", Some((from, from_poi))) => {
+            let origin = from_village.as_deref().unwrap_or(&from.name);
+            (
+                format!("Transport {} {} {} → {}", leg.quantity, resource.unit, resource.name, to_village),
+                "transport",
+                json!({
+                    "type": "transport",
+                    "title": if input.id == resource.id {
+                        format!("Deliver {} {} of {} from {} to {}", leg.quantity, resource.unit, resource.name, origin, to_village)
+                    } else {
+                        format!("Load {} at {}, refine it at {}, deliver the {} to its warehouse", input.name, origin, to_village, resource.name)
+                    },
+                    "targetQuantity": leg.quantity,
+                    "unit": resource.unit,
+                    "locationFrom": location(from, from_village.as_deref().unwrap_or_default()),
+                    "locationTo": location(to, to_village),
+                    // `mission`'s `transport` kind (strict): picked up at the source warehouse,
+                    // delivered (refined or not) into the destination's.
+                    "params": {
+                        "goodType": input.inventory_good_type,
+                        "deliverGoodType": resource.inventory_good_type,
+                        "source": { "kind": "poi", "poiId": from_poi },
+                        "zone": zone,
+                        "via": "warehouse",
+                    },
+                    "payload": payload,
+                }),
+            )
+        }
+        ("mining_transport", _) => (
+            format!("Mine and deliver {} {} {} to {}", leg.quantity, resource.unit, resource.name, to_village),
+            "mining",
             json!({
-                "type": "transport",
+                "type": "deliver_material",
                 "title": format!(
-                    "Deliver {} {} of {} from {} to {}",
-                    leg.quantity,
-                    resource.unit,
-                    resource.name,
-                    from_village.as_deref().unwrap_or(&from.name),
-                    to_village
+                    "Mine {} at {}, refine it, deliver the {} to the warehouse of {}",
+                    input.name, from_village.as_deref().unwrap_or_default(), resource.name, to_village
                 ),
                 "targetQuantity": leg.quantity,
                 "unit": resource.unit,
-                "locationFrom": location(from, from_village.as_deref().unwrap_or_default()),
                 "locationTo": location(to, to_village),
-                // `mission`'s `transport` kind (strict): the good, its pickup and delivery POIs.
-                "params": {
-                    "goodType": resource.inventory_good_type,
-                    "source": { "kind": "poi", "poiId": from_poi },
-                    "zone": { "kind": "poi", "poiId": to_poi },
-                },
+                "params": { "goodType": resource.inventory_good_type, "zone": zone, "via": "warehouse" },
                 "payload": payload,
             }),
         ),
-        None => (
+        _ => (
             format!("Mine {} {} {} for {}", leg.quantity, resource.unit, resource.name, to_village),
             "mining",
             json!({
                 "type": "deliver_material",
-                "title": format!("Mine {} {} of {} and deliver it to {}", leg.quantity, resource.unit, resource.name, to_village),
+                "title": format!("Mine {} {} of {} and bring it to the warehouse of {}", leg.quantity, resource.unit, resource.name, to_village),
                 "targetQuantity": leg.quantity,
                 "unit": resource.unit,
                 "locationTo": location(to, to_village),
-                // `mission`'s `deliver_material` kind (strict): the good and its delivery POI.
-                "params": {
-                    "goodType": resource.inventory_good_type,
-                    "zone": { "kind": "poi", "poiId": to_poi },
-                },
+                // `mission`'s `deliver_material` kind (strict): the good, shelved in its warehouse.
+                "params": { "goodType": resource.inventory_good_type, "zone": zone, "via": "warehouse" },
                 "payload": payload,
             }),
         ),
@@ -275,5 +309,6 @@ pub fn build_mission(
         escrow: Some(json!({ "payerType": "politics", "payerId": fed.political_entity_id })),
         script_id: script_id(leg.id, leg.attempts),
         objectives: vec![objective],
+        auto_complete: false,
     }
 }

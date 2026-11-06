@@ -8,10 +8,20 @@ import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listPlayerMissions } from '../services/assignments.service.js';
 import { listMissions } from '../services/missions.service.js';
+import { listInvitationsFor } from '../services/invitations.service.js';
 import { assignmentListQuery, missionCreatedListQuery } from './schemas.js';
 
 /** Router for the current player's missions. */
 export const meRoutes: IRouter = Router();
+
+/** GET /mission-invitations — The invitations I may answer (mine, my group's), with their mission. */
+meRoutes.get(
+  '/mission-invitations',
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json({ invitations: await listInvitationsFor(player.id) });
+  }),
+);
 
 /** GET /missions?status=&limit=&offset= — The player's missions (assignments joined with missions). */
 meRoutes.get(
