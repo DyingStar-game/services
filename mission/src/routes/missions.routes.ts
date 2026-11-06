@@ -14,6 +14,7 @@ import {
   acceptMission,
   completeMission,
   getAssignment,
+  listAssignmentsForMission,
   verifyPlayerObjectives,
 } from '../services/assignments.service.js';
 import {
@@ -29,6 +30,8 @@ import {
 } from '../services/missions.service.js';
 import { isGroupMember, getPlayerGroup, getPlayerPresence } from '../services/social.client.js';
 import { validateMissionSpec } from '../services/spec.service.js';
+import { declineInvitation, inviteToMission, joinMission } from '../services/invitations.service.js';
+import { resolvePlayerNames } from '../services/detail.service.js';
 import { missionKindsCatalog } from '../kinds/index.js';
 import {
   completeBody,
@@ -38,6 +41,8 @@ import {
   missionListQuery,
   objectiveParams,
   shareBody,
+  inviteBody,
+  invitationIdParams,
   validateMissionBody,
 } from './schemas.js';
 
@@ -141,7 +146,14 @@ missionsRoutes.get(
       throw new HttpError(404, 'NOT_FOUND', t('not_found.mission_bare'));
     }
     const assignment = await getAssignment(req.params.missionId, player.id);
-    res.json({ ...result, assignment });
+    // A participant sees who else takes part (a shared mission): their names, best-effort.
+    let participants: { playerId: string; name: string | null }[] = [];
+    if (assignment?.status === 'active') {
+      const active = (await listAssignmentsForMission(req.params.missionId)).filter((a) => a.status === 'active');
+      const names = await resolvePlayerNames(active.map((a) => a.playerId));
+      participants = active.map((a) => ({ playerId: a.playerId, name: names[a.playerId] ?? null }));
+    }
+    res.json({ ...result, assignment, participants });
   }),
 );
 
@@ -152,6 +164,44 @@ missionsRoutes.post(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     res.status(201).json(await acceptMission(req.params.missionId, player.id));
+  }),
+);
+
+/**
+ * POST /invitations/:invitationId/join — Join the mission of an invitation (to me, or to my group).
+ * POST /invitations/:invitationId/decline — Decline it (a group's stays open to the others).
+ */
+missionsRoutes.post(
+  '/invitations/:invitationId/join',
+  validate(invitationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.status(201).json(await joinMission(req.params.invitationId, player.id));
+  }),
+);
+
+missionsRoutes.post(
+  '/invitations/:invitationId/decline',
+  validate(invitationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    await declineInvitation(req.params.invitationId, player.id);
+    res.status(204).end();
+  }),
+);
+
+/**
+ * POST /:missionId/invite — A participant shares the mission they took with one player
+ * ({playerId}) or with their own group ({groupId}): the invitees may join it (shared progress,
+ * reward split equally).
+ */
+missionsRoutes.post(
+  '/:missionId/invite',
+  validate(missionIdParams, 'params'),
+  validate(inviteBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.status(201).json(await inviteToMission(req.params.missionId, player.id, req.body));
   }),
 );
 

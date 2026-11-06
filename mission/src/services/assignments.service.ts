@@ -220,7 +220,21 @@ export async function acceptMission(
   if (active >= mission.maxAssignees) {
     throw new HttpError(409, 'MISSION_FULL', 'Mission has no free slot');
   }
+  return openAssignment(mission, playerId, holderType, existing);
+}
 
+/**
+ * Opens (or reopens) [playerId]'s assignment of [mission] once every gate passed: the half of
+ * accepting a mission that joining a shared one also needs (see invitations.service).
+ * @param existing - The player's previous assignment of this mission, if any (reactivated).
+ */
+export async function openAssignment(
+  mission: Mission,
+  playerId: string,
+  holderType: AssigneeHolderType,
+  existing: MissionAssignment | null | undefined,
+): Promise<{ assignment: MissionAssignment; mission: Mission; objectives: MissionObjective[] }> {
+  const missionId = mission.id;
   const rewardExternalId =
     existing?.rewardExternalId ?? `mission:${missionId}:${playerId}`;
   // Per-assignment deadline (B7): the mission may carry a lifetime for every assignee.

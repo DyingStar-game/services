@@ -319,6 +319,14 @@ export const validateMissionBody = z.object({
 /** Share a mission with a group. */
 export const shareBody = z.object({ groupId: uuidSchema });
 
+/** Share a mission already taken: with one player, or with the inviter's group. */
+export const inviteBody = z.union([
+  z.object({ playerId: uuidSchema }).strict(),
+  z.object({ groupId: uuidSchema }).strict(),
+]);
+
+export const invitationIdParams = z.object({ invitationId: uuidSchema });
+
 /** Declare (or lift) the "big event" flag on a mission. */
 export const eventBody = z.object({
   enabled: z.boolean(),

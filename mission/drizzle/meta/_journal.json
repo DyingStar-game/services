@@ -36,6 +36,13 @@
       "when": 1793750400000,
       "tag": "0004_mission_giver",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794009600000,
+      "tag": "0005_mission_invitations",
+      "breakpoints": true
     }
   ]
 }

@@ -91,7 +91,7 @@ async function cached(
 }
 
 /** Resolves the display name of each assignee, best-effort and in parallel. */
-async function resolvePlayerNames(playerIds: string[]): Promise<Record<string, string>> {
+export async function resolvePlayerNames(playerIds: string[]): Promise<Record<string, string>> {
   const names: Record<string, string> = {};
   const ids = [...new Set(playerIds)].slice(0, LOOKUP_LIMIT);
   await Promise.all(

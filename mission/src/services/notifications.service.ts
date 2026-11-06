@@ -18,6 +18,8 @@ export type MissionNotificationType =
   | 'mission.completed'
   /** Every required objective is done: the mission waits to be turned in at a town hall kiosk. */
   | 'mission.ready'
+  /** A participant shared the mission: the player (or their group) may join it. */
+  | 'mission.invited'
   /** The player handed the mission in proportionally (partial completion). */
   | 'mission.partially_completed'
   /** A measurement failed permanently and the assignment was failed. */
