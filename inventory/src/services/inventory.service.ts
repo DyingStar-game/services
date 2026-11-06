@@ -611,6 +611,18 @@ export async function carriedDelta(
   return db.transaction(async (tx) => {
     await ensureGoodKind(tx, goodType, 'stack');
 
+    // A player's first crate of a good (mined, or loaded at a warehouse) has no stack yet: open an empty
+    // one to receive it, as creditStack does. Only for a positive delta — dropping goods never carried
+    // still answers 404.
+    if (delta > 0) {
+      await tx
+        .insert(inventoryStacks)
+        .values({ ...holder, goodType, quantity: 0 })
+        .onConflictDoNothing({
+          target: [inventoryStacks.holderType, inventoryStacks.holderId, inventoryStacks.goodType],
+        });
+    }
+
     const [stack] = await tx
       .select()
       .from(inventoryStacks)
