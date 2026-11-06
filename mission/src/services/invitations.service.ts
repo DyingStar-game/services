@@ -6,13 +6,20 @@
  * participant may turn it in. Each participant deposits the others' crates (the game checks they
  * share a mission).
  */
-import { and, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 
 import { db } from '../db/connection.js';
-import { missionInvitations, type MissionInvitation } from '../db/schema/index.js';
+import {
+  ACTIVE_ASSIGNMENT_STATUS,
+  missionAssignments,
+  missionInvitations,
+  missions,
+  type Mission,
+  type MissionInvitation,
+} from '../db/schema/index.js';
 import { HttpError } from '../lib/httpError.js';
 import { getAssignment, openAssignment } from './assignments.service.js';
-import { getMissionById, requireMission, requireOpenMission } from './missions.service.js';
+import { requireMission, requireOpenMission } from './missions.service.js';
 import { notifyMissionEvent } from './notifications.service.js';
 import { getGroup, getPlayerGroup, isGroupMember } from './social.client.js';
 
@@ -37,6 +44,21 @@ export async function inviteToMission(
   if (groupId && !(await isGroupMember(fromPlayerId, groupId))) {
     throw new HttpError(403, 'NOT_GROUP_MEMBER', 'You can only share with your own group');
   }
+  if (toPlayerId && (await getAssignment(missionId, toPlayerId))?.status === 'active') {
+    throw new HttpError(409, 'ALREADY_PARTICIPANT', 'This player already takes part in it');
+  }
+  // Sharing twice with the same target sends nothing new: the pending invitation stands.
+  const [pending] = await db
+    .select()
+    .from(missionInvitations)
+    .where(
+      and(
+        eq(missionInvitations.missionId, missionId),
+        eq(missionInvitations.status, 'pending'),
+        toPlayerId ? eq(missionInvitations.toPlayerId, toPlayerId) : eq(missionInvitations.groupId, groupId ?? ''),
+      ),
+    );
+  if (pending) return pending;
   const [invitation] = await db
     .insert(missionInvitations)
     .values({ missionId, fromPlayerId, toPlayerId, groupId })
@@ -57,28 +79,42 @@ export async function inviteToMission(
   return invitation;
 }
 
-/** The pending invitations [playerId] may answer: theirs, and their group's, newest first. */
-export async function listInvitationsFor(playerId: string): Promise<MissionInvitation[]> {
+/**
+ * The pending invitations [playerId] may answer — theirs, and their group's they did not decline —
+ * with their mission, newest first. A mission they already take part in, or that closed, is left
+ * out. Two queries, whatever the number of invitations.
+ */
+export async function listInvitationsFor(playerId: string): Promise<{ invitation: MissionInvitation; mission: Mission }[]> {
   const membership = await getPlayerGroup(playerId).catch(() => null);
   const addressed = membership
-    ? or(eq(missionInvitations.toPlayerId, playerId), eq(missionInvitations.groupId, membership.group.id))
+    ? or(
+        eq(missionInvitations.toPlayerId, playerId),
+        and(
+          eq(missionInvitations.groupId, membership.group.id),
+          sql`not (${missionInvitations.declinedBy} @> ${JSON.stringify([playerId])}::jsonb)`,
+        ),
+      )
     : eq(missionInvitations.toPlayerId, playerId);
   const rows = await db
-    .select()
+    .select({ invitation: missionInvitations, mission: missions })
     .from(missionInvitations)
-    .where(and(eq(missionInvitations.status, 'pending'), addressed))
+    .innerJoin(missions, eq(missions.id, missionInvitations.missionId))
+    .where(and(eq(missionInvitations.status, 'pending'), inArray(missions.status, ['available', 'active']), addressed))
     .orderBy(desc(missionInvitations.createdAt))
     .limit(50);
-  // A mission one already takes part in, or that closed meanwhile, is no invitation any more.
-  const out: MissionInvitation[] = [];
-  for (const row of rows) {
-    const mine = await getAssignment(row.missionId, playerId);
-    const mission = await getMissionById(row.missionId);
-    if ((!mine || mine.status !== 'active') && mission && (mission.status === 'available' || mission.status === 'active')) {
-      out.push(row);
-    }
-  }
-  return out;
+  if (rows.length === 0) return [];
+  const mine = await db
+    .select({ missionId: missionAssignments.missionId })
+    .from(missionAssignments)
+    .where(
+      and(
+        eq(missionAssignments.playerId, playerId),
+        eq(missionAssignments.status, ACTIVE_ASSIGNMENT_STATUS),
+        inArray(missionAssignments.missionId, rows.map((r) => r.mission.id)),
+      ),
+    );
+  const taking = new Set(mine.map((m) => m.missionId));
+  return rows.filter((r) => !taking.has(r.mission.id));
 }
 
 /** [playerId] joins the mission of [invitationId]. */
@@ -97,7 +133,12 @@ export async function joinMission(invitationId: string, playerId: string) {
 /** [playerId] declines [invitationId] (a group's: only for themselves, it stays open to the others). */
 export async function declineInvitation(invitationId: string, playerId: string): Promise<void> {
   const invitation = await requireInvitationFor(invitationId, playerId);
-  if (invitation.toPlayerId) await setStatus(invitation.id, 'declined');
+  if (invitation.toPlayerId) {
+    await setStatus(invitation.id, 'declined');
+    return;
+  }
+  const declinedBy = [...new Set([...(invitation.declinedBy ?? []), playerId])];
+  await db.update(missionInvitations).set({ declinedBy, updatedAt: new Date() }).where(eq(missionInvitations.id, invitation.id));
 }
 
 async function requireInvitationFor(invitationId: string, playerId: string): Promise<MissionInvitation> {
@@ -111,13 +152,4 @@ async function requireInvitationFor(invitationId: string, playerId: string): Pro
 
 async function setStatus(id: string, status: MissionInvitation['status']): Promise<void> {
   await db.update(missionInvitations).set({ status, updatedAt: new Date() }).where(eq(missionInvitations.id, id));
-}
-
-/** Pending invitations of [missionIds] (for a mission's detail). */
-export function listMissionInvitations(missionIds: string[]): Promise<MissionInvitation[]> {
-  if (missionIds.length === 0) return Promise.resolve([]);
-  return db
-    .select()
-    .from(missionInvitations)
-    .where(and(inArray(missionInvitations.missionId, missionIds), eq(missionInvitations.status, 'pending')));
 }

@@ -95,7 +95,7 @@ describe('sharing a mission already taken', () => {
     const invited = await asPlayer(A, `/${id}/invite`, { playerId: B });
     expect(invited.status).toBe(201);
     expect(social.notifyPlayer).toHaveBeenCalledWith(B, expect.objectContaining({ type: 'mission.invited' }));
-    expect((await listInvitationsFor(B)).map((i) => i.missionId)).toEqual([id]);
+    expect((await listInvitationsFor(B)).map((i) => i.mission.id)).toEqual([id]);
 
     expect((await asPlayer(B, `/invitations/${invited.body.id}/join`)).status).toBe(201);
     expect(await listInvitationsFor(B)).toEqual([]);
@@ -128,6 +128,24 @@ describe('sharing a mission already taken', () => {
     const paid = economy.creditHolder.mock.calls.map((call) => call[2] ?? call);
     expect(economy.creditHolder).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(paid)).toContain('500');
+  });
+
+  it('sharing twice with the same player sends one invitation, and a participant cannot be invited', async () => {
+    const id = await takenByA();
+    const first = await asPlayer(A, `/${id}/invite`, { playerId: B });
+    const again = await asPlayer(A, `/${id}/invite`, { playerId: B });
+    expect(again.body.id).toBe(first.body.id);
+    await asPlayer(B, `/invitations/${first.body.id}/join`);
+    expect((await asPlayer(A, `/${id}/invite`, { playerId: B })).status).toBe(409);
+  });
+
+  it('a member who declines a group invitation stops seeing it, the others still may join', async () => {
+    social.members = new Set([A, B, C]);
+    const id = await takenByA();
+    const invitation = (await asPlayer(A, `/${id}/invite`, { groupId: GROUP })).body.id as string;
+    expect((await asPlayer(B, `/invitations/${invitation}/decline`)).status).toBe(204);
+    expect(await listInvitationsFor(B)).toEqual([]);
+    expect((await listInvitationsFor(C)).length).toBe(1);
   });
 
   it('a declined invitation is gone', async () => {

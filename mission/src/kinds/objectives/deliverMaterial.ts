@@ -8,6 +8,7 @@ import { getStack } from '../../services/inventory.client.js';
 import { resolvePois } from '../../services/inventory.client.js';
 import { placeToLocation, zoneMatches, type PoiGeometryMap } from '../../services/zones.service.js';
 import type { MeasureContext, ObjectiveKind } from '../types.js';
+import { viaJsonSchema, viaSchema, warehouseProgress } from './warehouse.js';
 import { STATE_TTL_MS, isStateFresh, loadPlayerState } from './playerState.js';
 
 const poiZone = z.object({ kind: z.literal('poi'), poiId: z.string().uuid() }).strict();
@@ -25,21 +26,10 @@ const paramsSchema = z
      * target contributes nothing, no matter how much they carry.
      */
     scope: z.enum(['assignee', 'all']).default('assignee'),
-    /**
-     * How delivery is measured. `zone` (default): the goods the assignee carries while inside the
-     * zone POI. `warehouse`: the goods put INTO the zone's warehouse (the POI's
-     * `metadata.persistence`), reported by the game server as goods moves — walking in with the
-     * crates is not delivering them.
-     */
-    via: z.enum(['zone', 'warehouse']).default('zone'),
+    /** How delivery is measured: carried in the zone, or put into its warehouse (see warehouse.ts). */
+    via: viaSchema,
   })
   .strict();
-
-/** Progress of a `via: 'warehouse'` objective: what the goods moves put into its warehouse, capped. */
-function warehouseProgress(ctx: MeasureContext): number {
-  const delivered = Number(((ctx.objective.state ?? {}) as { delivered?: number }).delivered ?? 0);
-  return Math.min(delivered, ctx.objective.targetQuantity);
-}
 
 async function resolveZonePois(poiId: string): Promise<PoiGeometryMap> {
   try {
@@ -136,12 +126,7 @@ export const deliverMaterialKind: ObjectiveKind = {
         description:
           "who counts: 'assignee' = the measured carrier only; 'all' = the sum over every active assignee currently inside the target",
       },
-      via: {
-        type: 'string',
-        enum: ['zone', 'warehouse'],
-        default: 'zone',
-        description: "'zone' = carried inside the zone; 'warehouse' = put into the zone's warehouse (goods moves)",
-      },
+      via: viaJsonSchema,
     },
     additionalProperties: false,
   },

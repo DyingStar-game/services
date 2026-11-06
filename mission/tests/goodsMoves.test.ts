@@ -166,11 +166,28 @@ describe('warehouse deliveries', () => {
       type: 'deliver_material' as const,
       params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' },
       state: {},
+      targetQuantity: 20,
     };
     const m = { playerId: PLAYER, goodType: 'ore.gold', quantity: 5, direction: 'drop' as const, warehouseId: MINE_DEPOT, key: 'k1' };
     const once = applyMove(objective, m, WAREHOUSES);
-    expect(once?.delivered).toBe(5);
-    expect(applyMove({ ...objective, state: once }, m, WAREHOUSES)).toBeNull();
+    expect(once?.state.delivered).toBe(5);
+    expect(applyMove({ ...objective, state: once!.state }, m, WAREHOUSES)).toBeNull();
+  });
+
+  it('a crate counts once: it fills the oldest mission, the rest goes to the next', async () => {
+    const first = await createMission({
+      type: 'deliver_material',
+      targetQuantity: 15,
+      params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' },
+    });
+    const second = await createMission({
+      type: 'deliver_material',
+      targetQuantity: 15,
+      params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' },
+    });
+    await move('drop', 'ore.gold', MINE_DEPOT, 20);
+    expect((await objectiveOf(first)).currentProgress).toBe(15);
+    expect((await objectiveOf(second)).currentProgress).toBe(5);
   });
 });
 

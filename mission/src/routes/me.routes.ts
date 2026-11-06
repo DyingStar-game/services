@@ -7,7 +7,7 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { listPlayerMissions } from '../services/assignments.service.js';
-import { getMissionById, listMissions } from '../services/missions.service.js';
+import { listMissions } from '../services/missions.service.js';
 import { listInvitationsFor } from '../services/invitations.service.js';
 import { assignmentListQuery, missionCreatedListQuery } from './schemas.js';
 
@@ -19,11 +19,7 @@ meRoutes.get(
   '/mission-invitations',
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    const invitations = await listInvitationsFor(player.id);
-    const withMission = await Promise.all(
-      invitations.map(async (invitation) => ({ invitation, mission: await getMissionById(invitation.missionId) })),
-    );
-    res.json({ invitations: withMission });
+    res.json({ invitations: await listInvitationsFor(player.id) });
   }),
 );
 

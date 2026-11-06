@@ -52,36 +52,52 @@ interface WarehouseParams {
 }
 
 /**
- * Applies [move] to every warehouse-measured objective of the player's active missions, then
- * re-measures those missions (which completes them when they auto-complete).
+ * Applies [move] to the warehouse-measured objectives of the player's active missions, then
+ * re-measures the missions it touched (which completes the ones that auto-complete).
+ *
+ * A dropped crate counts ONCE: it fills the objectives of the oldest assignment first, the rest
+ * carried over to the next — never the same goods for two missions. A load latches every transport
+ * it starts (it delivers nothing). The objectives are read and written in one transaction, locked,
+ * so two crates shelved at the same moment cannot overwrite each other's count.
  * @returns The objectives that took the move into account.
  */
 export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: string[] }> {
   const assignments = await db
-    .select({ missionId: missionAssignments.missionId })
+    .select({ missionId: missionAssignments.missionId, acceptedAt: missionAssignments.acceptedAt })
     .from(missionAssignments)
     .where(and(eq(missionAssignments.playerId, move.playerId), eq(missionAssignments.status, ACTIVE_ASSIGNMENT_STATUS)));
-  const missionIds = assignments.map((a) => a.missionId);
-  if (missionIds.length === 0) return { applied: [] };
+  if (assignments.length === 0) return { applied: [] };
+  const acceptedAt = new Map(assignments.map((a) => [a.missionId, a.acceptedAt.getTime()]));
 
-  const objectives = (
-    await db.select().from(missionObjectives).where(inArray(missionObjectives.missionId, missionIds))
+  const candidates = (
+    await db.select().from(missionObjectives).where(inArray(missionObjectives.missionId, [...acceptedAt.keys()]))
   ).filter((o) => (o.params as WarehouseParams | null)?.via === 'warehouse');
-  if (objectives.length === 0) return { applied: [] };
+  if (candidates.length === 0) return { applied: [] };
+  const warehouseOf = await warehousesOfPois(candidates);
 
-  const warehouseOf = await warehousesOfPois(objectives);
   const applied: string[] = [];
   const touched = new Set<string>();
   /** Missions this move may have finished: one of their objectives was not completed before it. */
   const mayFinish = new Set<string>();
-  for (const objective of objectives) {
-    const next = applyMove(objective, move, warehouseOf);
-    if (next === null) continue;
-    await db.update(missionObjectives).set({ state: next, updatedAt: new Date() }).where(eq(missionObjectives.id, objective.id));
-    applied.push(objective.id);
-    touched.add(objective.missionId);
-    if (objective.status !== 'completed') mayFinish.add(objective.missionId);
-  }
+  await db.transaction(async (tx) => {
+    const locked = await tx
+      .select()
+      .from(missionObjectives)
+      .where(inArray(missionObjectives.id, candidates.map((o) => o.id)))
+      .for('update');
+    locked.sort((a, b) => (acceptedAt.get(a.missionId) ?? 0) - (acceptedAt.get(b.missionId) ?? 0) || a.order - b.order);
+    let left = move.quantity;
+    for (const objective of locked) {
+      const result = applyMove(objective, { ...move, quantity: left }, warehouseOf);
+      if (result === null) continue;
+      await tx.update(missionObjectives).set({ state: result.state, updatedAt: new Date() }).where(eq(missionObjectives.id, objective.id));
+      applied.push(objective.id);
+      touched.add(objective.missionId);
+      if (objective.status !== 'completed') mayFinish.add(objective.missionId);
+      left -= result.used;
+      if (move.direction === 'drop' && left <= 0) break;
+    }
+  });
   for (const missionId of touched) {
     try {
       const result = await verifyPlayerObjectives(missionId, move.playerId);
@@ -115,20 +131,25 @@ async function notifyReady(missionId: string): Promise<void> {
  * Pure: exported for the tests.
  */
 export function applyMove(
-  objective: Pick<MissionObjective, 'type' | 'params' | 'state'>,
+  objective: Pick<MissionObjective, 'type' | 'params' | 'state' | 'targetQuantity'>,
   move: GoodsMove,
   warehouseOf: ReadonlyMap<string, string>,
-): ObjectiveState | null {
+): { state: ObjectiveState; used: number } | null {
   const params = (objective.params ?? {}) as WarehouseParams;
   const state = { ...((objective.state ?? {}) as ObjectiveState) };
   const keys = state.moveKeys ?? [];
   if (keys.includes(move.key)) return null;
   const zoneWarehouse = warehouseOf.get(params.zone?.poiId ?? '');
   const deliverGood = params.deliverGoodType ?? params.goodType;
+  // A drop fills what the objective still needs, no more: the rest goes to the next one.
+  const fill = (): number => Math.min(move.quantity, Math.max(0, objective.targetQuantity - (state.delivered ?? 0)));
+  let used = 0;
 
   if (objective.type === 'deliver_material') {
     if (move.direction !== 'drop' || move.goodType !== params.goodType || zoneWarehouse !== move.warehouseId) return null;
-    state.delivered = (state.delivered ?? 0) + move.quantity;
+    used = fill();
+    if (used <= 0) return null;
+    state.delivered = (state.delivered ?? 0) + used;
   } else if (objective.type === 'transport') {
     const sourceWarehouse = warehouseOf.get(params.source?.poiId ?? '');
     if (move.direction === 'load' && move.goodType === params.goodType && sourceWarehouse === move.warehouseId) {
@@ -140,7 +161,9 @@ export function applyMove(
       move.goodType === deliverGood &&
       zoneWarehouse === move.warehouseId
     ) {
-      state.delivered = (state.delivered ?? 0) + move.quantity;
+      used = fill();
+      if (used <= 0) return null;
+      state.delivered = (state.delivered ?? 0) + used;
     } else {
       return null;
     }
@@ -148,7 +171,7 @@ export function applyMove(
     return null;
   }
   state.moveKeys = [...keys, move.key].slice(-MAX_KEYS);
-  return state;
+  return { state, used };
 }
 
 /** POI id → warehouse holder id (`metadata.persistence`), for every zone/source POI of [objectives]. */

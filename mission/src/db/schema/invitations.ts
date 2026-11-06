@@ -3,7 +3,7 @@
  * member may join) or with one player (who accepts or declines). Joining opens an assignment of the
  * SAME mission: progress is shared, the reward split equally, any participant may turn it in.
  */
-import { index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 import { missions } from './missions.js';
 
@@ -25,6 +25,8 @@ export const missionInvitations = pgTable(
     groupId: uuid('group_id'),
     /** pending until answered; a group's stays pending, each member joining on their own. */
     status: text('status').$type<InvitationStatus>().notNull().default('pending'),
+    /** The members who declined a group invitation (it stays open to the others). */
+    declinedBy: jsonb('declined_by').$type<string[]>().notNull().default([]),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
