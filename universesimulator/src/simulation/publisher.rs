@@ -204,6 +204,23 @@ async fn warehouse_poi(st: &AppState, fed: &Federation, w: &Warehouse) -> Result
 /// Radius of a warehouse's POI: a cargo depot and its loading area.
 const WAREHOUSE_POI_RADIUS_M: f64 = 40.0;
 
+/// A quantity in its resource's unit, as a player reads it: kilograms past 1 000 in tonnes, litres
+/// past 1 000 in cubic metres (`kg` solids, `l` liquids, `m3` gases, `unit` things counted).
+pub fn quantity_text(quantity: i64, unit: &str) -> String {
+    let big = |q: i64, scale: &str| {
+        let v = q as f64 / 1000.0;
+        if v.fract() == 0.0 { format!("{v:.0} {scale}") } else { format!("{v:.1} {scale}") }
+    };
+    match unit {
+        "kg" if quantity >= 1000 => big(quantity, "t"),
+        "l" if quantity >= 1000 => big(quantity, "m³"),
+        "l" => format!("{quantity} L"),
+        "m3" => format!("{quantity} m³"),
+        "unit" | "" => quantity.to_string(),
+        _ => format!("{quantity} {unit}"),
+    }
+}
+
 fn location(w: &Warehouse, village: &str) -> Value {
     json!({
         "warehouseId": w.id,
@@ -221,8 +238,8 @@ fn location(w: &Warehouse, village: &str) -> Value {
 ///   - transport: load [input] at the source warehouse, deliver [resource] at the destination's
 ///     (the same good, or its refined form — crushed ore loaded, ingots delivered);
 ///   - mining: mine [resource] and deliver it at the destination's warehouse;
-///   - mining_transport: mine [input] where [from_village] has a source, deliver [resource] at the
-///     destination's warehouse.
+///   - mining_transport: mine [input] in any mining village (the planner's [from_village] is only
+///     where its source is debited), deliver [resource] at the destination's warehouse.
 // One value per part of the mission text and params: grouping them would only hide what each is.
 #[allow(clippy::too_many_arguments)]
 pub fn build_mission(
@@ -241,12 +258,12 @@ pub fn build_mission(
         ("transport", Some((from, from_poi))) => {
             let origin = from_village.as_deref().unwrap_or(&from.name);
             (
-                format!("Transport {} {} {} → {}", leg.quantity, resource.unit, resource.name, to_village),
+                format!("Transport {} {} → {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
                 "transport",
                 json!({
                     "type": "transport",
                     "title": if input.id == resource.id {
-                        format!("Deliver {} {} of {} from {} to {}", leg.quantity, resource.unit, resource.name, origin, to_village)
+                        format!("Deliver {} of {} from {} to {}", quantity_text(leg.quantity, &resource.unit), resource.name, origin, to_village)
                     } else {
                         format!("Load {} at {}, refine it at {}, deliver the {} to its warehouse", input.name, origin, to_village, resource.name)
                     },
@@ -268,13 +285,15 @@ pub fn build_mission(
             )
         }
         ("mining_transport", _) => (
-            format!("Mine and deliver {} {} {} to {}", leg.quantity, resource.unit, resource.name, to_village),
+            format!("Mine and deliver {} {} to {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
             "mining",
             json!({
                 "type": "deliver_material",
+                // Any mining village's crusher will do: the delivery counts the good, wherever it was
+                // mined (the planner's source village is only its bookkeeping).
                 "title": format!(
-                    "Mine {} at {}, refine it, deliver the {} to the warehouse of {}",
-                    input.name, from_village.as_deref().unwrap_or_default(), resource.name, to_village
+                    "Mine {} in any mining village, refine it, deliver the {} to the warehouse of {}",
+                    input.name, resource.name, to_village
                 ),
                 "targetQuantity": leg.quantity,
                 "unit": resource.unit,
@@ -284,11 +303,11 @@ pub fn build_mission(
             }),
         ),
         _ => (
-            format!("Mine {} {} {} for {}", leg.quantity, resource.unit, resource.name, to_village),
+            format!("Mine {} {} for {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
             "mining",
             json!({
                 "type": "deliver_material",
-                "title": format!("Mine {} {} of {} and bring it to the warehouse of {}", leg.quantity, resource.unit, resource.name, to_village),
+                "title": format!("Mine {} of {} and bring it to the warehouse of {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
                 "targetQuantity": leg.quantity,
                 "unit": resource.unit,
                 "locationTo": location(to, to_village),
@@ -310,5 +329,21 @@ pub fn build_mission(
         script_id: script_id(leg.id, leg.attempts),
         objectives: vec![objective],
         auto_complete: false,
+    }
+}
+
+#[cfg(test)]
+mod quantity_tests {
+    use super::quantity_text;
+
+    #[test]
+    fn a_quantity_reads_in_its_unit() {
+        assert_eq!(quantity_text(90, "kg"), "90 kg");
+        assert_eq!(quantity_text(1500, "kg"), "1.5 t");
+        assert_eq!(quantity_text(2000, "kg"), "2 t");
+        assert_eq!(quantity_text(400, "l"), "400 L");
+        assert_eq!(quantity_text(20000, "l"), "20 m³");
+        assert_eq!(quantity_text(12, "m3"), "12 m³");
+        assert_eq!(quantity_text(3, "unit"), "3");
     }
 }
