@@ -102,8 +102,11 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
     try {
       const result = await verifyPlayerObjectives(missionId, move.playerId);
       // Done but waiting for a town hall: say so once, when this move is the one that finished it.
+      // Otherwise the assignees hear of the progress: their DataPad reads the mission again.
       if (result.allComplete && !result.completed && mayFinish.has(missionId)) {
-        await notifyReady(missionId);
+        await notifyAssignees(missionId, 'mission.ready');
+      } else if (!result.allComplete) {
+        await notifyAssignees(missionId, 'mission.progress');
       }
     } catch {
       // A mission closed or expired meanwhile: the move is recorded, nothing to measure.
@@ -112,8 +115,11 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
   return { applied };
 }
 
-/** Tells every active assignee of [missionId] that it is ready to be turned in at a town hall. */
-async function notifyReady(missionId: string): Promise<void> {
+/**
+ * Tells every active assignee of [missionId]: `mission.ready` (to be turned in at a town hall) or
+ * `mission.progress` (a goods move counted for it).
+ */
+async function notifyAssignees(missionId: string, type: 'mission.ready' | 'mission.progress'): Promise<void> {
   const mission = await getMissionById(missionId);
   const assignees = await db
     .select({ playerId: missionAssignments.playerId })
@@ -121,7 +127,7 @@ async function notifyReady(missionId: string): Promise<void> {
     .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, ACTIVE_ASSIGNMENT_STATUS)));
   await Promise.all(
     assignees.map((a) =>
-      notifyMissionEvent(a.playerId, { type: 'mission.ready', data: { missionId, title: mission?.title ?? '' } }),
+      notifyMissionEvent(a.playerId, { type, data: { missionId, title: mission?.title ?? '' } }),
     ),
   );
 }
