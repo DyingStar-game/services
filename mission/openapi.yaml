@@ -1352,7 +1352,8 @@ components:
     AssignmentStatus:
       name: status
       in: query
-      schema: { $ref: '#/components/schemas/AssignmentStatus' }
+      description: One assignment status, or several comma-separated (`completed,partially_completed`).
+      schema: { type: string, example: 'abandoned,expired,failed' }
 
     Offset:
       in: query

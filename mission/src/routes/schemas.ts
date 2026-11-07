@@ -64,7 +64,12 @@ export const missionListQuery = limitQuery.extend({
 });
 
 export const assignmentListQuery = limitQuery.extend({
-  status: z.enum(ASSIGNMENT_STATUSES).optional(),
+  /** One status, or several comma-separated (`completed,partially_completed`): a tab of the DataPad. */
+  status: z
+    .string()
+    .transform((s) => s.split(',').map((p) => p.trim()).filter(Boolean))
+    .pipe(z.array(z.enum(ASSIGNMENT_STATUSES)))
+    .optional(),
 });
 
 /** Query filter for the caller's own creations (`GET /me/missions-created`). */
