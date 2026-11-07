@@ -13,7 +13,8 @@
  * once (their ids are kept in the state file), on the depots named in the config.
  *
  * Usage:
- *   node scripts/seed-test-missions.mjs <config.json> [--watch <seconds>]
+ *   node scripts/seed-test-missions.mjs <config.json> [--watch <seconds> | --renew]
+ *   --renew cancels the open copies first, then seeds afresh (after the texts or units changed).
  *
  * config.json: { "scene": "tarsis_3", "mineral": "gold",
  *   "mine":    { "name": "M0001", "depot": "<uuid>", "x": 0, "y": 0, "z": 0 },
@@ -147,7 +148,15 @@ async function seedOnce() {
   const minePoi = await warehousePoi(config.mine);
   const factoryPoi = await warehousePoi(config.factory);
   writeFileSync(statePath, JSON.stringify(state, null, 2));
-  const open = await call(MISSION, 'GET', '/missions?status=available&issuerType=system&limit=100');
+  let open = await call(MISSION, 'GET', '/missions?status=available&issuerType=system&limit=100');
+  if (flag === '--renew') {
+    for (const m of open.missions ?? []) {
+      if (!String(m.scriptId ?? '').startsWith('test:')) continue;
+      await call(MISSION, 'POST', `/missions/${m.id}/cancel`);
+      console.log(`[seed] cancelled ${m.id} (${m.title})`);
+    }
+    open = { missions: [] };
+  }
   for (const [name, spec] of Object.entries(specs(minePoi, factoryPoi))) {
     const prefix = `test:${name}:`;
     if ((open.missions ?? []).some((m) => String(m.scriptId ?? '').startsWith(prefix))) continue;
