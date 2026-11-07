@@ -329,12 +329,31 @@ pub fn build_mission(
         script_id: script_id(leg.id, leg.attempts),
         objectives: vec![objective],
         auto_complete: false,
+        giver: giver_of(&fed.name, category),
     }
+}
+
+/// The giver of a federation's mission: its name as the game's faction slug ("ARES" -> `ares`) and the
+/// division of the job (`hauling` for a transport, `mining` otherwise). None when the name makes no slug.
+pub fn giver_of(federation: &str, category: &str) -> Option<Value> {
+    let faction: String = federation.trim().to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+    if faction.is_empty() || faction.len() > 32 || !faction.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let division = if category == "transport" { "hauling" } else { "mining" };
+    Some(json!({ "faction": faction, "division": division }))
 }
 
 #[cfg(test)]
 mod quantity_tests {
     use super::quantity_text;
+
+    #[test]
+    fn a_federation_s_mission_is_given_by_its_company() {
+        assert_eq!(super::giver_of("ARES", "transport"), Some(serde_json::json!({ "faction": "ares", "division": "hauling" })));
+        assert_eq!(super::giver_of("ARES", "mining"), Some(serde_json::json!({ "faction": "ares", "division": "mining" })));
+        assert_eq!(super::giver_of("  ", "mining"), None);
+    }
 
     #[test]
     fn a_quantity_reads_in_its_unit() {
