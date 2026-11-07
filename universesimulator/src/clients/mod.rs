@@ -127,6 +127,11 @@ pub struct NewMission {
     pub objectives: Vec<serde_json::Value>,
     /// false: the mission waits, objectives done, to be turned in at a town hall kiosk.
     pub auto_complete: bool,
+    /// In-fiction giver the players see (`{faction, division}`, the game's catalogue slugs): the
+    /// federation's company and the division of the job. The issuer stays the federation's political
+    /// entity, which pays; without a giver the game showed "politics".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub giver: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

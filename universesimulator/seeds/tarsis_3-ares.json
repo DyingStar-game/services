@@ -22,8 +22,8 @@
   "resources": [
     { "code": "water", "name": "Water", "category": "water", "unit": "l", "inventoryGoodType": "water", "massPerUnitKg": 1.0, "basePrice": 2.0 },
     { "code": "food_ration", "name": "Food ration", "category": "food", "unit": "unit", "inventoryGoodType": "food_ration", "massPerUnitKg": 0.5, "basePrice": 8.0 },
-    { "code": "ore.gold", "name": "Crushed gold ore", "category": "ore", "unit": "l", "inventoryGoodType": "ore.gold", "massPerUnitKg": 0.8, "basePrice": 30.0 },
-    { "code": "ingot.gold", "name": "Gold ingots", "category": "ore", "unit": "l", "inventoryGoodType": "ingot.gold", "massPerUnitKg": 0.8, "basePrice": 60.0, "refinedFrom": "ore.gold" }
+    { "code": "ore.gold", "name": "Crushed gold ore", "category": "ore", "unit": "kg", "inventoryGoodType": "ore.gold", "massPerUnitKg": 1.0, "basePrice": 30.0 },
+    { "code": "ingot.gold", "name": "Gold ingots", "category": "ore", "unit": "kg", "inventoryGoodType": "ingot.gold", "massPerUnitKg": 1.0, "basePrice": 60.0, "refinedFrom": "ore.gold" }
   ],
   "villages": {
     "defaults": {

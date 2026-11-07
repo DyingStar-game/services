@@ -192,6 +192,16 @@ describe('warehouse deliveries', () => {
 });
 
 describe('turn-in', () => {
+  it('a move that does not finish the mission tells its assignees of the progress', async () => {
+    await createMission({
+      type: 'deliver_material',
+      params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' },
+    });
+    await move('drop', 'ore.gold', MINE_DEPOT, 5);
+    expect(social.notifyPlayer).toHaveBeenCalledWith(PLAYER, expect.objectContaining({ type: 'mission.progress' }));
+    expect(social.notifyPlayer).not.toHaveBeenCalledWith(PLAYER, expect.objectContaining({ type: 'mission.ready' }));
+  });
+
   it('a finished mission that does not auto-complete waits, pays nothing, and refuses the player', async () => {
     const id = await createMission({
       type: 'deliver_material',

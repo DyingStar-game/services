@@ -100,12 +100,13 @@ export async function requireAssignment(
  */
 export async function listPlayerMissions(
   playerId: string,
-  status: AssignmentStatus | undefined,
+  status: AssignmentStatus | AssignmentStatus[] | undefined,
   limit: number,
   offset: number,
 ): Promise<Page<PlayerMission>> {
   const conditions = [eq(missionAssignments.playerId, playerId)];
-  if (status) conditions.push(eq(missionAssignments.status, status));
+  const statuses = status === undefined ? [] : Array.isArray(status) ? status : [status];
+  if (statuses.length > 0) conditions.push(inArray(missionAssignments.status, statuses));
   const condition = and(...conditions);
 
   const [items, totalRows] = await Promise.all([

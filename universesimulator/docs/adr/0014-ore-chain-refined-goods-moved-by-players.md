@@ -31,7 +31,13 @@ moved twice, and a hold makes the reserved goods impossible to load physically.
 - Every published mission is measured on the warehouses (`via: warehouse`) and **turned in at a town
   hall** (`autoComplete: false`).
 - The seed of tarsis_3 carries the game's chain, gold only: `ore.gold` (mined), `ingot.gold`
-  (refined from it, consumed by the factories), in litres.
+  (refined from it, consumed by the factories), in kilograms: the game counts a crate by the weight
+  its plate shows (crushed ore and its barren rock, or the metal of the ingots).
+- A resource's `unit` follows its nature: `kg` for solids, `l` for liquids, `m3` for gases, `unit`
+  for things counted. Mission titles write the quantity as a player reads it (`quantity_text`:
+  1 500 kg is 1.5 t, 20 000 l is 20 m³).
+- A `mining_transport` mission names no mining village: the good counts wherever it was crushed; the
+  planner's source village is only where the mineral source is debited.
 
 ## Consequences
 
