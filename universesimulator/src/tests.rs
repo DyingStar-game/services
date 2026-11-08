@@ -342,6 +342,7 @@ async fn ingots(st: &AppState) -> catalog::Resource {
     catalog::upsert_resource(&st.pool, &catalog::ResourceInput {
         code: "ingot_fer".into(),
         name: "Iron ingots".into(),
+        name_fr: Some("Lingots de fer".into()),
         category: "ore".into(),
         unit: "kg".into(),
         inventory_good_type: "ingot_fer".into(),

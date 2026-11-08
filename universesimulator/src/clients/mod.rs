@@ -132,6 +132,11 @@ pub struct NewMission {
     /// entity, which pays; without a giver the game showed "politics".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub giver: Option<serde_json::Value>,
+    /// The title and description per language (`{en, fr}`): the mission service serves the player's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_i18n: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description_i18n: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

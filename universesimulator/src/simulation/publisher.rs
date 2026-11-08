@@ -254,11 +254,20 @@ pub fn build_mission(
 ) -> NewMission {
     let payload = json!({ "source": "universesimulator", "orderId": order.id, "legId": leg.id, "seq": leg.seq, "resource": resource.code });
     let zone = json!({ "kind": "poi", "poiId": to_poi });
-    let (title, category, objective) = match (order.kind.as_str(), from) {
+    let fr = |r: &Resource| r.name_fr.clone().unwrap_or_else(|| r.name.clone());
+    let qty = quantity_text(leg.quantity, &resource.unit);
+    // Each mission text in English and French: [title], then the objective's.
+    let (title, title_fr, objective_fr, category, objective) = match (order.kind.as_str(), from) {
         ("transport", Some((from, from_poi))) => {
             let origin = from_village.as_deref().unwrap_or(&from.name);
             (
-                format!("Transport {} {} → {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
+                format!("Transport {} {} → {}", qty, resource.name, to_village),
+                format!("Transport : {} — {} → {}", qty, fr(resource), to_village),
+                if input.id == resource.id {
+                    format!("Livrez {} — {} de {} à {}", qty, fr(resource), origin, to_village)
+                } else {
+                    format!("Chargez « {} » à {}, raffinez-le à {}, livrez « {} » à son entrepôt", fr(input), origin, to_village, fr(resource))
+                },
                 "transport",
                 json!({
                     "type": "transport",
@@ -285,7 +294,9 @@ pub fn build_mission(
             )
         }
         ("mining_transport", _) => (
-            format!("Mine and deliver {} {} to {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
+            format!("Mine and deliver {} {} to {}", qty, resource.name, to_village),
+            format!("Minage et livraison : {} — {} → {}", qty, fr(resource), to_village),
+            format!("Minez « {} » dans un village minier, raffinez-le, livrez « {} » à l'entrepôt de {}", fr(input), fr(resource), to_village),
             "mining",
             json!({
                 "type": "deliver_material",
@@ -303,7 +314,9 @@ pub fn build_mission(
             }),
         ),
         _ => (
-            format!("Mine {} {} for {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
+            format!("Mine {} {} for {}", qty, resource.name, to_village),
+            format!("Minage : {} — {} pour {}", qty, fr(resource), to_village),
+            format!("Minez {} — {} et apportez-le à l'entrepôt de {}", qty, fr(resource), to_village),
             "mining",
             json!({
                 "type": "deliver_material",
@@ -317,9 +330,17 @@ pub fn build_mission(
             }),
         ),
     };
+    let mut objective = objective;
+    if let Some(o) = objective.as_object_mut() {
+        let en = o.get("title").cloned().unwrap_or(Value::Null);
+        o.insert("titleI18n".into(), json!({ "en": en, "fr": objective_fr }));
+    }
+    let description = format!("Supply order of {} ({}).", fed.name, order.trigger);
     NewMission {
+        title_i18n: Some(json!({ "en": title, "fr": title_fr })),
+        description_i18n: Some(json!({ "en": description, "fr": format!("Commande d'approvisionnement de {} ({}).", fed.name, order.trigger) })),
         title,
-        description: format!("Supply order of {} ({}).", fed.name, order.trigger),
+        description,
         kind: "dynamic",
         category,
         issuer_type: "politics",
