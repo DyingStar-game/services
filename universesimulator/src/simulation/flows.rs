@@ -53,7 +53,12 @@ pub async fn apply(st: &AppState, fed: &Federation, hours: f64, stocks: &mut Sto
                     break;
                 }
                 let qty = wanted.min(available);
-                st.clients.inventory.debit(Holder::warehouse(w), good, qty).await?;
+                // The snapshot may be stale: a player took crates since. The physical crates are the truth
+                // (ADR 0014): a refused debit is a shortage of this warehouse, not a failed tick.
+                if let Err(e) = st.clients.inventory.debit(Holder::warehouse(w), good, qty).await {
+                    warn!(warehouse = %w, resource = %good, error = %e, "debit refused: stock below the snapshot");
+                    continue;
+                }
                 let level = stocks.level_mut(w, flow.resource_id);
                 level.quantity -= qty;
                 world::set_stock_level(&st.pool, w, flow.resource_id, level.quantity, level.held).await?;

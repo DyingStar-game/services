@@ -98,12 +98,17 @@ function specs(minePoi, factoryPoi) {
   return {
     mining: {
       title: `[TEST] Minerai pour ${mine}`,
+      titleI18n: { fr: `[TEST] Minerai pour ${mine}`, en: `[TEST] Ore for ${mine}` },
       category: 'mining',
       giver: { faction: 'ares', division: 'mining' },
       rewards: [{ type: 'credits', amount: 500 }],
       objectives: [{
         type: 'deliver_material',
         title: `Apportez une caisse de minerai concassé au comptoir de l'entrepôt de ${mine}`,
+        titleI18n: {
+          fr: `Apportez une caisse de minerai concassé au comptoir de l'entrepôt de ${mine}`,
+          en: `Bring a crate of crushed ore to the counter of ${mine}'s warehouse`,
+        },
         targetQuantity: 1,
         unit: 'kg',
         params: { goodType: ore, zone: zone(minePoi), via: 'warehouse' },
@@ -111,12 +116,17 @@ function specs(minePoi, factoryPoi) {
     },
     transport: {
       title: `[TEST] Raffiner le minerai de ${mine} à ${factory}`,
+      titleI18n: { fr: `[TEST] Raffiner le minerai de ${mine} à ${factory}`, en: `[TEST] Refine ${mine}'s ore at ${factory}` },
       category: 'transport',
       giver: { faction: 'ares', division: 'hauling' },
       rewards: [{ type: 'credits', amount: 1500 }],
       objectives: [{
         type: 'transport',
         title: `Prenez une caisse à l'entrepôt de ${mine}, raffinez-la à ${factory}, apportez les lingots au comptoir de son entrepôt`,
+        titleI18n: {
+          fr: `Prenez une caisse à l'entrepôt de ${mine}, raffinez-la à ${factory}, apportez les lingots au comptoir de son entrepôt`,
+          en: `Take a crate at ${mine}'s warehouse, refine it at ${factory}, bring the ingots to its warehouse counter`,
+        },
         targetQuantity: 1,
         unit: 'kg',
         params: {
@@ -130,12 +140,17 @@ function specs(minePoi, factoryPoi) {
     },
     'mining-transport': {
       title: `[TEST] Minage et livraison de lingots à ${factory}`,
+      titleI18n: { fr: `[TEST] Minage et livraison de lingots à ${factory}`, en: `[TEST] Mine and deliver ingots to ${factory}` },
       category: 'mining',
       giver: { faction: 'ares', division: 'mining' },
       rewards: [{ type: 'credits', amount: 2500 }],
       objectives: [{
         type: 'deliver_material',
         title: `Minez, concassez dans un village minier, raffinez à ${factory}, apportez les lingots au comptoir de son entrepôt`,
+        titleI18n: {
+          fr: `Minez, concassez dans un village minier, raffinez à ${factory}, apportez les lingots au comptoir de son entrepôt`,
+          en: `Mine, crush in any mining village, refine at ${factory}, bring the ingots to its warehouse counter`,
+        },
         targetQuantity: 1,
         unit: 'kg',
         params: { goodType: ingot, zone: zone(factoryPoi), via: 'warehouse' },

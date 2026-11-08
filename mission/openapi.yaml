@@ -1522,8 +1522,10 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        title: { type: string }
+        title: { type: string, description: In the request's language when titleI18n has it (Accept-Language) }
         description: { type: [string, 'null'] }
+        titleI18n: { $ref: '#/components/schemas/I18nText' }
+        descriptionI18n: { $ref: '#/components/schemas/I18nText' }
         kind: { $ref: '#/components/schemas/MissionKind' }
         category: { $ref: '#/components/schemas/MissionCategory' }
         issuerType: { $ref: '#/components/schemas/IssuerType' }
@@ -1610,6 +1612,8 @@ components:
         type: { $ref: '#/components/schemas/ObjectiveType' }
         title: { type: string }
         description: { type: [string, 'null'] }
+        titleI18n: { $ref: '#/components/schemas/I18nText' }
+        descriptionI18n: { $ref: '#/components/schemas/I18nText' }
         targetQuantity: { type: integer }
         unit: { type: [string, 'null'] }
         locationFrom: { type: [object, 'null'], additionalProperties: true, description: 'Legacy opaque payload (game server). Deprecated — the POI reference lives in `params.zone` / `params.source`.' }
@@ -1744,12 +1748,18 @@ components:
         reason: { type: string, example: credited }
         assignment: { $ref: '#/components/schemas/Assignment' }
 
+    I18nText:
+      type: object
+      description: The same text per language code ({"en": "...", "fr": "..."}); responses put the request language's (Accept-Language) in the plain field.
+      additionalProperties: { type: string }
     CreateMission:
       type: object
       required: [title, objectives]
       properties:
         title: { type: string, maxLength: 200 }
         description: { type: string, maxLength: 4000 }
+        titleI18n: { $ref: '#/components/schemas/I18nText' }
+        descriptionI18n: { $ref: '#/components/schemas/I18nText' }
         kind: { $ref: '#/components/schemas/MissionKind' }
         category: { $ref: '#/components/schemas/MissionCategory' }
         issuerType: { $ref: '#/components/schemas/IssuerType' }

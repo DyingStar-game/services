@@ -49,6 +49,9 @@ function isUniqueViolation(err: unknown): boolean {
 export interface CreateMissionInput {
   title: string;
   description?: string;
+  /** The texts per language (`{en, fr}`), served by `Accept-Language`. */
+  titleI18n?: Record<string, string>;
+  descriptionI18n?: Record<string, string>;
   kind?: MissionKind;
   category?: MissionCategory;
   issuerType?: MissionIssuerType;
@@ -423,6 +426,8 @@ export async function createMission(
           id: missionId,
           title: input.title,
           description: input.description,
+          titleI18n: input.titleI18n ?? null,
+          descriptionI18n: input.descriptionI18n ?? null,
           kind: input.kind ?? 'dynamic',
           category: input.category ?? 'divers',
           issuerType: input.issuerType ?? 'system',

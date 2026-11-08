@@ -33,6 +33,7 @@ import { validateMissionSpec } from '../services/spec.service.js';
 import { declineInvitation, inviteToMission, joinMission } from '../services/invitations.service.js';
 import { resolvePlayerNames } from '../services/detail.service.js';
 import { missionKindsCatalog } from '../kinds/index.js';
+import { withPoiNames } from '../services/zones.service.js';
 import {
   completeBody,
   createPlayerMissionBody,
@@ -129,7 +130,7 @@ missionsRoutes.get(
       Number(req.query.limit),
       Number(req.query.offset),
     );
-    res.json({ missions: found.items, total: found.total, limit: found.limit, offset: found.offset });
+    res.json({ missions: await withPoiNames(found.items), total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
 
@@ -153,7 +154,8 @@ missionsRoutes.get(
       const names = await resolvePlayerNames(active.map((a) => a.playerId));
       participants = active.map((a) => ({ playerId: a.playerId, name: names[a.playerId] ?? null }));
     }
-    res.json({ ...result, assignment, participants });
+    const [mission] = await withPoiNames([result.mission]);
+    res.json({ ...result, mission, assignment, participants });
   }),
 );
 

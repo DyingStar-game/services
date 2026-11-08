@@ -794,6 +794,22 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
+  /api/internal/pois/by-persistence/{poiId}:
+    get:
+      tags: [internal]
+      summary: The POI of a game object (its metadata.persistence), e.g. a cargo depot's warehouse
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/poiId'
+      responses:
+        '200':
+          description: The POI
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoiView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/pois/{poiId}:
     get:
       tags: [internal]

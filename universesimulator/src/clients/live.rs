@@ -163,6 +163,14 @@ impl InventoryClient for HttpInventory {
         let created: PoiCreated = self.0.post("/pois", &body).await?;
         Ok(created.id)
     }
+
+    async fn find_poi_by_persistence(&self, persistence_id: Uuid) -> Result<Option<Uuid>> {
+        match self.0.get::<PoiCreated>(&format!("/pois/by-persistence/{persistence_id}")).await {
+            Ok(poi) => Ok(Some(poi.id)),
+            Err(e) if e.upstream_status() == Some(404) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 // ── Mission ──────────────────────────────────────────────────────────────────

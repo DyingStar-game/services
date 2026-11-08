@@ -39,6 +39,13 @@ moved twice, and a hold makes the reserved goods impossible to load physically.
 - A `mining_transport` mission names no mining village: the good counts wherever it was crushed; the
   planner's source village is only where the mineral source is debited.
 
+- **The physical crates are the truth** (the team, 2026-11-08): a warehouse's stock moves only by crates shelved
+  or taken, and by the factories' consumption, which the game turns into crates taken off the shelves (its stock
+  reconciler keeps the crates equal to the stock). Gold only for now: the water and food flows are off
+  (`managedCategories: ["ore"]`), mining villages ask for crushed ore (a policy on `ore.gold`), and a fresh world
+  starts just under each shortage threshold (`initialBelowThreshold`), so missions are out at the first connection.
+  A debit refused because the stock fell since the snapshot is that warehouse's shortage, not a failed tick.
+
 ## Consequences
 
 - Goods promised to a leg are no longer locked: another player may take them meanwhile; the planner

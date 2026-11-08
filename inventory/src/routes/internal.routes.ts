@@ -26,6 +26,7 @@ import {
 import {
   createPoi,
   deletePoi,
+  getPoiByPersistence,
   getPoiView,
   listHolderPois,
   resolvePois,
@@ -218,6 +219,21 @@ internalRoutes.post(
   validate(resolvePoisBody),
   asyncHandler(async (req, res) => {
     res.json({ pois: await resolvePois(req.body.ids) });
+  }),
+);
+
+/** GET /pois/by-persistence/:poiId — The POI of a game object (`metadata.persistence`): a cargo depot's warehouse. */
+internalRoutes.get(
+  '/pois/by-persistence/:poiId',
+  requireServiceRole(SERVICE_ROLES.read),
+  validate(poiParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const poi = await getPoiByPersistence(req.params.poiId);
+    if (!poi) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'POI not found', status: 404 });
+      return;
+    }
+    res.json(poi);
   }),
 );
 
