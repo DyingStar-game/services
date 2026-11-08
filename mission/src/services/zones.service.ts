@@ -77,6 +77,32 @@ function distanceSquared(
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
 }
 
+/**
+ * Copies of [items] whose `poi` zones also carry the POI's name (`poiName`), for a player to read where a
+ * mission is offered ("M0001") rather than an id. Best-effort: an Inventory outage, or a POI it does not
+ * know, leaves the zone as it is.
+ * @param items - Missions (anything with `zones`).
+ * @returns The same items, their POI zones named.
+ */
+export async function withPoiNames<T extends { zones?: MissionZone[] | null }>(items: T[]): Promise<T[]> {
+  const ids = items.flatMap((item) => poiZoneIds(item.zones ?? []));
+  if (ids.length === 0 || !isInventoryConfigured()) return items;
+  let resolved: Map<string, PoiGeometry>;
+  try {
+    resolved = await resolvePois(ids);
+  } catch {
+    return items;
+  }
+  return items.map((item) => ({
+    ...item,
+    zones: (item.zones ?? []).map((zone) => {
+      if (zone.kind !== 'poi') return zone;
+      const name = resolved.get(zone.poiId)?.name;
+      return typeof name === 'string' && name !== '' ? { ...zone, poiName: name } : zone;
+    }),
+  }));
+}
+
 function toPoiGeometry(poi: PoiGeometry): PoiZoneGeometry {
   return {
     system: poi.system,
