@@ -93,7 +93,15 @@ async fn publish(st: &AppState, fed: &Federation, leg: &Leg) -> Result<bool> {
         None => None,
     };
     let to_poi = warehouse_poi(st, fed, &to).await?;
-    let mission = build_mission(fed, &order, &leg, (&resource, &input), from.as_ref().zip(from_poi), (&to, to_poi), &names, reward);
+    // Shown only in the villages it concerns: where the goods are loaded, where they go.
+    let mut zones = Vec::new();
+    for village in leg.from_village_id.into_iter().chain([leg.to_village_id]) {
+        if let Some(poi) = village_poi(st, fed, village).await? {
+            zones.push(poi);
+        }
+    }
+    let mut mission = build_mission(fed, &order, &leg, (&resource, &input), from.as_ref().zip(from_poi), (&to, to_poi), &names, reward);
+    mission.zones = zones_of(&zones);
     let created = match st.clients.mission.create(&mission).await {
         Ok(m) => m,
         Err(e) if e.upstream_code() == Some("DUPLICATE_SCRIPT_ID") => find_by_script(st, fed, &mission.script_id).await?,
@@ -203,6 +211,45 @@ async fn warehouse_poi(st: &AppState, fed: &Federation, w: &Warehouse) -> Result
 
 /// Radius of a warehouse's POI: a cargo depot and its loading area.
 const WAREHOUSE_POI_RADIUS_M: f64 = 40.0;
+
+/// The POI of a village in `inventory` (its `metadata.persistence` the village's uuid), created over the
+/// village's radius when there is none yet: a mission zoned on it shows to the players in the village,
+/// at its town hall. None when the village has no position (its missions then show everywhere).
+async fn village_poi(st: &AppState, fed: &Federation, village_id: Uuid) -> Result<Option<Uuid>> {
+    if let Some(id) = st.clients.inventory.find_poi_by_persistence(village_id).await? {
+        return Ok(Some(id));
+    }
+    let Some(v) = world::get_village(&st.pool, village_id).await? else { return Ok(None) };
+    let (Some(x), Some(y), Some(z)) = (v.x, v.y, v.z) else { return Ok(None) };
+    let poi = NewPoi {
+        owner_type: "political",
+        owner_id: fed.political_entity_id,
+        name: v.name.clone(),
+        scene: fed.planet_internal_name.clone(),
+        persistence_id: v.id,
+        x,
+        y,
+        z,
+        radius_m: v.radius_m.filter(|r| *r > 0.0).unwrap_or(VILLAGE_POI_RADIUS_M),
+    };
+    let id = st.clients.inventory.create_poi(&poi).await?;
+    info!(village = %v.code, poi = %id, "village POI created");
+    Ok(Some(id))
+}
+
+/// Radius of a village's POI when persistence gives none.
+const VILLAGE_POI_RADIUS_M: f64 = 300.0;
+
+/// The mission zones of these POIs, each once, in order.
+pub fn zones_of(pois: &[Uuid]) -> Vec<Value> {
+    let mut seen = Vec::new();
+    for poi in pois {
+        if !seen.contains(poi) {
+            seen.push(*poi);
+        }
+    }
+    seen.into_iter().map(|id| json!({ "kind": "poi", "poiId": id })).collect()
+}
 
 /// A quantity in its resource's unit, as a player reads it: kilograms past 1 000 in tonnes, litres
 /// past 1 000 in cubic metres (`kg` solids, `l` liquids, `m3` gases, `unit` things counted).
@@ -351,6 +398,7 @@ pub fn build_mission(
         objectives: vec![objective],
         auto_complete: false,
         giver: giver_of(&fed.name, category),
+        zones: Vec::new(),
     }
 }
 
@@ -367,13 +415,23 @@ pub fn giver_of(federation: &str, category: &str) -> Option<Value> {
 
 #[cfg(test)]
 mod quantity_tests {
-    use super::quantity_text;
+    use super::{quantity_text, zones_of};
+    use serde_json::json;
+    use uuid::Uuid;
 
     #[test]
     fn a_federation_s_mission_is_given_by_its_company() {
         assert_eq!(super::giver_of("ARES", "transport"), Some(serde_json::json!({ "faction": "ares", "division": "hauling" })));
         assert_eq!(super::giver_of("ARES", "mining"), Some(serde_json::json!({ "faction": "ares", "division": "mining" })));
         assert_eq!(super::giver_of("  ", "mining"), None);
+    }
+
+    #[test]
+    fn a_mission_shows_once_in_each_village_it_concerns() {
+        let (m, f) = (Uuid::new_v4(), Uuid::new_v4());
+        let zones = zones_of(&[m, f, f]);
+        assert_eq!(zones, vec![json!({ "kind": "poi", "poiId": m }), json!({ "kind": "poi", "poiId": f })]);
+        assert!(zones_of(&[]).is_empty(), "no village known: shown everywhere");
     }
 
     #[test]

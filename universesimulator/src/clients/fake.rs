@@ -247,6 +247,10 @@ impl InventoryClient for FakeWorld {
         self.with(|s| s.pois.insert(id, poi.clone()));
         Ok(id)
     }
+
+    async fn find_poi_by_persistence(&self, persistence_id: Uuid) -> Result<Option<Uuid>> {
+        Ok(self.with(|s| s.pois.iter().find(|(_, p)| p.persistence_id == persistence_id).map(|(id, _)| *id)))
+    }
 }
 
 #[async_trait]

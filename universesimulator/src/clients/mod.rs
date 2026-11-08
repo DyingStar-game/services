@@ -107,6 +107,8 @@ pub trait InventoryClient: Send + Sync {
     async fn release_hold(&self, hold_id: Uuid) -> Result<()>;
     /// Creates a POI; returns the id `inventory` gave it.
     async fn create_poi(&self, poi: &NewPoi) -> Result<Uuid>;
+    /// The POI standing for a game object (its `metadata.persistence`), None when there is none.
+    async fn find_poi_by_persistence(&self, persistence_id: Uuid) -> Result<Option<Uuid>>;
 }
 
 // ── Mission ──────────────────────────────────────────────────────────────────
@@ -137,6 +139,9 @@ pub struct NewMission {
     pub title_i18n: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description_i18n: Option<serde_json::Value>,
+    /// Where the mission shows (`{kind: poi, poiId}`, the player inside one of them); empty = everywhere.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
