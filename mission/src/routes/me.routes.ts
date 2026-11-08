@@ -9,6 +9,7 @@ import { validate } from '../middleware/validate.js';
 import { listPlayerMissions } from '../services/assignments.service.js';
 import { listMissions } from '../services/missions.service.js';
 import { listInvitationsFor } from '../services/invitations.service.js';
+import { progressOfMissions } from '../services/progress.service.js';
 import { assignmentListQuery, missionCreatedListQuery } from './schemas.js';
 
 /** Router for the current player's missions. */
@@ -23,7 +24,10 @@ meRoutes.get(
   }),
 );
 
-/** GET /missions?status=&limit=&offset= — The player's missions (assignments joined with missions). */
+/**
+ * GET /missions?status=&limit=&offset= — The player's missions (assignments joined with missions),
+ * each with its `progress`: the step under way and how far it is, so a list can show it.
+ */
 meRoutes.get(
   '/missions',
   validate(assignmentListQuery, 'query'),
@@ -35,7 +39,9 @@ meRoutes.get(
       Number(req.query.limit),
       Number(req.query.offset),
     );
-    res.json({ missions: found.items, total: found.total, limit: found.limit, offset: found.offset });
+    const progress = await progressOfMissions(found.items.map((row) => row.mission.id));
+    const missions = found.items.map((row) => ({ ...row, progress: progress.get(row.mission.id) ?? null }));
+    res.json({ missions, total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
 
