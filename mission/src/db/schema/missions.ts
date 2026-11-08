@@ -121,6 +121,9 @@ export const missions = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     title: text('title').notNull(),
     description: text('description'),
+    /** The same text per language (`{en, fr}`), served by `Accept-Language` (localizeResponse). */
+    titleI18n: jsonb('title_i18n').$type<Record<string, string>>(),
+    descriptionI18n: jsonb('description_i18n').$type<Record<string, string>>(),
     kind: text('kind').$type<MissionKind>().notNull().default('dynamic'),
     category: text('category').$type<MissionCategory>().notNull().default('divers'),
     issuerType: text('issuer_type').$type<MissionIssuerType>().notNull().default('system'),
@@ -242,6 +245,9 @@ export const missionObjectives = pgTable(
     type: text('type').notNull(),
     title: text('title').notNull(),
     description: text('description'),
+    /** The same text per language (`{en, fr}`), served by `Accept-Language` (localizeResponse). */
+    titleI18n: jsonb('title_i18n').$type<Record<string, string>>(),
+    descriptionI18n: jsonb('description_i18n').$type<Record<string, string>>(),
     /** Quantity to reach before the objective is met (`quantity` kinds only). */
     targetQuantity: integer('target_quantity').notNull().default(1),
     /** Free-form unit label (e.g. `t`, `units`). */

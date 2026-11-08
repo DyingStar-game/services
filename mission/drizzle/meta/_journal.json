@@ -50,6 +50,13 @@
       "when": 1794013200000,
       "tag": "0006_invitation_declines",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794096000000,
+      "tag": "0007_mission_i18n",
+      "breakpoints": true
     }
   ]
 }

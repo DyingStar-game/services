@@ -16,6 +16,9 @@ export interface SpecObjectiveInput {
   type: string;
   title: string;
   description?: string;
+  /** The texts per language (`{en, fr}`), served by `Accept-Language`. */
+  titleI18n?: Record<string, string>;
+  descriptionI18n?: Record<string, string>;
   targetQuantity?: number;
   unit?: string;
   locationFrom?: Record<string, unknown>;
@@ -36,6 +39,8 @@ export interface ValidatedObjective {
   type: string;
   title: string;
   description?: string;
+  titleI18n?: Record<string, string>;
+  descriptionI18n?: Record<string, string>;
   targetQuantity: number;
   unit?: string;
   locationFrom?: Record<string, unknown>;
@@ -214,6 +219,8 @@ export function validateMissionSpec(input: MissionSpecInput, opts: ValidateSpecO
       type: objective.type,
       title: objective.title,
       description: objective.description,
+      titleI18n: objective.titleI18n,
+      descriptionI18n: objective.descriptionI18n,
       targetQuantity: kindDef.quantity ? (objective.targetQuantity ?? 1) : 1,
       unit: objective.unit,
       locationFrom: objective.locationFrom,

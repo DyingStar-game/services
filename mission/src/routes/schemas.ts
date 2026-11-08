@@ -172,11 +172,16 @@ export const missionZoneSchema = z.union([
 const zonesArray = z.array(missionZoneSchema).max(20);
 export const zonesSchema = zonesArray.default([]);
 
+/** The same text per language, by language code (`{ en: '…', fr: '…' }`): served by `Accept-Language`. */
+export const i18nText = z.record(z.string().regex(/^[a-z]{2}$/), z.string().trim().min(1).max(4000));
+
 export const objectiveInput = z.object({
   /** Objective kind name (validated against the kind registry). */
   type: z.string().trim().min(1).max(64),
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(2000).optional(),
+  titleI18n: i18nText.optional(),
+  descriptionI18n: i18nText.optional(),
   targetQuantity: z.number().int().min(1).max(1_000_000_000).optional(),
   unit: z.string().trim().max(32).optional(),
   locationFrom: jsonObject.optional(),
@@ -207,6 +212,8 @@ export const missionEscrowSchema = z
 export const createMissionBody = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().max(4000).optional(),
+  titleI18n: i18nText.optional(),
+  descriptionI18n: i18nText.optional(),
   kind: z.enum(MISSION_KINDS).default('dynamic'),
   category: z.enum(MISSION_CATEGORIES).default('divers'),
   issuerType: z.enum(MISSION_ISSUER_TYPES).default('system'),

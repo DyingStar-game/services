@@ -12,6 +12,7 @@ import { serveOpenapi } from './lib/openapi.js';
 import { serviceAuth } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { languageMiddleware } from './middleware/language.js';
+import { localizeResponse } from './middleware/localize.js';
 import { apiRouter } from './routes/index.js';
 import { internalRoutes } from './routes/internal.routes.js';
 import { startExpirySweep } from './scheduler.js';
@@ -21,6 +22,7 @@ const app = express();
 // First: resolves `Accept-Language` for every route (player, internal, health) — the
 // error handler and `t()` read it from the request/ambient context.
 app.use(languageMiddleware);
+app.use(localizeResponse);
 app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
