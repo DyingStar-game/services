@@ -117,6 +117,11 @@ pub struct CapacityFile {
     /// Credited once to the village's main warehouse.
     #[serde(default)]
     pub initial_stock: i64,
+    /// Instead of [initial_stock]: this share of the village's own minimum threshold for the resource
+    /// (its policy, scaled by population), so a fresh world starts just short of a shortage and its
+    /// first missions are out at the players' first connection (0.9: 10 % under the threshold).
+    #[serde(default)]
+    pub initial_below_threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -243,6 +248,17 @@ fn profile_key<'a>(villages: &'a VillagesFile, village_type: Option<&'a str>, na
         .filter(|(prefix, _)| name.starts_with(prefix.as_str()))
         .max_by_key(|(prefix, _)| prefix.len())
         .map(|(_, key)| key.as_str())
+}
+
+/// The stock a village's main warehouse starts with for [c]: [CapacityFile::initial_below_threshold] of its
+/// scaled minimum threshold when set and a policy exists, else [CapacityFile::initial_stock].
+pub fn initial_stock_of(c: &CapacityFile, policies: &[PolicyFile], population: i64) -> i64 {
+    let Some(share) = c.initial_below_threshold else { return c.initial_stock };
+    policies
+        .iter()
+        .find(|p| p.resource == c.resource)
+        .map(|p| (scaled(p.min_threshold as f64, p.per_thousand, population) * share).floor() as i64)
+        .unwrap_or(c.initial_stock)
 }
 
 fn scaled(value: f64, per_thousand: bool, population: i64) -> f64 {
@@ -442,8 +458,9 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
         for c in &profile.capacities {
             let res = resource(&c.resource)?;
             let force = forced(&c.resource, &|o| o.capacities.iter().map(|x| x.resource.clone()).collect());
+            let wanted = initial_stock_of(c, &profile.policies, population);
             for (i, w) in warehouses.iter().enumerate() {
-                let initial = if i == 0 { c.initial_stock } else { 0 };
+                let initial = if i == 0 { wanted } else { 0 };
                 let cap = if force {
                     world::force_capacity(&st.pool, *w, res.id, c.capacity, initial).await?
                 } else {
@@ -541,5 +558,20 @@ mod tests {
     fn per_thousand_scaling() {
         assert_eq!(scaled(10.0, true, 2500), 25.0);
         assert_eq!(scaled(10.0, false, 2500), 10.0);
+    }
+}
+
+#[cfg(test)]
+mod initial_stock_tests {
+    use super::{initial_stock_of, CapacityFile, PolicyFile};
+
+    #[test]
+    fn a_fresh_world_starts_just_under_the_threshold() {
+        let policy = PolicyFile { resource: "ingot.gold".into(), min_threshold: 40, target_level: 120, per_thousand: true };
+        let below = CapacityFile { resource: "ingot.gold".into(), capacity: Some(5000), initial_stock: 0, initial_below_threshold: Some(0.9) };
+        assert_eq!(initial_stock_of(&below, &[policy.clone()], 2000), 72, "90 % of 80 (40 per thousand, 2 000 people)");
+        let fixed = CapacityFile { initial_below_threshold: None, initial_stock: 15, ..below.clone() };
+        assert_eq!(initial_stock_of(&fixed, &[policy], 2000), 15, "no share: the fixed stock");
+        assert_eq!(initial_stock_of(&below, &[], 2000), 0, "no policy for it: the fixed stock (0)");
     }
 }
