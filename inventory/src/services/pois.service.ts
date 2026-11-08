@@ -10,7 +10,7 @@
  *
  * `system` POIs are only manageable through the internal API (game server).
  */
-import { and, count, desc, eq, exists, inArray, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, exists, inArray, or, sql } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
@@ -162,6 +162,22 @@ export async function getPoiView(poiId: string): Promise<PoiView | null> {
     .where(eq(inventoryPoiShares.poiId, poiId))
     .orderBy(inventoryPoiShares.createdAt);
   return { ...poi, shares };
+}
+
+/**
+ * The POI standing for a game object ([persistenceId] in its `metadata.persistence`): the warehouse POI
+ * of a cargo depot, whose owner owns the crates shelved there. The oldest when several do.
+ * @param persistenceId - The game object's uuid.
+ * @returns The POI, or null.
+ */
+export async function getPoiByPersistence(persistenceId: string): Promise<InventoryPoi | null> {
+  const [poi] = await db
+    .select()
+    .from(inventoryPois)
+    .where(sql`${inventoryPois.metadata}->>'persistence' = ${persistenceId}`)
+    .orderBy(asc(inventoryPois.createdAt))
+    .limit(1);
+  return poi ?? null;
 }
 
 /**
