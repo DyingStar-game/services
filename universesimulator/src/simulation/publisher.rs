@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::tiers::{self, Tier};
 use super::{stocks, TickReport};
 use crate::clients::{MissionSummary, NewMission, NewPoi, INSUFFICIENT_FUNDS_CODES};
 use crate::db::{catalog::{self, Federation, Resource}, history, orders::{self, Leg, SupplyOrder}, world::{self, Warehouse}};
@@ -383,6 +384,14 @@ pub fn build_mission(
         o.insert("titleI18n".into(), json!({ "en": en, "fr": objective_fr }));
     }
     let description = format!("Supply order of {} ({}).", fed.name, order.trigger);
+    // Its size (tiers): named first in its title, and how many may take it and for how long.
+    let tier = Tier::of(leg.quantity);
+    let pace = tiers::pace_of(tier, leg.id.as_u128());
+    let hours = tier.deadline_hours(pace, tiers::work_hours(order.kind.as_str(), input.id != resource.id));
+    let reward = (reward as f64 * tier.reward_share(pace)).round() as i64;
+    let (tier_en, tier_fr) = tier.label(pace);
+    let title = format!("{tier_en} · {title}");
+    let title_fr = format!("{tier_fr} · {title_fr}");
     NewMission {
         title_i18n: Some(json!({ "en": title, "fr": title_fr })),
         description_i18n: Some(json!({ "en": description, "fr": format!("Commande d'approvisionnement de {} ({}).", fed.name, order.trigger) })),
@@ -399,6 +408,8 @@ pub fn build_mission(
         auto_complete: false,
         giver: giver_of(&fed.name, category),
         zones: Vec::new(),
+        max_assignees: tier.max_assignees(),
+        assignment_deadline_hours: Some(hours),
     }
 }
 

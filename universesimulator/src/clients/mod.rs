@@ -142,6 +142,11 @@ pub struct NewMission {
     /// Where the mission shows (`{kind: poi, poiId}`, the player inside one of them); empty = everywhere.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub zones: Vec<serde_json::Value>,
+    /// How many players may take it together, sharing its progress (its tier: 1, 3 or 10).
+    pub max_assignees: i32,
+    /// Hours an assignment has to finish it, from its acceptance (its tier).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignment_deadline_hours: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

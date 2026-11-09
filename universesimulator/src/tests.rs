@@ -242,7 +242,11 @@ async fn transport_order_goes_village_by_village(pool: PgPool) {
     let all = legs(&st).await;
     let to_v1: Vec<_> = {
         let (orders, _) = orders::list_orders(&st.pool, &orders::OrderFilter { kind: Some("transport".into()), ..Default::default() }).await.unwrap();
-        let o = orders.iter().find(|o| o.destination_village_id == id(V1)).unwrap();
+        // 250 is under a truckload: one solo mission (simulation::tiers).
+        let to_v1: Vec<_> = orders.iter().filter(|o| o.destination_village_id == id(V1)).collect();
+        assert_eq!(to_v1.iter().map(|o| o.quantity).sum::<i64>(), 250);
+        assert_eq!(to_v1.len(), 1);
+        let o = to_v1[0];
         assert_eq!(o.path, vec![id(V3), id(V2), id(V1)]);
         all.iter().filter(|l| l.order_id == o.id).cloned().collect()
     };
@@ -373,7 +377,8 @@ async fn a_shortage_of_ingots_ships_the_ore_to_refine(pool: PgPool) {
     world::upsert_policy(&st.pool, &world::VillagePolicy { village_id: id(V3), resource_id: ingot.id, min_threshold: 100, target_level: 300 }).await.unwrap();
     simulation::tick(&st, true).await.unwrap();
     let (transport, _) = orders::list_orders(&st.pool, &orders::OrderFilter { kind: Some("transport".into()), resource: Some(ingot.id), ..Default::default() }).await.unwrap();
-    assert_eq!(transport.len(), 1);
+    assert_eq!(transport.iter().map(|o| o.quantity).sum::<i64>(), 300, "the whole gap");
+    assert_eq!(transport.len(), 1, "under a truckload: one solo mission");
     assert_eq!(transport[0].origin_village_id, Some(id(V1)));
     let leg = legs(&st).await.into_iter().find(|l| l.order_id == transport[0].id && l.seq == 0).unwrap();
     assert_eq!(leg.from_warehouse_id, Some(id(D1)), "picked up where the ore is");

@@ -1,4 +1,5 @@
 {
+  "economyScale": 25,
   "federation": {
     "code": "ARES",
     "name": "ARES",
@@ -51,12 +52,12 @@
       "capacities": [
         {
           "resource": "ore.gold",
-          "capacity": 5000,
+          "capacity": 800,
           "initialStock": 0
         },
         {
           "resource": "ingot.gold",
-          "capacity": 5000,
+          "capacity": 800,
           "initialStock": 0
         }
       ]
@@ -83,7 +84,7 @@
         "capacities": [
           {
             "resource": "ingot.gold",
-            "capacity": 5000,
+            "capacity": 800,
             "initialBelowThreshold": 0.9
           }
         ]
@@ -92,8 +93,8 @@
         "mineralSources": [
           {
             "resource": "ore.gold",
-            "remainingUnits": 2000000,
-            "maxUnitsPerMission": 60
+            "remainingUnits": 80000,
+            "maxUnitsPerMission": 400
           }
         ],
         "policies": [
@@ -107,7 +108,7 @@
         "capacities": [
           {
             "resource": "ore.gold",
-            "capacity": 5000,
+            "capacity": 800,
             "initialBelowThreshold": 0.9
           }
         ]

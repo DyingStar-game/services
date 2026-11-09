@@ -30,3 +30,5 @@ with the same conventions as the admin panel (`adminpanel/docs/adr`).
 | [0011](./0011-keycloak-auth-in-rust.md) | Keycloak authentication in Rust | Proposed | 2026-10-11 |
 | [0012](./0012-off-mission-warehouse-deliveries.md) | Off-mission warehouse deliveries from the game server | Proposed | 2026-10-11 |
 | [0013](./0013-villages-aggregate-their-warehouses.md) | Villages are the simulation nodes; they aggregate their warehouses | Proposed | 2026-10-12 |
+| [0014](./0014-ore-chain-refined-goods-moved-by-players.md) | The ore chain: refined goods, goods moved by the players, turn-in at a town hall | Proposed | 2026-11-06 |
+| [0015](./0015-mission-tiers-and-economy-scale.md) | Mission tiers, and one scale for the whole economy | Proposed | 2026-11-09 |
