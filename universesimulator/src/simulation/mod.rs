@@ -8,6 +8,7 @@ pub mod prices;
 pub mod publisher;
 pub mod reconciler;
 pub mod stocks;
+pub mod tiers;
 pub mod treasury;
 
 use std::time::{Duration, Instant};

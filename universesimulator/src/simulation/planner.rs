@@ -12,6 +12,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::stocks::Stocks;
+use super::tiers;
 use super::TickReport;
 use crate::db::{catalog::{self, Federation}, orders::{self, NewLeg, NewOrder, SupplyOrder}, world};
 use crate::error::{AppError, Result};
@@ -65,9 +66,8 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
         let Some(mut qty) = need(available, incoming.get(&key).copied().unwrap_or(0), p.min_threshold, p.target_level) else {
             continue;
         };
-        if orders::open_order_count(&st.pool, p.village_id, p.resource_id).await? > 0 {
-            continue;
-        }
+        // No guard on the orders already open: what they bring is in `incoming`, so only the gap
+        // left is ordered -- an operation over a week no longer holds a village's orders back.
         // What is shipped or mined for it: the resource itself, or the input it is refined from.
         let input = input_of(res, &by_code);
         if input != p.resource_id {
@@ -82,10 +82,9 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
             if let Some(path) = path {
                 let origin = path.hops[0].from;
                 qty = qty.min(surplus_of(origin, &promised));
-                create_transport_order(st, fed, p.resource_id, qty, &path, "auto_shortage", None).await?;
+                report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None)).await?;
                 *incoming.entry(key).or_default() += qty;
                 *promised.entry(src_key(origin)).or_default() += qty;
-                report.orders_created += 1;
                 info!(from = %origin, to = %p.village_id, resource = %res.code, qty, "refining transport order");
                 continue;
             }
@@ -112,9 +111,8 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                 created_by: None,
                 legs: vec![NewLeg { from: Some(mine), to: p.village_id, distance_m: path.hops.iter().map(|h| h.distance_m).sum() }],
             };
-            orders::create_order(&st.pool, &order).await?;
+            report.orders_created += create_tiered(st, order).await?;
             *incoming.entry(key).or_default() += amount;
-            report.orders_created += 1;
             info!(mine = %mine, to = %p.village_id, resource = %res.code, amount, "mining + transport order");
             continue;
         }
@@ -140,9 +138,8 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                 created_by: None,
                 legs: vec![NewLeg { from: None, to: p.village_id, distance_m: 0.0 }],
             };
-            orders::create_order(&st.pool, &order).await?;
+            report.orders_created += create_tiered(st, order).await?;
             *incoming.entry(key).or_default() += qty;
-            report.orders_created += 1;
             info!(village = %p.village_id, resource = %res.code, qty, "mining order");
             continue;
         }
@@ -178,18 +175,16 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                     created_by: None,
                     legs: vec![NewLeg { from: None, to: mine, distance_m: 0.0 }],
                 };
-                orders::create_order(&st.pool, &order).await?;
-                report.orders_created += 1;
+                report.orders_created += create_tiered(st, order).await?;
                 info!(village = %mine, for_village = %p.village_id, resource = %res.code, amount, "mining order for a remote shortage");
             }
             continue;
         };
         let origin = path.hops[0].from;
         qty = qty.min(surplus_of(origin, &promised));
-        create_transport_order(st, fed, p.resource_id, qty, &path, "auto_shortage", None).await?;
+        report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None)).await?;
         *incoming.entry(key).or_default() += qty;
         *promised.entry((origin, p.resource_id)).or_default() += qty;
-        report.orders_created += 1;
         info!(from = %origin, to = %p.village_id, resource = %res.code, qty, hops = path.hops.len(), "transport order");
     }
     Ok(())
@@ -201,6 +196,18 @@ pub fn input_of(res: &catalog::Resource, by_code: &HashMap<String, Uuid>) -> Uui
     res.refined_from.as_ref().and_then(|code| by_code.get(code).copied()).unwrap_or(res.id)
 }
 
+/// [order] cut into the missions of its tiers (tiers::chunks): one order per piece, each published as
+/// its own mission. Returns how many orders were made.
+async fn create_tiered(st: &AppState, order: NewOrder) -> Result<usize> {
+    let pieces = tiers::chunks(order.quantity);
+    for quantity in &pieces {
+        let mut piece = order.clone();
+        piece.quantity = *quantity;
+        orders::create_order(&st.pool, &piece).await?;
+    }
+    Ok(pieces.len())
+}
+
 pub async fn create_transport_order(
     st: &AppState,
     fed: &Federation,
@@ -210,7 +217,19 @@ pub async fn create_transport_order(
     trigger: &'static str,
     created_by: Option<String>,
 ) -> Result<SupplyOrder> {
-    let order = NewOrder {
+    orders::create_order(&st.pool, &transport_order(fed, resource, quantity, path, trigger, created_by)).await
+}
+
+/// The transport order of [quantity] of [resource] along [path], a leg per hop.
+fn transport_order(
+    fed: &Federation,
+    resource: Uuid,
+    quantity: i64,
+    path: &Path,
+    trigger: &'static str,
+    created_by: Option<String>,
+) -> NewOrder {
+    NewOrder {
         kind: "transport",
         federation_id: fed.id,
         resource_id: resource,
@@ -221,8 +240,7 @@ pub async fn create_transport_order(
         trigger,
         created_by,
         legs: path.hops.iter().map(|h| NewLeg { from: Some(h.from), to: h.to, distance_m: h.distance_m }).collect(),
-    };
-    orders::create_order(&st.pool, &order).await
+    }
 }
 
 /// Manual order (admin or internal API): from `origin` when given, else from the nearest

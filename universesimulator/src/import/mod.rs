@@ -29,6 +29,12 @@ pub const DEPOT_VILLAGE_FIELD: &str = "poi_uuid";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorldFile {
     pub federation: FederationFile,
+    /// The size of the whole economy: every quantity of the villages' profiles (thresholds and
+    /// targets, flows, capacities, initial stocks, mineral sources) is multiplied by it at import.
+    /// One knob to make the world richer or poorer (25: a factory of 1000 people burns 100 kg of
+    /// ingots an hour); the mission tiers stay in absolute quantities (simulation::tiers).
+    #[serde(default = "one")]
+    pub economy_scale: f64,
     #[serde(default)]
     pub resources: Vec<ResourceInput>,
     #[serde(default)]
@@ -252,17 +258,23 @@ fn profile_key<'a>(villages: &'a VillagesFile, village_type: Option<&'a str>, na
 
 /// The stock a village's main warehouse starts with for [c]: [CapacityFile::initial_below_threshold] of its
 /// scaled minimum threshold when set and a policy exists, else [CapacityFile::initial_stock].
-pub fn initial_stock_of(c: &CapacityFile, policies: &[PolicyFile], population: i64) -> i64 {
-    let Some(share) = c.initial_below_threshold else { return c.initial_stock };
+pub fn initial_stock_of(c: &CapacityFile, policies: &[PolicyFile], population: i64, economy: f64) -> i64 {
+    let fixed = (c.initial_stock as f64 * economy).round() as i64;
+    let Some(share) = c.initial_below_threshold else { return fixed };
     policies
         .iter()
         .find(|p| p.resource == c.resource)
-        .map(|p| (scaled(p.min_threshold as f64, p.per_thousand, population) * share).floor() as i64)
-        .unwrap_or(c.initial_stock)
+        .map(|p| (scaled(p.min_threshold as f64, p.per_thousand, population, economy) * share).floor() as i64)
+        .unwrap_or(fixed)
 }
 
-fn scaled(value: f64, per_thousand: bool, population: i64) -> f64 {
-    if per_thousand { value * population as f64 / 1000.0 } else { value }
+/// [value] for this village: per thousand people when [per_thousand], times the economy's scale.
+fn scaled(value: f64, per_thousand: bool, population: i64, economy: f64) -> f64 {
+    economy * if per_thousand { value * population as f64 / 1000.0 } else { value }
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 /// Lists the planet's villages and depots, groups depots by village (`poi_uuid`).
@@ -419,8 +431,8 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
             let policy = VillagePolicy {
                 village_id: item.uuid,
                 resource_id: resource(&p.resource)?.id,
-                min_threshold: scaled(p.min_threshold as f64, p.per_thousand, population).round() as i64,
-                target_level: scaled(p.target_level as f64, p.per_thousand, population).round() as i64,
+                min_threshold: scaled(p.min_threshold as f64, p.per_thousand, population, file.economy_scale).round() as i64,
+                target_level: scaled(p.target_level as f64, p.per_thousand, population, file.economy_scale).round() as i64,
             };
             if forced(&p.resource, &|o| o.policies.iter().map(|x| x.resource.clone()).collect()) {
                 world::upsert_policy(&st.pool, &policy).await?;
@@ -433,7 +445,7 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
             let flow = FlowInput {
                 village_id: item.uuid,
                 resource_id: resource(&f.resource)?.id,
-                rate_per_hour: scaled(f.rate_per_hour, f.per_thousand, population),
+                rate_per_hour: scaled(f.rate_per_hour, f.per_thousand, population, file.economy_scale),
                 source: f.source.clone(),
                 label: f.label.clone(),
             };
@@ -445,8 +457,8 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
             let source = MineralSourceInput {
                 village_id: item.uuid,
                 resource_id: resource(&s.resource)?.id,
-                remaining_units: s.remaining_units,
-                max_units_per_mission: s.max_units_per_mission,
+                remaining_units: s.remaining_units.map(|u| (u as f64 * file.economy_scale).round() as i64),
+                max_units_per_mission: (s.max_units_per_mission as f64 * file.economy_scale).round() as i64,
             };
             let saved = if forced(&s.resource, &|o| o.mineral_sources.iter().map(|x| x.resource.clone()).collect()) {
                 world::upsert_mineral_source(&st.pool, &source).await.map(|_| true)?
@@ -458,13 +470,14 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
         for c in &profile.capacities {
             let res = resource(&c.resource)?;
             let force = forced(&c.resource, &|o| o.capacities.iter().map(|x| x.resource.clone()).collect());
-            let wanted = initial_stock_of(c, &profile.policies, population);
+            let wanted = initial_stock_of(c, &profile.policies, population, file.economy_scale);
+            let capacity = c.capacity.map(|cap| (cap as f64 * file.economy_scale).round() as i64);
             for (i, w) in warehouses.iter().enumerate() {
                 let initial = if i == 0 { wanted } else { 0 };
                 let cap = if force {
-                    world::force_capacity(&st.pool, *w, res.id, c.capacity, initial).await?
+                    world::force_capacity(&st.pool, *w, res.id, capacity, initial).await?
                 } else {
-                    world::insert_capacity_if_missing(&st.pool, *w, res.id, c.capacity, initial).await?
+                    world::insert_capacity_if_missing(&st.pool, *w, res.id, capacity, initial).await?
                 };
                 report.capacities += 1;
                 if !cap.initial_stock_applied && cap.initial_stock > 0 {
@@ -556,8 +569,9 @@ mod tests {
 
     #[test]
     fn per_thousand_scaling() {
-        assert_eq!(scaled(10.0, true, 2500), 25.0);
-        assert_eq!(scaled(10.0, false, 2500), 10.0);
+        assert_eq!(scaled(10.0, true, 2500, 1.0), 25.0);
+        assert_eq!(scaled(10.0, false, 2500, 1.0), 10.0);
+        assert_eq!(scaled(10.0, true, 2500, 25.0), 625.0, "the economy's scale on top");
     }
 }
 
@@ -569,9 +583,9 @@ mod initial_stock_tests {
     fn a_fresh_world_starts_just_under_the_threshold() {
         let policy = PolicyFile { resource: "ingot.gold".into(), min_threshold: 40, target_level: 120, per_thousand: true };
         let below = CapacityFile { resource: "ingot.gold".into(), capacity: Some(5000), initial_stock: 0, initial_below_threshold: Some(0.9) };
-        assert_eq!(initial_stock_of(&below, &[policy.clone()], 2000), 72, "90 % of 80 (40 per thousand, 2 000 people)");
+        assert_eq!(initial_stock_of(&below, &[policy.clone()], 2000, 1.0), 72, "90 % of 80 (40 per thousand, 2 000 people)");
         let fixed = CapacityFile { initial_below_threshold: None, initial_stock: 15, ..below.clone() };
-        assert_eq!(initial_stock_of(&fixed, &[policy], 2000), 15, "no share: the fixed stock");
-        assert_eq!(initial_stock_of(&below, &[], 2000), 0, "no policy for it: the fixed stock (0)");
+        assert_eq!(initial_stock_of(&fixed, &[policy], 2000, 1.0), 15, "no share: the fixed stock");
+        assert_eq!(initial_stock_of(&below, &[], 2000, 1.0), 0, "no policy for it: the fixed stock (0)");
     }
 }
