@@ -10,6 +10,7 @@ import { listPlayerMissions } from '../services/assignments.service.js';
 import { listMissions } from '../services/missions.service.js';
 import { listInvitationsFor } from '../services/invitations.service.js';
 import { progressOfMissions } from '../services/progress.service.js';
+import { withPoiNames } from '../services/zones.service.js';
 import { assignmentListQuery, missionCreatedListQuery } from './schemas.js';
 
 /** Router for the current player's missions. */
@@ -40,7 +41,9 @@ meRoutes.get(
       Number(req.query.offset),
     );
     const progress = await progressOfMissions(found.items.map((row) => row.mission.id));
-    const missions = found.items.map((row) => ({ ...row, progress: progress.get(row.mission.id) ?? null }));
+    // The places named, as in the browse: "M0001", not a POI id.
+    const named = await withPoiNames(found.items.map((row) => row.mission));
+    const missions = found.items.map((row, i) => ({ ...row, mission: named[i], progress: progress.get(row.mission.id) ?? null }));
     res.json({ missions, total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
@@ -59,6 +62,6 @@ meRoutes.get(
       Number(req.query.limit),
       Number(req.query.offset),
     );
-    res.json({ missions: found.items, total: found.total, limit: found.limit, offset: found.offset });
+    res.json({ missions: await withPoiNames(found.items), total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
