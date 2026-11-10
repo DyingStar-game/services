@@ -33,6 +33,14 @@ pub struct FakeState {
     /// Political treasuries, in `credits`.
     pub wallets: HashMap<Uuid, i64>,
     pub minted: Vec<(Uuid, i64)>,
+    /// (player, amount) credited.
+    pub payments: Vec<(Uuid, i64)>,
+    /// The movements made, by key and leg: like the economy, a second one changes nothing.
+    pub movements: std::collections::HashSet<String>,
+    /// How many of the next player credits fail (a role missing, a frozen account).
+    pub failing_credits: u32,
+    /// (player, notification) sent.
+    pub notifications: Vec<(Uuid, serde_json::Value)>,
     pub items: HashMap<Uuid, PoiItem>,
     pub pois: HashMap<Uuid, NewPoi>,
 }
@@ -158,6 +166,11 @@ impl SocialClient for FakeWorld {
             }
             Ok(out)
         })
+    }
+
+    async fn notify_player(&self, player: Uuid, notification: &serde_json::Value) -> Result<()> {
+        self.with(|s| s.notifications.push((player, notification.clone())));
+        Ok(())
     }
 }
 
@@ -318,6 +331,36 @@ impl EconomieClient for FakeWorld {
         });
         Ok(())
     }
+
+    async fn debit_treasury(&self, entity_id: Uuid, amount: i64, _currency: &str, key: &str, _reference: &str) -> Result<()> {
+        self.with(|s| {
+            if !s.movements.insert(format!("{key}:debit")) {
+                return Ok(());
+            }
+            let balance = s.wallets.entry(entity_id).or_default();
+            if *balance < amount {
+                s.movements.remove(&format!("{key}:debit"));
+                return Err(upstream(409, "INSUFFICIENT_FUNDS"));
+            }
+            *balance -= amount;
+            Ok(())
+        })
+    }
+
+    async fn credit_player(&self, player: Uuid, amount: i64, _currency: &str, key: &str, _reference: &str) -> Result<()> {
+        self.with(|s| {
+            if s.movements.contains(&format!("{key}:credit")) {
+                return Ok(());
+            }
+            if s.failing_credits > 0 {
+                s.failing_credits -= 1;
+                return Err(upstream(403, "FORBIDDEN"));
+            }
+            s.movements.insert(format!("{key}:credit"));
+            s.payments.push((player, amount));
+            Ok(())
+        })
+    }
 }
 
 #[async_trait]
@@ -345,4 +388,9 @@ impl PersistenceClient for FakeWorld {
             items
         }))
     }
+}
+
+/// An error as the economy answers it.
+fn upstream(status: u16, code: &str) -> crate::error::AppError {
+    crate::error::AppError::Upstream { service: "economie", status, code: code.into(), message: String::new() }
 }

@@ -37,6 +37,8 @@ pub trait SocialClient: Send + Sync {
     async fn set_parent(&self, id: Uuid, parent_id: Option<Uuid>) -> Result<()>;
     /// Ancestors from the direct parent up to the root.
     async fn ancestors(&self, id: Uuid) -> Result<Vec<PoliticalEntity>>;
+    /// Tells a player something (`{type, data}`), while they are online; not delivered is no error.
+    async fn notify_player(&self, player: Uuid, notification: &serde_json::Value) -> Result<()>;
 }
 
 // ── Inventory ────────────────────────────────────────────────────────────────
@@ -181,6 +183,11 @@ pub trait EconomieClient: Send + Sync {
     async fn political_balance(&self, entity_id: Uuid, currency: &str) -> Result<i64>;
     async fn set_minting(&self, entity_id: Uuid, allow: bool, ceiling: Option<i64>) -> Result<()>;
     async fn mint(&self, entity_id: Uuid, amount: i64, currency: &str, reason: &str) -> Result<()>;
+    /// Takes [amount] out of [entity_id]'s treasury, once per [key]: done already is Ok, a treasury that
+    /// cannot pay is the upstream error `INSUFFICIENT_FUNDS`.
+    async fn debit_treasury(&self, entity_id: Uuid, amount: i64, currency: &str, key: &str, reference: &str) -> Result<()>;
+    /// Credits [player] with [amount], once per [key]: done already is Ok.
+    async fn credit_player(&self, player: Uuid, amount: i64, currency: &str, key: &str, reference: &str) -> Result<()>;
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────

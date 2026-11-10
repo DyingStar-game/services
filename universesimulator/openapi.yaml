@@ -7,7 +7,8 @@ info:
     \ bearer token (dev: `X-Player-Id`, optional `X-Player-Roles`).\n- `/api/admin/*`: player token with a moderation role\
     \ (`moderator`, `admin`, `supervisor`);\n  writes need `admin` or `supervisor`.\n- `/api/internal/*`: service-account\
     \ token with `aud=universesimulator-api`, `azp` in\n  `INTERNAL_SERVICE_CLIENTS`; `GET` needs `usim:read`, `POST /orders`\
-    \ `usim:write`,\n  `POST /warehouse-deliveries` `usim:deliver` (dev: `X-Internal-Key`).\n\nErrors: `{ \"error\": \"<CODE>\"\
+    \ `usim:write`,\n  `POST /warehouse-deliveries` and
+  `POST /warehouse-sales` `usim:deliver` (dev: `X-Internal-Key`).\n\nErrors: `{ \"error\": \"<CODE>\"\
     , \"message\": \"<text>\" }`.\n\nIdentifiers are hex UUIDs (8-4-4-4-12) without RFC version/variant constraints: warehouse\n\
     ids are persistence POI UUIDs, which do not carry RFC version bits.\n\nVillages (persistence `poi_village`) are the nodes\
     \ of the simulation: their stock is the sum of\ntheir warehouses (`cargo_depot` objects attached through the `poi_uuid`\
@@ -333,6 +334,48 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           description: IDEMPOTENCY_CONFLICT, DELIVERY_IN_PROGRESS or INSUFFICIENT_STOCK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/internal/warehouse-sales:
+    post:
+      tags:
+      - Internal
+      operationId: createWarehouseSale
+      summary: Off-mission sale in a warehouse (game server, role usim:deliver)
+      description: "Buys, at the market price and from the issuer's treasury, what a player shelved that no
+        mission of theirs counted (ADR 0017). The sale is recorded with its price, then paid. Idempotent on
+        `idempotencyKey`: a replay returns 200 with the same sale, and pays what was left to pay if an
+        earlier attempt failed half-way; the same key with another content returns 409
+        `IDEMPOTENCY_CONFLICT`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaleInput'
+      responses:
+        '201':
+          description: Sold
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleResult'
+        '200':
+          description: Replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: IDEMPOTENCY_CONFLICT or SALE_IN_PROGRESS
           content:
             application/json:
               schema:
@@ -1187,6 +1230,55 @@ components:
           - string
           - 'null'
           pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    SaleInput:
+      type: object
+      additionalProperties: false
+      required:
+      - idempotencyKey
+      - warehouseId
+      - goodType
+      - quantity
+      - playerId
+      properties:
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 100
+        warehouseId:
+          $ref: '#/components/schemas/Uuid'
+        goodType:
+          type: string
+          description: The good as inventory names it (`ore.gold`).
+        quantity:
+          type: integer
+          minimum: 1
+          description: What is left of the drop once the player's missions counted their part.
+        playerId:
+          $ref: '#/components/schemas/Uuid'
+    SaleResult:
+      type: object
+      required:
+      - quantity
+      - unitPrice
+      - amount
+      - currency
+      - paid
+      - sale
+      properties:
+        quantity:
+          type: integer
+        unitPrice:
+          type: number
+        amount:
+          type: integer
+          description: Rounded to the credit; 0 for a sale worth less than half of one.
+        currency:
+          type: string
+        paid:
+          type: boolean
+        sale:
+          type: object
+          description: The recorded sale (`paidAt` null while its payment is still to make).
     FederationInput:
       type: object
       additionalProperties: false

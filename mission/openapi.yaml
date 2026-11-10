@@ -1031,6 +1031,14 @@ paths:
                 type: object
                 properties:
                   applied: { type: array, items: { type: string, format: uuid } }
+                  counted:
+                    type: integer
+                    nullable: true
+                    description: >
+                      How much of the move the player's missions counted (0 for a load, or when no mission
+                      takes it). A replayed move (same key) answers what it counted the first time. Null
+                      when the warehouses could not be resolved (inventory down): the caller must not
+                      take the rest as the player's own.
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/internal/missions/{missionId}/verify:

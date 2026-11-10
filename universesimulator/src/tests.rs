@@ -572,3 +572,101 @@ fn a_kind_is_a_slug() {
         assert!(!catalog::is_kind(bad), "{bad}");
     }
 }
+
+// ── Off-mission sales (ADR 0017) ─────────────────────────────────────────────
+
+fn sale_body(key: &str, player: Uuid, quantity: i64) -> serde_json::Value {
+    json!({ "idempotencyKey": key, "warehouseId": id(D1), "goodType": "water", "quantity": quantity, "playerId": player })
+}
+
+/// Paid once at the market price from the treasury, the player told; a replay answers the same sale.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_off_mission_sale_is_paid_once_and_told(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    let treasury = fake.with(|s| s.wallets[&fed.political_entity_id]);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-1", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED, "{res}");
+    let amount = res["amount"].as_i64().unwrap();
+    assert!(amount > 0, "{res}");
+    assert_eq!(res["paid"], true);
+    let (status, again) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-1", player, 40))).await;
+    assert_eq!(status, StatusCode::OK, "a replay");
+    assert_eq!(again["amount"], amount);
+    assert_eq!(fake.with(|s| s.payments.clone()), vec![(player, amount)], "paid once");
+    assert_eq!(fake.with(|s| s.wallets[&fed.political_entity_id]), treasury - amount, "debited once");
+    assert_eq!(fake.with(|s| s.notifications.len()), 1, "told once");
+    assert_eq!(fake.with(|s| s.notifications[0].1["type"].clone()), "warehouse.sale");
+}
+
+/// The credit fails after the treasury was debited (a role missing, a frozen account): nothing is lost,
+/// the same key pays what is left to pay, at the price recorded the first time.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_whose_credit_failed_is_paid_by_a_replay(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    let treasury = fake.with(|s| s.wallets[&fed.political_entity_id]);
+    fake.with(|s| s.failing_credits = 1);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-2", player, 40))).await;
+    assert!(status.is_client_error() || status.is_server_error(), "the credit failed: {status} {res}");
+    assert!(fake.with(|s| s.payments.is_empty()));
+    let debited = treasury - fake.with(|s| s.wallets[&fed.political_entity_id]);
+    assert!(debited > 0, "the treasury was debited");
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-2", player, 40))).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(res["paid"], true);
+    assert_eq!(fake.with(|s| s.payments.clone()), vec![(player, debited)], "the player gets what the treasury gave");
+    assert_eq!(treasury - fake.with(|s| s.wallets[&fed.political_entity_id]), debited, "and the treasury gave it once");
+    assert_eq!(fake.with(|s| s.notifications.len()), 1);
+}
+
+/// A key is one sale: another player or another quantity under it is refused.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_key_used_for_another_sale_is_refused(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-3", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-3", player, 41))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(res["error"], "IDEMPOTENCY_CONFLICT");
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-3", Uuid::new_v4(), 40))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(fake.with(|s| s.payments.len()), 1);
+}
+
+/// A treasury that cannot pay mints a batch first, as for a mission's escrow.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_the_treasury_cannot_pay_mints_first(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    fake.with(|s| {
+        s.wallets.insert(fed.political_entity_id, 0);
+        s.minted.clear();
+    });
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-4", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED, "{res}");
+    assert_eq!(fake.with(|s| s.minted.len()), 1, "one batch");
+    assert_eq!(fake.with(|s| s.payments.len()), 1);
+}
+
+/// Refused before any money moves: an unknown warehouse or good, nothing to sell.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_of_nothing_or_nowhere_is_refused(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-5", player, 0))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut elsewhere = sale_body("sale-6", player, 5);
+    elsewhere["warehouseId"] = json!(Uuid::new_v4());
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(elsewhere)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let mut unknown = sale_body("sale-7", player, 5);
+    unknown["goodType"] = json!("moon_cheese");
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(unknown)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(fake.with(|s| s.payments.is_empty()));
+}

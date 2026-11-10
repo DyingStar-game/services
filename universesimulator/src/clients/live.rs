@@ -81,6 +81,11 @@ impl SocialClient for HttpSocial {
     async fn ancestors(&self, id: Uuid) -> Result<Vec<PoliticalEntity>> {
         self.0.get(&format!("/politics/{id}/ancestors")).await
     }
+
+    async fn notify_player(&self, player: Uuid, notification: &Value) -> Result<()> {
+        let _: Value = self.0.post(&format!("/players/{player}/notifications"), notification).await?;
+        Ok(())
+    }
 }
 
 // ── Inventory ────────────────────────────────────────────────────────────────
@@ -261,6 +266,16 @@ impl EconomieClient for HttpEconomie {
         let _: Value = self.0.post(&format!("/politics/{entity_id}/mint"), &body).await?;
         Ok(())
     }
+
+    async fn debit_treasury(&self, entity_id: Uuid, amount: i64, currency: &str, key: &str, reference: &str) -> Result<()> {
+        let body = json!({ "amount": amount, "currency": currency, "reference": reference, "externalId": format!("{key}:debit") });
+        once(self.0.post(&format!("/politics/{entity_id}/wallet/debit"), &body).await)
+    }
+
+    async fn credit_player(&self, player: Uuid, amount: i64, currency: &str, key: &str, reference: &str) -> Result<()> {
+        let body = json!({ "amount": amount, "currency": currency, "reference": reference, "externalId": format!("{key}:credit"), "type": "deposit" });
+        once(self.0.post(&format!("/players/{player}/wallet/credit"), &body).await)
+    }
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────
@@ -306,5 +321,15 @@ impl PersistenceClient for HttpPersistence {
             }
         }
         Ok(out)
+    }
+}
+
+/// A movement keyed by an `externalId`: the economy answers one it has already made with 409
+/// `DUPLICATE_EXTERNAL_ID`, which for a replay is the answer hoped for.
+fn once(res: Result<Value>) -> Result<()> {
+    match res {
+        Ok(_) => Ok(()),
+        Err(e) if e.upstream_code() == Some("DUPLICATE_EXTERNAL_ID") => Ok(()),
+        Err(e) => Err(e),
     }
 }

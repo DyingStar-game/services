@@ -8,7 +8,8 @@
  * its warehouse by a POI whose `metadata.persistence` is that id (universesimulator creates them).
  * The running totals live in the objective's `state` (shared by every assignee, as objective
  * progress already is): `delivered` for drops, `loadedAt` latched by a load at a transport's
- * source. Each move is counted once per objective (`moveKeys`).
+ * source. Each move is counted once per objective (`moveKeys`), and what it filled is kept
+ * (`moveUsed`): a replayed move answers what it counted the first time.
  */
 import { and, eq, inArray } from 'drizzle-orm';
 
@@ -40,6 +41,8 @@ type ObjectiveState = {
   delivered?: number;
   loadedAt?: string;
   moveKeys?: string[];
+  /** What each remembered move filled of this objective (0 for a load). */
+  moveUsed?: Record<string, number>;
 } & Record<string, unknown>;
 
 /** Params a warehouse-measured objective carries (deliver_material or transport). */
@@ -59,23 +62,28 @@ interface WarehouseParams {
  * carried over to the next — never the same goods for two missions. A load latches every transport
  * it starts (it delivers nothing). The objectives are read and written in one transaction, locked,
  * so two crates shelved at the same moment cannot overwrite each other's count.
- * @returns The objectives that took the move into account.
+ * @returns The objectives that took the move into account, and how much of it they counted (`counted`:
+ *   what is left of a drop is the player's own sale, paid by the universe simulator). A replayed move
+ *   (same key) answers the same `counted` and applies nothing again; `counted` is null when the
+ *   warehouses could not be resolved (inventory down), so that nobody sells on a guess.
  */
-export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: string[] }> {
+export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: string[]; counted: number | null }> {
   const assignments = await db
     .select({ missionId: missionAssignments.missionId, acceptedAt: missionAssignments.acceptedAt })
     .from(missionAssignments)
     .where(and(eq(missionAssignments.playerId, move.playerId), eq(missionAssignments.status, ACTIVE_ASSIGNMENT_STATUS)));
-  if (assignments.length === 0) return { applied: [] };
+  if (assignments.length === 0) return { applied: [], counted: 0 };
   const acceptedAt = new Map(assignments.map((a) => [a.missionId, a.acceptedAt.getTime()]));
 
   const candidates = (
     await db.select().from(missionObjectives).where(inArray(missionObjectives.missionId, [...acceptedAt.keys()]))
   ).filter((o) => (o.params as WarehouseParams | null)?.via === 'warehouse');
-  if (candidates.length === 0) return { applied: [] };
+  if (candidates.length === 0) return { applied: [], counted: 0 };
   const warehouseOf = await warehousesOfPois(candidates);
+  if (warehouseOf === null) return { applied: [], counted: null };
 
   const applied: string[] = [];
+  let counted = 0;
   const touched = new Set<string>();
   /** Missions this move may have finished: one of their objectives was not completed before it. */
   const mayFinish = new Set<string>();
@@ -88,6 +96,14 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
     locked.sort((a, b) => (acceptedAt.get(a.missionId) ?? 0) - (acceptedAt.get(b.missionId) ?? 0) || a.order - b.order);
     let left = move.quantity;
     for (const objective of locked) {
+      // A replay: what this objective counted of the move the first time, nothing applied again.
+      const before = usedBefore(objective, move);
+      if (before !== null) {
+        counted += before;
+        left -= before;
+        continue;
+      }
+      if (move.direction === 'drop' && left <= 0) break;
       const result = applyMove(objective, { ...move, quantity: left }, warehouseOf);
       if (result === null) continue;
       await tx.update(missionObjectives).set({ state: result.state, updatedAt: new Date() }).where(eq(missionObjectives.id, objective.id));
@@ -95,6 +111,7 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
       touched.add(objective.missionId);
       if (objective.status !== 'completed') mayFinish.add(objective.missionId);
       left -= result.used;
+      counted += result.used;
       if (move.direction === 'drop' && left <= 0) break;
     }
   });
@@ -112,7 +129,7 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
       // A mission closed or expired meanwhile: the move is recorded, nothing to measure.
     }
   }
-  return { applied };
+  return { applied, counted: Math.min(counted, move.quantity) };
 }
 
 /**
@@ -130,6 +147,17 @@ async function notifyAssignees(missionId: string, type: 'mission.ready' | 'missi
       notifyMissionEvent(a.playerId, { type, data: { missionId, title: mission?.title ?? '' } }),
     ),
   );
+}
+
+/**
+ * What [objective] counted of [move] when it first saw it, or null when it never did. A move it
+ * remembers without its count (recorded before the count was kept) answers the whole quantity:
+ * better to sell nothing than to pay twice. Pure: exported for the tests.
+ */
+export function usedBefore(objective: Pick<MissionObjective, 'state'>, move: Pick<GoodsMove, 'key' | 'quantity'>): number | null {
+  const state = (objective.state ?? {}) as ObjectiveState;
+  if (!(state.moveKeys ?? []).includes(move.key)) return null;
+  return state.moveUsed?.[move.key] ?? move.quantity;
 }
 
 /**
@@ -177,11 +205,16 @@ export function applyMove(
     return null;
   }
   state.moveKeys = [...keys, move.key].slice(-MAX_KEYS);
+  const usedOf = { ...(state.moveUsed ?? {}), [move.key]: used };
+  state.moveUsed = Object.fromEntries(state.moveKeys.filter((k) => k in usedOf).map((k) => [k, usedOf[k] as number]));
   return { state, used };
 }
 
-/** POI id → warehouse holder id (`metadata.persistence`), for every zone/source POI of [objectives]. */
-async function warehousesOfPois(objectives: MissionObjective[]): Promise<Map<string, string>> {
+/**
+ * POI id → warehouse holder id (`metadata.persistence`), for every zone/source POI of [objectives];
+ * null when inventory could not be asked: the move then counts nowhere and its key is not recorded.
+ */
+async function warehousesOfPois(objectives: MissionObjective[]): Promise<Map<string, string> | null> {
   const ids = new Set<string>();
   for (const o of objectives) {
     const p = (o.params ?? {}) as WarehouseParams;
@@ -196,7 +229,8 @@ async function warehousesOfPois(objectives: MissionObjective[]): Promise<Map<str
       if (typeof persistence === 'string' && persistence !== '') out.set(poi.id, persistence);
     }
   } catch {
-    // Inventory down: no warehouse resolves, the move counts nowhere (the game logs its own call).
+    // Inventory down: nothing can be decided (the game logs its own call, and sells nothing).
+    return ids.size > 0 ? null : out;
   }
   return out;
 }
