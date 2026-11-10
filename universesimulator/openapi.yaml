@@ -95,6 +95,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PriceIndexList'
+  /api/market:
+    get:
+      tags:
+      - Read
+      operationId: getMarket
+      summary: 'The market as a board shows it: each resource with its price, its price a day ago and the curve between'
+      parameters:
+      - $ref: '#/components/parameters/federation'
+      responses:
+        '200':
+          description: The federation's market
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  federationId: { type: string, format: uuid }
+                  currency: { type: string }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        resourceId: { type: string, format: uuid }
+                        code: { type: string }
+                        name: { type: string }
+                        nameFr: { type: string, nullable: true }
+                        unit: { type: string }
+                        basePrice: { type: number }
+                        unitPrice: { type: number }
+                        previousPrice: { type: number, description: The oldest price of the last 24 h }
+                        supply: { type: integer }
+                        demand: { type: integer }
+                        points: { type: array, items: { type: number }, description: 'At most 32 prices of the last 24 h, oldest first' }
   /api/warehouses:
     get:
       tags:

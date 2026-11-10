@@ -39,10 +39,12 @@ pub struct Village {
     pub z: Option<f64>,
     pub main_warehouse_id: Option<Uuid>,
     pub active: bool,
+    /// It has a refinery (its profile's `refines`): ore is refined there.
+    pub refines: bool,
 }
 
 const VILLAGE_COLS: &str =
-    "id, code, name, federation_id, political_entity_id, village_type, population, radius_m, x, y, z, main_warehouse_id, active";
+    "id, code, name, federation_id, political_entity_id, village_type, population, radius_m, x, y, z, main_warehouse_id, active, refines";
 
 /// A village as read from persistence.
 #[derive(Debug, Clone)]
@@ -114,6 +116,12 @@ pub async fn upsert_village(pool: &PgPool, v: &VillageInput) -> Result<Village> 
     .bind(z)
     .fetch_one(pool)
     .await?)
+}
+
+/// Whether the village has a refinery (its profile's `refines`).
+pub async fn set_village_refines(pool: &PgPool, village: Uuid, refines: bool) -> Result<()> {
+    sqlx::query("UPDATE villages SET refines = $2 WHERE id = $1 AND refines <> $2").bind(village).bind(refines).execute(pool).await?;
+    Ok(())
 }
 
 /// Sets the main warehouse when the village has none (or when `force`).

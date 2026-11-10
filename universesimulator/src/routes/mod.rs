@@ -21,6 +21,7 @@ fn reads() -> Router<AppState> {
         .route("/federations", get(reads::federations))
         .route("/resources", get(reads::resources))
         .route("/prices", get(reads::prices))
+        .route("/market", get(reads::market))
         .route("/villages", get(reads::villages))
         .route("/villages/{id}", get(reads::village))
         .route("/warehouses", get(reads::warehouses))

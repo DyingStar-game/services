@@ -347,6 +347,9 @@ async fn ingots(st: &AppState) -> catalog::Resource {
         code: "ingot_fer".into(),
         name: "Iron ingots".into(),
         name_fr: Some("Lingots de fer".into()),
+        mined: None,
+        mined_fr: None,
+        crate_kg: 25.0,
         category: "ore".into(),
         unit: "kg".into(),
         inventory_good_type: "ingot_fer".into(),
@@ -404,6 +407,9 @@ async fn ingots_nobody_has_the_ore_for_are_mined_and_delivered_in_one_mission(po
     let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
     assert_eq!(mission.objectives[0]["type"], "deliver_material");
     assert_eq!(mission.objectives[0]["params"]["goodType"], "ingot_fer");
+    // The mineral is mined then crushed (crushed ore is not mined); no refining village here: a factory city.
+    let text = mission.objectives[0]["title"].as_str().unwrap_or_default().to_string();
+    assert!(text.starts_with("Mine and crush in any mining village, have it refined in a factory city"), "{text}");
 
     fake.complete_mission(leg.mission_id.unwrap());
     simulation::tick(&st, true).await.unwrap();
@@ -553,3 +559,4 @@ async fn warehouse_deliveries(pool: PgPool) {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(res["error"], "INSUFFICIENT_STOCK");
 }
+

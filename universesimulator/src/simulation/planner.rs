@@ -82,7 +82,7 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
             if let Some(path) = path {
                 let origin = path.hops[0].from;
                 qty = qty.min(surplus_of(origin, &promised));
-                report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None)).await?;
+                report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None), res).await?;
                 *incoming.entry(key).or_default() += qty;
                 *promised.entry(src_key(origin)).or_default() += qty;
                 info!(from = %origin, to = %p.village_id, resource = %res.code, qty, "refining transport order");
@@ -111,7 +111,7 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                 created_by: None,
                 legs: vec![NewLeg { from: Some(mine), to: p.village_id, distance_m: path.hops.iter().map(|h| h.distance_m).sum() }],
             };
-            report.orders_created += create_tiered(st, order).await?;
+            report.orders_created += create_tiered(st, order, res).await?;
             *incoming.entry(key).or_default() += amount;
             info!(mine = %mine, to = %p.village_id, resource = %res.code, amount, "mining + transport order");
             continue;
@@ -138,7 +138,7 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                 created_by: None,
                 legs: vec![NewLeg { from: None, to: p.village_id, distance_m: 0.0 }],
             };
-            report.orders_created += create_tiered(st, order).await?;
+            report.orders_created += create_tiered(st, order, res).await?;
             *incoming.entry(key).or_default() += qty;
             info!(village = %p.village_id, resource = %res.code, qty, "mining order");
             continue;
@@ -175,14 +175,14 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                     created_by: None,
                     legs: vec![NewLeg { from: None, to: mine, distance_m: 0.0 }],
                 };
-                report.orders_created += create_tiered(st, order).await?;
+                report.orders_created += create_tiered(st, order, res).await?;
                 info!(village = %mine, for_village = %p.village_id, resource = %res.code, amount, "mining order for a remote shortage");
             }
             continue;
         };
         let origin = path.hops[0].from;
         qty = qty.min(surplus_of(origin, &promised));
-        report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None)).await?;
+        report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None), res).await?;
         *incoming.entry(key).or_default() += qty;
         *promised.entry((origin, p.resource_id)).or_default() += qty;
         info!(from = %origin, to = %p.village_id, resource = %res.code, qty, hops = path.hops.len(), "transport order");
@@ -198,8 +198,8 @@ pub fn input_of(res: &catalog::Resource, by_code: &HashMap<String, Uuid>) -> Uui
 
 /// [order] cut into the missions of its tiers (tiers::chunks): one order per piece, each published as
 /// its own mission. Returns how many orders were made.
-async fn create_tiered(st: &AppState, order: NewOrder) -> Result<usize> {
-    let pieces = tiers::chunks(order.quantity);
+async fn create_tiered(st: &AppState, order: NewOrder, res: &catalog::Resource) -> Result<usize> {
+    let pieces = tiers::chunks(order.quantity, res.truckload());
     for quantity in &pieces {
         let mut piece = order.clone();
         piece.quantity = *quantity;

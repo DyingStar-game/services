@@ -3,8 +3,8 @@
 //! follows from its quantity alone (in the resource's own unit: kg, l, m3), which both the planner,
 //! cutting the shortage, and the publisher, setting the mission's seats and deadline, read.
 //!
-//! The limits are reckoned in weight, in truckloads (TRUCK_KG), the same number in every unit for now
-//! (only gold, in kg, is simulated).
+//! The limits are reckoned in truckloads of the resource (truckload): a truck carries TRUCK_CRATES
+//! crates, whatever they hold, so a truckload of ore weighs what that many crates of ore weigh.
 
 /// The size of a mission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,18 +17,28 @@ pub enum Tier {
     Operation,
 }
 
-/// What a truck may carry (its payload, kg): the unit of the tiers. A solo mission is one truckload.
-pub const TRUCK_KG: i64 = 1_300;
-/// Largest quantity of a solo mission: one truckload.
-pub const SOLO_MAX: i64 = TRUCK_KG;
-/// A team mission: from two truckloads...
-pub const TEAM_MIN: i64 = 2 * TRUCK_KG;
-/// ...up to four.
-pub const TEAM_MAX: i64 = 4 * TRUCK_KG;
-/// An operation: from ten truckloads...
-pub const OPERATION_MIN: i64 = 10 * TRUCK_KG;
-/// ...up to twenty.
-pub const OPERATION_MAX: i64 = 20 * TRUCK_KG;
+/// Crates a truck's bed holds (the game's mini truck: one layer of 4 x 4 ore crates, playtest 2026-11-10).
+/// Not its rated payload (1 300 kg): the bed is full by volume long before.
+pub const TRUCK_CRATES: f64 = 16.0;
+/// A solo mission: up to one truckload...
+pub const SOLO_TRUCKS: i64 = 1;
+/// ...a team one: from two truckloads to four...
+pub const TEAM_MIN_TRUCKS: i64 = 2;
+pub const TEAM_MAX_TRUCKS: i64 = 4;
+/// ...an operation: from ten to twenty.
+pub const OPERATION_MIN_TRUCKS: i64 = 10;
+pub const OPERATION_MAX_TRUCKS: i64 = 20;
+
+/// A shortage is cut into at most this many missions; what is left goes into the last one (a resource
+/// whose truckload is a unit or two would give hundreds).
+pub const MAX_PIECES: usize = 24;
+
+/// A truckload of a resource, in its own unit: TRUCK_CRATES crates of [crate_kg] each, at
+/// [mass_per_unit_kg] a unit. At least 1.
+pub fn truckload(crate_kg: f64, mass_per_unit_kg: f64) -> i64 {
+    let unit = if mass_per_unit_kg > 0.0 { mass_per_unit_kg } else { 1.0 };
+    ((TRUCK_CRATES * crate_kg / unit).round() as i64).max(1)
+}
 
 /// Hours to do one piece of solo or team work, by kind (a team shares the work, so it gets the same
 /// time as one player -- ddurieux, 2026-11-09): carry goods between two warehouses...
@@ -77,11 +87,11 @@ pub fn work_hours(kind: &str, refined: bool) -> i32 {
 }
 
 impl Tier {
-    /// The tier of a mission of [quantity].
-    pub fn of(quantity: i64) -> Tier {
-        if quantity >= OPERATION_MIN {
+    /// The tier of a mission of [quantity], for a resource whose truckload is [truck].
+    pub fn of(quantity: i64, truck: i64) -> Tier {
+        if quantity >= OPERATION_MIN_TRUCKS * truck {
             Tier::Operation
-        } else if quantity >= TEAM_MIN {
+        } else if quantity >= TEAM_MIN_TRUCKS * truck {
             Tier::Team
         } else {
             Tier::Solo
@@ -124,25 +134,43 @@ impl Tier {
     }
 }
 
-/// [quantity] cut into the quantities of its missions: operations while an operation's worth is left,
-/// then team missions, then solo ones for the rest. Their sum is [quantity].
-pub fn chunks(quantity: i64) -> Vec<i64> {
+/// [quantity] cut into the quantities of its missions, in truckloads of [truck]. First a solo mission, and a team one when what is
+/// left holds it: every shortage has work for a lone player and, big enough, for a team. Then operations
+/// while an operation's worth is left, team missions, and solo ones for the rest. Their sum is [quantity].
+pub fn chunks(quantity: i64, truck: i64) -> Vec<i64> {
+    let truck = truck.max(1);
+    let (solo_max, team_min, team_max) = (SOLO_TRUCKS * truck, TEAM_MIN_TRUCKS * truck, TEAM_MAX_TRUCKS * truck);
+    let (operation_min, operation_max) = (OPERATION_MIN_TRUCKS * truck, OPERATION_MAX_TRUCKS * truck);
     let mut out = Vec::new();
     let mut left = quantity.max(0);
-    while left >= OPERATION_MIN {
-        let c = left.min(OPERATION_MAX);
+    if left > 0 {
+        let solo = left.min(solo_max);
+        out.push(solo);
+        left -= solo;
+    }
+    if left >= team_min {
+        let team = left.min(team_max);
+        out.push(team);
+        left -= team;
+    }
+    while left >= operation_min {
+        let c = left.min(operation_max);
         out.push(c);
         left -= c;
     }
-    while left >= TEAM_MIN {
-        let c = left.min(TEAM_MAX);
+    while left >= team_min {
+        let c = left.min(team_max);
         out.push(c);
         left -= c;
     }
     while left > 0 {
-        let c = left.min(SOLO_MAX);
+        let c = left.min(solo_max);
         out.push(c);
         left -= c;
+    }
+    if out.len() > MAX_PIECES {
+        let rest: i64 = out.drain(MAX_PIECES..).sum();
+        out[MAX_PIECES - 1] += rest;
     }
     out
 }
@@ -152,29 +180,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_shortage_is_cut_from_the_biggest_missions_down() {
-        assert_eq!(chunks(30_000), vec![26_000, 4_000], "an operation, then a team for the rest");
-        assert_eq!(chunks(6_000), vec![5_200, 800]);
-        assert_eq!(chunks(2_100), vec![1_300, 800], "under two trucks: solo missions");
-        assert_eq!(chunks(788), vec![788]);
-        assert!(chunks(0).is_empty());
+    fn a_shortage_is_cut_into_a_solo_a_team_then_the_biggest_first() {
+        // Gold ore: 16 crates of 22 kg, a truckload of 352 kg.
+        let truck = truckload(22.0, 1.0);
+        assert_eq!(truck, 352);
+        assert_eq!(chunks(12_000, truck), vec![352, 1_408, 7_040, 1_408, 1_408, 352, 32], "a solo, a team, an operation, then teams and solos");
+        assert_eq!(chunks(4_183, truck), vec![352, 1_408, 1_408, 1_015], "a solo and teams");
+        assert_eq!(chunks(500, truck), vec![352, 148], "under a solo and a team: solo missions");
+        assert_eq!(chunks(250, truck), vec![250]);
+        assert!(chunks(0, truck).is_empty());
+    }
+
+    #[test]
+    fn a_tiny_truckload_does_not_give_hundreds_of_missions() {
+        let pieces = chunks(10_000, 1);
+        assert_eq!(pieces.len(), MAX_PIECES);
+        assert_eq!(pieces.iter().sum::<i64>(), 10_000, "nothing is lost: the rest is in the last one");
     }
 
     #[test]
     fn the_cut_adds_up_to_the_shortage() {
         for q in [1, 199, 601, 4_999, 5_000, 23_456] {
-            assert_eq!(chunks(q).iter().sum::<i64>(), q);
+            assert_eq!(chunks(q, 352).iter().sum::<i64>(), q);
         }
     }
 
     #[test]
     fn each_piece_is_of_its_tier() {
-        assert_eq!(Tier::of(1_300), Tier::Solo);
-        assert_eq!(Tier::of(3_000), Tier::Team);
-        assert_eq!(Tier::of(13_000), Tier::Operation);
-        assert_eq!(Tier::of(3_000).max_assignees(), 3);
-        assert_eq!(Tier::of(13_000).deadline_hours(Pace::Relaxed, 2), OPERATION_HOURS);
-        assert_eq!(Tier::of(13_000).deadline_hours(Pace::Express, 2), 2, "an express operation too");
+        assert_eq!(Tier::of(352, 352), Tier::Solo);
+        assert_eq!(Tier::of(1_000, 352), Tier::Team);
+        assert_eq!(Tier::of(4_000, 352), Tier::Operation);
+        assert_eq!(Tier::of(1_000, 352).max_assignees(), 3);
+        assert_eq!(Tier::of(4_000, 352).deadline_hours(Pace::Relaxed, 2), OPERATION_HOURS);
+        assert_eq!(Tier::of(4_000, 352).deadline_hours(Pace::Express, 2), 2, "an express operation too");
+        assert_eq!(truckload(15.0, 1.0), 240, "ingots: lighter crates, a lighter truckload");
+        assert_eq!(truckload(0.01, 1.0), 1, "never nothing");
     }
 
     #[test]
