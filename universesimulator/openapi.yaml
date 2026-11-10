@@ -1133,6 +1133,7 @@ components:
       - legBaseReward
       - createdAt
       - updatedAt
+      - kind
       properties:
         id:
           $ref: '#/components/schemas/Uuid'
@@ -1140,6 +1141,9 @@ components:
           type: string
         name:
           type: string
+        kind:
+          type: string
+          description: What the entity is, as players read it (`corporation`, `federation`, `organisation`...) -- a slug the game names in their language. Sent with every mission as `payload.issuer.kind`.
         politicalEntityId:
           $ref: '#/components/schemas/Uuid'
         planetInternalName:
@@ -1191,6 +1195,10 @@ components:
           type: string
         name:
           type: string
+        kind:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,31}$'
+          description: "`federation` when never said."
         politicalEntityId:
           $ref: '#/components/schemas/Uuid'
         planetInternalName:

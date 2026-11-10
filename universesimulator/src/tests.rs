@@ -99,7 +99,7 @@ fn world_file(initial_treasury: i64) -> WorldFile {
 fn world_json(initial_treasury: i64) -> String {
     json!({
         "federation": {
-            "code": "ARES", "name": "ARES", "planetInternalName": "tarsis_3", "planetPoiUuid": id(PLANET),
+            "code": "ARES", "name": "ARES", "kind": "corporation", "planetInternalName": "tarsis_3", "planetPoiUuid": id(PLANET),
             "initialTreasury": initial_treasury, "treasuryFloor": 0, "mintBatch": 100000, "elasticity": 1.0
         },
         "resources": [
@@ -410,6 +410,8 @@ async fn ingots_nobody_has_the_ore_for_are_mined_and_delivered_in_one_mission(po
     // The mineral is mined then crushed (crushed ore is not mined); no refining village here: a factory city.
     let text = mission.objectives[0]["title"].as_str().unwrap_or_default().to_string();
     assert!(text.starts_with("Mine and crush in any mining village, have it refined in a factory city"), "{text}");
+    // Who orders it, by name and kind, for the game to name (ADR 0016).
+    assert_eq!(mission.objectives[0]["payload"]["issuer"], json!({ "name": "ARES", "kind": "corporation" }));
 
     fake.complete_mission(leg.mission_id.unwrap());
     simulation::tick(&st, true).await.unwrap();
@@ -560,3 +562,13 @@ async fn warehouse_deliveries(pool: PgPool) {
     assert_eq!(res["error"], "INSUFFICIENT_STOCK");
 }
 
+/// A kind is a slug the game can key a translation on; anything else is refused before the database.
+#[test]
+fn a_kind_is_a_slug() {
+    for ok in ["corporation", "federation", "trade_league2"] {
+        assert!(catalog::is_kind(ok), "{ok}");
+    }
+    for bad in ["", "Corporation", "2corp", "méga", "a b", &"x".repeat(33)] {
+        assert!(!catalog::is_kind(bad), "{bad}");
+    }
+}

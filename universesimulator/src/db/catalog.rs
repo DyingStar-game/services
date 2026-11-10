@@ -14,6 +14,9 @@ pub struct Federation {
     pub id: Uuid,
     pub code: String,
     pub name: String,
+    /// What it is, as players read it (`corporation`, `federation`, `organisation`...): a slug the game
+    /// names in their language. The table's name is history: not every entity here is a federation.
+    pub kind: String,
     pub political_entity_id: Uuid,
     pub planet_internal_name: String,
     pub planet_poi_uuid: Option<Uuid>,
@@ -57,6 +60,8 @@ impl Federation {
 pub struct FederationInput {
     pub code: Option<String>,
     pub name: Option<String>,
+    /// See `Federation::kind`; `federation` when never said.
+    pub kind: Option<String>,
     pub political_entity_id: Option<Uuid>,
     pub planet_internal_name: Option<String>,
     pub planet_poi_uuid: Option<Uuid>,
@@ -83,18 +88,27 @@ pub async fn get_federation(pool: &PgPool, id: Uuid) -> Result<Option<Federation
     Ok(sqlx::query_as("SELECT * FROM federations WHERE id = $1").bind(id).fetch_optional(pool).await?)
 }
 
+/// Whether [kind] is a kind's slug: lower case, a letter first, at most 32 characters.
+pub fn is_kind(kind: &str) -> bool {
+    let mut chars = kind.chars();
+    kind.len() <= 32 && chars.next().is_some_and(|c| c.is_ascii_lowercase()) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// Inserts or updates a federation by `code` (all of code, name, politicalEntityId and
 /// planetInternalName are required on insert).
 pub async fn upsert_federation(pool: &PgPool, id: Option<Uuid>, f: &FederationInput) -> Result<Federation> {
+    if f.kind.as_deref().is_some_and(|k| !is_kind(k)) {
+        return Err(crate::error::AppError::BadRequest("kind must be a slug: lower case letters, digits and _, a letter first, at most 32".into()));
+    }
     Ok(sqlx::query_as(
         r#"
         INSERT INTO federations (id, code, name, political_entity_id, planet_internal_name, currency,
             managed_categories, treasury_floor, mint_batch, mint_ceiling, elasticity, price_min_factor,
-            price_max_factor, spread, freight_rate_per_tkm, urgency_max, miner_share, leg_base_reward, planet_poi_uuid)
+            price_max_factor, spread, freight_rate_per_tkm, urgency_max, miner_share, leg_base_reward, planet_poi_uuid, kind)
         VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, COALESCE($6, 'credits'),
             COALESCE($7, '{ore,food,water}'), COALESCE($8, 100000), COALESCE($9, 1000000), $10,
             COALESCE($11, 0.8), COALESCE($12, 0.25), COALESCE($13, 4.0), COALESCE($14, 0.1),
-            COALESCE($15, 2.0), COALESCE($16, 1.0), COALESCE($17, 0.6), COALESCE($18, 50), $19)
+            COALESCE($15, 2.0), COALESCE($16, 1.0), COALESCE($17, 0.6), COALESCE($18, 50), $19, COALESCE($20, 'federation'))
         ON CONFLICT (code) DO UPDATE SET
             name = COALESCE($3, federations.name),
             political_entity_id = COALESCE($4, federations.political_entity_id),
@@ -113,6 +127,7 @@ pub async fn upsert_federation(pool: &PgPool, id: Option<Uuid>, f: &FederationIn
             miner_share = COALESCE($17, federations.miner_share),
             leg_base_reward = COALESCE($18, federations.leg_base_reward),
             planet_poi_uuid = COALESCE($19, federations.planet_poi_uuid),
+            kind = COALESCE($20, federations.kind),
             updated_at = now()
         RETURNING *
         "#,
@@ -136,6 +151,7 @@ pub async fn upsert_federation(pool: &PgPool, id: Option<Uuid>, f: &FederationIn
     .bind(f.miner_share)
     .bind(f.leg_base_reward)
     .bind(f.planet_poi_uuid)
+    .bind(&f.kind)
     .fetch_one(pool)
     .await?)
 }

@@ -320,7 +320,12 @@ pub fn build_mission(
 ) -> NewMission {
     // `refineAt`: where the ore is refined on the way (the game lists it as a step); absent when nothing is.
     let refined = input.id != resource.id;
-    let mut payload = json!({ "source": "universesimulator", "orderId": order.id, "legId": leg.id, "seq": leg.seq, "resource": resource.code });
+    // `issuer`: who orders it, by name and kind (ADR 0016) -- the mission service only knows the issuer as
+    // a political entity's id, and the game showed "politics".
+    let mut payload = json!({
+        "source": "universesimulator", "orderId": order.id, "legId": leg.id, "seq": leg.seq, "resource": resource.code,
+        "issuer": { "name": fed.name, "kind": fed.kind },
+    });
     if let (true, Some(name)) = (refined, refinery) {
         payload["refineAt"] = json!(name);
     }

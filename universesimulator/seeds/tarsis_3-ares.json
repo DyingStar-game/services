@@ -2,6 +2,7 @@
   "economyScale": 25,
   "federation": {
     "code": "ARES",
+    "kind": "corporation",
     "name": "ARES",
     "planetInternalName": "tarsis_3",
     "planetPoiUuid": "4a7e3ece-926a-4dc0-a85c-561cf522263e",

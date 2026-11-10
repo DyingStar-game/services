@@ -16,7 +16,8 @@ The service **orchestrates** the existing game services (see [ADR 0003](docs/adr
 | Treasury and money issuance | economie |
 | Route graph, village policies and flows, warehouse capacities, mineral sources, supply orders, prices, tick | **universesimulator** (PostgreSQL) |
 
-The first federation, **ARES**, governs planet `tarsis_3` (SandBox). Decisions are recorded in
+The first entity governing supply, **ARES**, a corporation (its `kind`, ADR 0016; the table and the routes
+say `federations` for all of them), governs planet `tarsis_3` (SandBox). Decisions are recorded in
 [`docs/adr`](docs/adr/README.md).
 
 ## Villages and warehouses (ADR 0013)
