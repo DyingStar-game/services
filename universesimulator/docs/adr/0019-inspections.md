@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-11-11
 - **Deciders:** WarpZone (playtest 2026-11-11)
-- **Scope:** universesimulator, mission (`visit`), inventory (POIs), game (star chart)
+- **Scope:** universesimulator, mission (`visit`), inventory (POIs), game (server: the ground; client: star chart)
 
 ## Context
 
@@ -15,8 +15,14 @@ corporation's security has a place looked at, 5 to 40 km from a village.
 
 - **Sites.** A village with a position gets `SITES_PER_VILLAGE` (4) inspection sites, made once: a quarter
   turn apart around it, each between 5 and 40 km away, both drawn from the village's id (the same village
-  always gets the same sites). A site is a point at the village's distance from the planet's centre and a
-  POI of 1 500 m in `inventory`, wide enough for the relief. Table `inspection_sites` (migration 0011).
+  always gets the same sites). Table `inspection_sites` (migration 0011).
+- **The game server lays them on the ground.** The simulator knows no relief (the villages alone stand
+  over 3.4 km of it): it makes a site at its village's distance from the planet's centre, and gives it no
+  mission. The game server, which has the terrain, asks now and then for the sites not laid
+  (`GET /api/internal/inspection-sites/ungrounded`) and answers where the ground is under each
+  (`PUT /api/internal/inspection-sites/{id}/ground`, role `usim:deliver`), once per site (`grounded_at`,
+  migration 0012). Only then does the site get its POI in `inventory`, 500 m around that point, and its
+  missions. A site that had a POI is moved with it; a mission open on a site not laid is cancelled.
 - **One mission a village.** Each tick, a village without an open inspection gets one on its site
   inspected the longest ago. A mission that ends frees its site; cancelled or expired, the site keeps its
   turn.
@@ -32,8 +38,9 @@ corporation's security has a place looked at, 5 to 40 km from a village.
 ## Consequences
 
 - Around forty more places in `inventory` per ten villages, made once; none per mission.
-- The altitude of a site is its village's: a relief of more than 1 500 m between them would put the zone
-  out of reach. Raise `SITE_RADIUS_M`, or ask the game for the ground's height, if a planet needs it.
-- A site may fall in a lake or on a cliff: the simulator knows no terrain. The zone is wide; a site that
+- No inspection is offered while no game server runs for the planet: nothing lays its sites.
+- The ground is read once: a terrain reworked later leaves the site where it was (clear `grounded_at`
+  to have it laid again).
+- A site may fall in a lake or on a cliff: nothing checks that it can be driven to. The zone is wide; a site that
   proves unreachable is to be moved by hand (its row), not by code.
 - How many sites, how far and how often are constants: data of the entity when a second one needs others.

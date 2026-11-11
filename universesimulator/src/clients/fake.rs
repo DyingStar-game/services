@@ -261,6 +261,15 @@ impl InventoryClient for FakeWorld {
         Ok(id)
     }
 
+    async fn move_poi(&self, id: Uuid, [x, y, z]: [f64; 3], radius_m: f64) -> Result<()> {
+        self.with(|s| {
+            if let Some(poi) = s.pois.get_mut(&id) {
+                (poi.x, poi.y, poi.z, poi.radius_m) = (x, y, z, radius_m);
+            }
+        });
+        Ok(())
+    }
+
     async fn find_poi_by_persistence(&self, persistence_id: Uuid) -> Result<Option<Uuid>> {
         Ok(self.with(|s| s.pois.iter().find(|(_, p)| p.persistence_id == persistence_id).map(|(id, _)| *id)))
     }

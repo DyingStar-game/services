@@ -4,6 +4,10 @@
 //!
 //! A village has SITES_PER_VILLAGE sites, made once from its position (the same village always gets the
 //! same); the one inspected the longest ago gets the next mission.
+//!
+//! The simulator knows no relief: a site is made at its village's altitude, and the game server, which
+//! has the terrain, lays it on the ground (routes::inspections). Until then it gets no mission -- a zone
+//! a kilometre under a plateau could not be entered.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,9 +27,11 @@ pub const SITES_PER_VILLAGE: i32 = 4;
 /// How far from its village a site is (m).
 pub const MIN_DISTANCE_M: f64 = 5_000.0;
 pub const MAX_DISTANCE_M: f64 = 40_000.0;
-/// Radius of a site (m): a zone to drive into, wide enough for the relief between it and its village,
-/// whose altitude it is given.
-pub const SITE_RADIUS_M: f64 = 1_500.0;
+/// Radius of a site (m), around its point on the ground: a zone to drive into.
+pub const SITE_RADIUS_M: f64 = 500.0;
+/// The ground is this far at most from where a site was made (m): the relief of a planet, with room.
+/// A ground further away is not this site's.
+pub const MAX_GROUND_SHIFT_M: f64 = 30_000.0;
 /// Hours a player has to get there, once the mission is taken.
 pub const INSPECTION_HOURS: i32 = 3;
 /// An inspection pays the base reward of a leg, once more per this distance (m).
@@ -107,6 +113,7 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
     if made {
         sites = inspections::list(&st.pool, fed.id).await?;
     }
+    cancel_unlaid(st, &sites).await?;
     // A site just inspected goes to the back of its village's: read them again, in their new order.
     if close_ended(st, fed, &sites).await? {
         sites = inspections::list(&st.pool, fed.id).await?;
@@ -116,8 +123,9 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
     let busy: HashSet<Uuid> = sites.iter().filter(|s| s.mission_id.is_some()).map(|s| s.village_id).collect();
     let mut seen = HashSet::new();
     let mut funds_short = false;
-    // The sites come a village's together, the next to inspect first: the first of each village is it.
-    for site in sites.iter().filter(|s| !busy.contains(&s.village_id)) {
+    // The sites come a village's together, the next to inspect first: the first of each village that is
+    // laid on the ground is it.
+    for site in sites.iter().filter(|s| s.grounded_at.is_some() && !busy.contains(&s.village_id)) {
         let Some(village) = by_id.get(&site.village_id) else { continue };
         if !seen.insert(site.village_id) {
             continue;
@@ -129,6 +137,20 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
         }
     }
     Ok(funds_short)
+}
+
+/// Cancels the mission of a site that is not on the ground (one published before sites had to be laid):
+/// its zone may be out of reach. The site is freed when the cancelled mission is read (close_ended).
+async fn cancel_unlaid(st: &AppState, sites: &[Site]) -> Result<()> {
+    for site in sites.iter().filter(|s| s.grounded_at.is_none()) {
+        let Some(mission) = site.mission_id else { continue };
+        match st.clients.mission.cancel(mission).await {
+            // 409: already over on the mission's side.
+            Err(e) if e.upstream_status() != Some(409) => return Err(e),
+            _ => info!(site = %site.name, "inspection of a site not on the ground cancelled"),
+        }
+    }
+    Ok(())
 }
 
 /// Frees the sites whose mission is completed, cancelled or expired. Returns whether any was.

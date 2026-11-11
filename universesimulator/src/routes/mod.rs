@@ -4,6 +4,7 @@ pub mod admin;
 pub mod deliveries;
 pub mod sales;
 pub mod health;
+pub mod inspections;
 pub mod reads;
 pub mod views;
 
@@ -42,6 +43,8 @@ pub fn build(st: AppState) -> Router {
         .route("/warehouses/by-poi/{uuid}", get(reads::warehouse))
         .route("/warehouse-deliveries", post(deliveries::create))
         .route("/warehouse-sales", post(sales::create))
+        .route("/inspection-sites/ungrounded", get(inspections::ungrounded))
+        .route("/inspection-sites/{id}/ground", put(inspections::set_ground))
         .route("/orders", post(admin::create_order_internal))
         .layer(middleware::from_fn_with_state(st.clone(), auth::service_layer));
 

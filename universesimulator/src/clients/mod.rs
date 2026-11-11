@@ -109,6 +109,8 @@ pub trait InventoryClient: Send + Sync {
     async fn release_hold(&self, hold_id: Uuid) -> Result<()>;
     /// Creates a POI; returns the id `inventory` gave it.
     async fn create_poi(&self, poi: &NewPoi) -> Result<Uuid>;
+    /// Moves a POI to [x, y, z], its radius [radius_m].
+    async fn move_poi(&self, id: Uuid, position: [f64; 3], radius_m: f64) -> Result<()>;
     /// The POI standing for a game object (its `metadata.persistence`), None when there is none.
     async fn find_poi_by_persistence(&self, persistence_id: Uuid) -> Result<Option<Uuid>>;
 }

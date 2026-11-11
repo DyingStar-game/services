@@ -169,6 +169,11 @@ impl InventoryClient for HttpInventory {
         Ok(created.id)
     }
 
+    async fn move_poi(&self, id: Uuid, [x, y, z]: [f64; 3], radius_m: f64) -> Result<()> {
+        let _: Value = self.0.patch(&format!("/pois/{id}"), &json!({ "x": x, "y": y, "z": z, "radiusM": radius_m })).await?;
+        Ok(())
+    }
+
     async fn find_poi_by_persistence(&self, persistence_id: Uuid) -> Result<Option<Uuid>> {
         match self.0.get::<PoiCreated>(&format!("/pois/by-persistence/{persistence_id}")).await {
             Ok(poi) => Ok(Some(poi.id)),

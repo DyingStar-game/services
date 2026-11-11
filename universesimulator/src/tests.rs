@@ -426,6 +426,21 @@ async fn a_refining_village_holding_the_ore_refines_it_at_home(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn each_village_has_one_inspection_open_on_the_site_seen_the_longest_ago(pool: PgPool) {
     let (st, fake) = setup(pool, 1_000_000).await;
+    // The sites are made at their village's altitude: no mission before the game server laid them on
+    // the ground.
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.inspections_published, 0, "not on the ground yet");
+    let to_lay = crate::db::inspections::ungrounded(&st.pool).await.unwrap();
+    assert!(!to_lay.is_empty());
+    for (site, _, x, y, z) in &to_lay {
+        assert!(crate::db::inspections::set_ground(&st.pool, *site, [*x, *y + 800.0, *z]).await.unwrap());
+    }
+    let (first_site, _, x, y, z) = to_lay[0].clone();
+    assert!(!crate::db::inspections::set_ground(&st.pool, first_site, [x, y, z]).await.unwrap(), "laid once");
+    let laid = crate::db::inspections::get(&st.pool, first_site).await.unwrap().unwrap();
+    assert_eq!((laid.x, laid.y, laid.z), (x, y + 800.0, z));
+    assert!(crate::db::inspections::ungrounded(&st.pool).await.unwrap().is_empty());
     let r = simulation::tick(&st, true).await.unwrap();
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);

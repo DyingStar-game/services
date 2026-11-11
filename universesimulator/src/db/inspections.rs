@@ -14,13 +14,14 @@ pub struct Site {
     pub y: f64,
     pub z: f64,
     pub distance_m: f64,
+    pub grounded_at: Option<time::OffsetDateTime>,
     pub inventory_poi_id: Option<Uuid>,
     pub mission_id: Option<Uuid>,
     pub published_at: Option<time::OffsetDateTime>,
     pub attempts: i32,
 }
 
-const COLS: &str = "id, village_id, name, x, y, z, distance_m, inventory_poi_id, mission_id, published_at, attempts";
+const COLS: &str = "id, village_id, name, x, y, z, distance_m, grounded_at, inventory_poi_id, mission_id, published_at, attempts";
 
 /// The federation's sites, a village's together, the one to inspect next first (never inspected, then
 /// the longest ago).
@@ -50,6 +51,33 @@ pub async fn insert(pool: &PgPool, federation: Uuid, village: Uuid, seq: i32, na
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// The sites the game server has not laid on the ground yet, with their planet's name.
+pub async fn ungrounded(pool: &PgPool) -> Result<Vec<(Uuid, String, f64, f64, f64)>> {
+    Ok(sqlx::query_as(
+        "SELECT s.id, f.planet_internal_name, s.x, s.y, s.z FROM inspection_sites s
+         JOIN federations f ON f.id = s.federation_id WHERE s.grounded_at IS NULL ORDER BY s.village_id, s.seq",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get(pool: &PgPool, site: Uuid) -> Result<Option<Site>> {
+    Ok(sqlx::query_as(&format!("SELECT {COLS} FROM inspection_sites WHERE id = $1")).bind(site).fetch_optional(pool).await?)
+}
+
+/// Lays the site on the ground at [x, y, z], once: a site already laid keeps its place (its POI and its
+/// missions stand there). Returns whether this call laid it.
+pub async fn set_ground(pool: &PgPool, site: Uuid, [x, y, z]: [f64; 3]) -> Result<bool> {
+    let done = sqlx::query("UPDATE inspection_sites SET x = $2, y = $3, z = $4, grounded_at = now() WHERE id = $1 AND grounded_at IS NULL")
+        .bind(site)
+        .bind(x)
+        .bind(y)
+        .bind(z)
+        .execute(pool)
+        .await?;
+    Ok(done.rows_affected() > 0)
 }
 
 pub async fn set_poi(pool: &PgPool, site: Uuid, poi: Uuid) -> Result<()> {
