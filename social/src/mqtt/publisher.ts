@@ -27,6 +27,13 @@ let client: MqttClient | null = null;
 let connecting: Promise<MqttClient | null> | null = null;
 let lastFailureAt = 0;
 let tokenCache: { value: string; expiresAt: number } | null = null;
+/**
+ * When the token the live connection was opened with stops being good (ms; 0: no token, an
+ * anonymous broker). The broker's jwt backend checks that token again at every publish: once it
+ * has expired, each notification is refused and dropped without a word (QoS 0) while the socket
+ * stays open — so the connection is opened again, with a fresh token, before that.
+ */
+let clientTokenExpiresAt = 0;
 
 /** Whether a broker URL is configured. */
 export function mqttConfigured(): boolean {
@@ -65,15 +72,21 @@ function destroyClient(): void {
 }
 
 /** Returns a connected client, (re)connecting when needed; null when unavailable. */
+/** Whether the live connection can still publish: connected, its token not expired. */
+function connectionUsable(): boolean {
+  return Boolean(client?.connected) && (clientTokenExpiresAt === 0 || Date.now() < clientTokenExpiresAt);
+}
+
 async function ensureClient(): Promise<MqttClient | null> {
   if (!mqttConfigured()) return null;
-  if (client?.connected) return client;
+  if (client && connectionUsable()) return client;
   if (connecting) return connecting;
   if (Date.now() - lastFailureAt < RECONNECT_COOLDOWN_MS) return null;
 
   connecting = (async () => {
     try {
       const token = env.mqtt.clientSecret ? await getToken() : undefined;
+      const tokenExpiresAt = token ? (tokenCache?.expiresAt ?? 0) : 0;
       destroyClient();
       const c = connect(env.mqtt.url, {
         // The jwt backend reads the token from the username (see the header); anonymous dev
@@ -98,6 +111,7 @@ async function ensureClient(): Promise<MqttClient | null> {
       c.on('error', (err) => console.error(`[mqtt] ${err.message}`));
       c.on('close', () => console.warn('[mqtt] connection closed (next publish reconnects)'));
       client = c;
+      clientTokenExpiresAt = tokenExpiresAt;
       return c;
     } catch (err) {
       lastFailureAt = Date.now();
