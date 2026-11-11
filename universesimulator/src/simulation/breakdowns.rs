@@ -35,6 +35,7 @@ pub fn machine_name(kind: &str) -> (&'static str, &'static str) {
         "dispenser" => ("dispenser", "distributeur"),
         "terminal" => ("vehicle terminal", "borne de v\u{e9}hicules"),
         "kiosk" => ("mission kiosk", "borne de missions"),
+        "screen" => ("information screen", "\u{e9}cran d'information"),
         "lift" => ("lift", "ascenseur"),
         "teleporter" => ("teleporter", "t\u{e9}l\u{e9}porteur"),
         _ => ("machine", "machine"),

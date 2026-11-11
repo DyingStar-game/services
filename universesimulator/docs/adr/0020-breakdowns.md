@@ -17,7 +17,7 @@ repair is a small game in the client, there to stand for the work: nothing of it
   stands in them. The game server says now and then which machines it has loaded on a planet
   (`PUT /api/internal/machines`, role `usim:deliver`: `{scene, machines: [{id, kind, position}]}`), its
   objects' own ids (a screen of an object that has several gets an id made of both). Each is given to the nearest active village within 3 km; one far from all is left
-  out. `kind` is a slug of the game's (crusher, refinery, dispenser, terminal, kiosk, lift, teleporter):
+  out. `kind` is a slug of the game's (crusher, refinery, dispenser, terminal, kiosk, screen, lift, teleporter):
   the simulator
   only names it in the mission's text, "machine" when it does not know it. Table `machines`
   (migration 0014).
