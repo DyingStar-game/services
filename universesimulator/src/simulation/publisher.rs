@@ -221,6 +221,7 @@ async fn warehouse_poi(st: &AppState, fed: &Federation, w: &Warehouse) -> Result
         y,
         z,
         radius_m: WAREHOUSE_POI_RADIUS_M,
+        public: true,
     };
     let id = st.clients.inventory.create_poi(&poi).await?;
     world::set_warehouse_poi(&st.pool, w.id, id).await?;
@@ -250,6 +251,7 @@ pub(super) async fn village_poi(st: &AppState, fed: &Federation, village_id: Uui
         y,
         z,
         radius_m: v.radius_m.filter(|r| *r > 0.0).unwrap_or(VILLAGE_POI_RADIUS_M),
+        public: true,
     };
     let id = st.clients.inventory.create_poi(&poi).await?;
     info!(village = %v.code, poi = %id, "village POI created");

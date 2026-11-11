@@ -457,6 +457,7 @@ async fn each_village_has_one_inspection_open_on_the_site_seen_the_longest_ago(p
     let objective = &mission.objectives[0];
     assert_eq!(objective["type"], "visit");
     assert_eq!(objective["params"]["zone"]["poiId"], serde_json::json!(first.inventory_poi_id.unwrap()));
+    assert!(!fake.with(|s| s.pois[&first.inventory_poi_id.unwrap()].public), "a zone only its mission's holder is shown");
     // Nothing more while it is open; inspected, the next mission is on another site.
     let r = simulation::tick(&st, true).await.unwrap();
     assert_eq!(r.inspections_published, 0);

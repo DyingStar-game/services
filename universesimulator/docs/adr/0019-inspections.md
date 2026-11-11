@@ -29,9 +29,10 @@ corporation's security has a place looked at, 5 to 40 km from a village.
 - **The mission** is the mission service's `visit` on the site's POI: being there is enough ("just be on
   the spot", WarpZone). Category `exploration`, giver `{faction, division: security}`, one player, three
   hours, `autoComplete`: paid on arrival, nothing to turn in. It is offered in its village. Its reward is
-  the base reward of a leg, once more per 10 km.
+  2 000 credits, and the base reward of a leg once more per 10 km: the drive is the player's time.
 - **Its place travels with it.** The objective's `locationTo` carries the site's name, planet (`scene`),
   position and radius: the game draws the zone on its star chart for the player who took the mission.
+  The POI itself is private: public, the zones of every village's inspection were on everybody's chart.
 - Nothing here reads a stock nor makes an order: the step is beside the supply chain, and shares only the
   treasury (an escrow it cannot pay mints, as for a leg).
 

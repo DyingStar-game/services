@@ -36,6 +36,9 @@ pub const MAX_GROUND_SHIFT_M: f64 = 30_000.0;
 pub const INSPECTION_HOURS: i32 = 3;
 /// An inspection pays the base reward of a leg, once more per this distance (m).
 pub const REWARD_STEP_M: f64 = 10_000.0;
+/// What any inspection pays, whatever its distance: the drive there and back is the player's time, and
+/// a leg's reward alone (a few hundred) was not worth 35 km (playtest 2026-11-11).
+pub const REWARD_FLOOR: i64 = 2_000;
 
 /// The point at [distance] (m, along the ground) from [from] in the direction [bearing] (rad, around
 /// the vertical of [from]), at the same distance from the planet's centre, the origin.
@@ -84,9 +87,10 @@ pub fn site_name(village: &str, seq: i32) -> String {
     format!("{village}-{}", (b'A' + seq.clamp(0, 25) as u8) as char)
 }
 
-/// What an inspection [distance_m] away pays, from the base reward of a leg.
+/// What an inspection [distance_m] away pays: REWARD_FLOOR, and the base reward of a leg once more per
+/// REWARD_STEP_M.
 pub fn reward(base: i64, distance_m: f64) -> i64 {
-    ((base as f64) * (1.0 + distance_m / REWARD_STEP_M)).round().max(1.0) as i64
+    REWARD_FLOOR + ((base as f64) * (1.0 + distance_m / REWARD_STEP_M)).round().max(0.0) as i64
 }
 
 /// Closes the inspections that ended, makes the sites of new villages, and opens a mission for every
@@ -186,6 +190,7 @@ async fn publish(st: &AppState, fed: &Federation, village: &Village, site: &Site
                         y: site.y,
                         z: site.z,
                         radius_m: SITE_RADIUS_M,
+                        public: false,
                     };
                     st.clients.inventory.create_poi(&poi).await?
                 }
@@ -289,7 +294,8 @@ mod tests {
 
     #[test]
     fn a_far_inspection_pays_more() {
-        assert_eq!(reward(100, 0.0), 100);
-        assert_eq!(reward(100, 40_000.0), 500);
+        assert_eq!(reward(100, 0.0), 2_100);
+        assert_eq!(reward(100, 40_000.0), 2_500);
+        assert_eq!(reward(0, 40_000.0), REWARD_FLOOR);
     }
 }

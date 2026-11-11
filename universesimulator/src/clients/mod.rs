@@ -93,6 +93,9 @@ pub struct NewPoi {
     pub y: f64,
     pub z: f64,
     pub radius_m: f64,
+    /// Shown to every player on their chart (a village, a depot). Off: a place of a mission, which
+    /// only its holder is shown -- 29 inspection zones were on everybody's chart (playtest 2026-11-11).
+    pub public: bool,
 }
 
 #[async_trait]

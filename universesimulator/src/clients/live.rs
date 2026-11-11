@@ -163,7 +163,7 @@ impl InventoryClient for HttpInventory {
             "y": poi.y,
             "z": poi.z,
             "radiusM": poi.radius_m,
-            "visibility": "public",
+            "visibility": if poi.public { "public" } else { "private" },
         });
         let created: PoiCreated = self.0.post("/pois", &body).await?;
         Ok(created.id)
