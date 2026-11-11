@@ -338,6 +338,137 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/internal/inspection-sites/ungrounded:
+    get:
+      tags:
+      - Internal
+      operationId: listUngroundedInspectionSites
+      summary: Inspection sites not laid on the ground yet (game server, role usim:deliver)
+      description: "The simulator makes an inspection site at its village's altitude and gives it no
+        mission before the game server, which has the terrain, has laid it on the ground (ADR 0019)."
+      responses:
+        '200':
+          description: Answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        scene: { type: string, description: The planet's internal name }
+                        position: { $ref: '#/components/schemas/Point' }
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/internal/inspection-sites/{id}/ground:
+    put:
+      tags:
+      - Internal
+      operationId: layInspectionSite
+      summary: Where the ground is under an inspection site (game server, role usim:deliver)
+      description: "Once per site: a second answer changes nothing (`laid: false`). Refused (400)
+        further than 30 km from where the site was made."
+      parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Point' }
+      responses:
+        '200':
+          description: Answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  laid: { type: boolean }
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/internal/machines:
+    put:
+      tags:
+      - Internal
+      operationId: listMachines
+      summary: The machines the game server has on a planet, and which are broken (role usim:deliver)
+      description: "Each machine is given to the nearest active village within 3 km; one far from all
+        is left out. Answers the breakdowns open on the planet (ADR 0020): the game server makes those
+        machines unusable until a player repairs them."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scene, machines]
+              properties:
+                scene: { type: string, description: The planet's internal name }
+                machines:
+                  type: array
+                  items:
+                    type: object
+                    required: [id, kind, position]
+                    properties:
+                      id: { type: string, description: The game object's id }
+                      kind: { type: string, description: "A slug: crusher, refinery, dispenser, lift, teleporter" }
+                      position: { $ref: '#/components/schemas/Point' }
+      responses:
+        '200':
+          description: Answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  known: { type: integer, description: Machines given to a village }
+                  broken:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        machineId: { type: string }
+                        breakdownId: { type: string }
+                        missionId: { type: string, nullable: true, description: "The repair mission, null until published" }
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/internal/breakdowns/{id}/repaired:
+    put:
+      tags:
+      - Internal
+      operationId: repairBreakdown
+      summary: A player repaired the machine (game server, role usim:deliver)
+      description: "Once: a second call changes nothing (`repaired: false`). The game server confirms
+        the mission's objective with the mission service first, which pays."
+      parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                playerId: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repaired: { type: boolean }
+        '403':
+          $ref: '#/components/responses/Error'
   /api/internal/warehouse-sales:
     post:
       tags:
@@ -1112,6 +1243,14 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    Point:
+      type: object
+      description: A place from its planet's centre (m).
+      required: [x, y, z]
+      properties:
+        x: { type: number }
+        y: { type: number }
+        z: { type: number }
     Error:
       type: object
       required:

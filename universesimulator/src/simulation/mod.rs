@@ -3,6 +3,7 @@
 //! history.
 
 pub mod flows;
+pub mod breakdowns;
 pub mod inspections;
 pub mod planner;
 pub mod prices;
@@ -41,6 +42,7 @@ pub struct TickReport {
     pub orders_created: usize,
     pub legs_published: usize,
     pub inspections_published: usize,
+    pub repairs_published: usize,
     pub minted: i64,
     pub errors: Vec<String>,
 }
@@ -162,6 +164,13 @@ async fn run_locked(st: &AppState, force: bool) -> Result<TickReport> {
             Ok(short) => funds_short || short,
             Err(e) => {
                 report.error("inspections", e);
+                funds_short
+            }
+        };
+        let funds_short = match breakdowns::run(st, fed, &mut report).await {
+            Ok(short) => funds_short || short,
+            Err(e) => {
+                report.error("breakdowns", e);
                 funds_short
             }
         };
