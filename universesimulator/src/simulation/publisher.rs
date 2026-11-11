@@ -159,7 +159,7 @@ pub fn nearest_refinery(villages: &[world::Village], to: &world::Village) -> Opt
 }
 
 /// A previous publication created the mission but its answer was lost.
-async fn find_by_script(st: &AppState, fed: &Federation, script: &str) -> Result<MissionSummary> {
+pub(super) async fn find_by_script(st: &AppState, fed: &Federation, script: &str) -> Result<MissionSummary> {
     for status in ["available", "active", "completed", "cancelled", "expired"] {
         let found = st.clients.mission.list("politics", fed.political_entity_id, status, None).await?;
         if let Some(m) = found.into_iter().find(|m| m.script_id.as_deref() == Some(script)) {
@@ -234,7 +234,7 @@ const WAREHOUSE_POI_RADIUS_M: f64 = 40.0;
 /// The POI of a village in `inventory` (its `metadata.persistence` the village's uuid), created over the
 /// village's radius when there is none yet: a mission zoned on it shows to the players in the village,
 /// at its town hall. None when the village has no position (its missions then show everywhere).
-async fn village_poi(st: &AppState, fed: &Federation, village_id: Uuid) -> Result<Option<Uuid>> {
+pub(super) async fn village_poi(st: &AppState, fed: &Federation, village_id: Uuid) -> Result<Option<Uuid>> {
     if let Some(id) = st.clients.inventory.find_poi_by_persistence(village_id).await? {
         return Ok(Some(id));
     }
@@ -472,13 +472,18 @@ pub fn build_mission(
 }
 
 /// The giver of a federation's mission: its name as the game's faction slug ("ARES" -> `ares`) and the
-/// division of the job (`hauling` for a transport or a delivery, `mining` otherwise). None when the name makes no slug.
+/// division of the job (`hauling` for a transport or a delivery, `security` for an inspection, `mining`
+/// otherwise). None when the name makes no slug.
 pub fn giver_of(federation: &str, category: &str) -> Option<Value> {
     let faction: String = federation.trim().to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
     if faction.is_empty() || faction.len() > 32 || !faction.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) {
         return None;
     }
-    let division = if matches!(category, "transport" | "delivery") { "hauling" } else { "mining" };
+    let division = match category {
+        "transport" | "delivery" => "hauling",
+        "exploration" => "security",
+        _ => "mining",
+    };
     Some(json!({ "faction": faction, "division": division }))
 }
 
