@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn a_shortage_is_cut_into_a_solo_a_team_then_the_biggest_first() {
-        // Gold ore: 16 crates of 22 kg, a truckload of 352 kg.
+        // A resource whose crate holds 22 kg: 16 crates, a truckload of 352 kg.
         let truck = truckload(22.0, 1.0);
         assert_eq!(truck, 352);
         assert_eq!(chunks(12_000, truck), vec![352, 1_408, 7_040, 1_408, 1_408, 352, 32], "a solo, a team, an operation, then teams and solos");

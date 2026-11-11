@@ -33,7 +33,7 @@
       "inventoryGoodType": "ore.gold",
       "massPerUnitKg": 1.0,
       "basePrice": 30.0,
-      "crateKg": 22.0,
+      "crateKg": 15.0,
       "mined": "gold",
       "minedFr": "de l'or"
     },
