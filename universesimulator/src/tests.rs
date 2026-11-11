@@ -203,6 +203,26 @@ async fn new_depots_are_attached_by_the_tick(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_village_whose_depots_left_the_world_is_off_until_they_are_back(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    // The tick replays the world file that was kept.
+    import::import_and_keep(&st, serde_json::from_str::<Value>(&world_json(1_000_000)).unwrap()).await.unwrap();
+    let depot = fake.with(|s| s.items[&id(D2)].clone());
+    // The persisted world was purged: V2's depot is back only once the village is loaded again.
+    fake.remove_item(id(D2));
+    simulation::tick(&st, true).await.unwrap();
+    assert!(!world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().active, "nowhere to deliver to");
+    assert!(world::get_village(&st.pool, id(V1)).await.unwrap().unwrap().active);
+    fake.with(|s| s.items.insert(id(D2), depot));
+    simulation::tick(&st, true).await.unwrap();
+    assert!(world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().active, "back with its depot");
+    // A village an admin turned off stays off, its depot in the world.
+    world::set_village_active(&st.pool, id(V2), false).await.unwrap();
+    simulation::tick(&st, true).await.unwrap();
+    assert!(!world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().active);
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn new_villages_appear_at_the_next_forced_tick(pool: PgPool) {
     let fake = Arc::new(FakeWorld::new());
     populate(&fake);

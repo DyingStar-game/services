@@ -138,6 +138,31 @@ pub async fn set_main_warehouse(pool: &PgPool, village: Uuid, warehouse: Uuid, f
     Ok(())
 }
 
+/// Turns off the active villages of a federation that are not among [seen], the ones the world holds
+/// with a depot: nothing can be delivered to them, nor taken from them. Returns their codes.
+pub async fn mark_villages_gone(pool: &PgPool, federation: Uuid, seen: &[Uuid]) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "UPDATE villages SET active = FALSE, gone_at = now(), updated_at = now()
+         WHERE federation_id = $1 AND active AND id <> ALL($2) RETURNING code",
+    )
+    .bind(federation)
+    .bind(seen)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Turns on again the villages among [seen] that mark_villages_gone turned off. One an admin turned off
+/// stays off. Returns their codes.
+pub async fn mark_villages_back(pool: &PgPool, seen: &[Uuid]) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "UPDATE villages SET active = TRUE, gone_at = NULL, updated_at = now()
+         WHERE id = ANY($1) AND gone_at IS NOT NULL RETURNING code",
+    )
+    .bind(seen)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn set_village_active(pool: &PgPool, id: Uuid, active: bool) -> Result<bool> {
     Ok(sqlx::query("UPDATE villages SET active = $2, updated_at = now() WHERE id = $1")
         .bind(id)

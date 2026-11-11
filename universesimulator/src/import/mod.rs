@@ -203,6 +203,10 @@ pub struct ImportReport {
     pub routes_removed: usize,
     pub initial_stocks_applied: usize,
     pub minted: i64,
+    /// Villages turned off: the world no longer holds a depot of theirs.
+    pub villages_gone: Vec<String>,
+    /// Villages turned on again: their depots are back.
+    pub villages_back: Vec<String>,
 }
 
 async fn find_or_create(st: &AppState, name: &str, entity_type: &str, description: Option<&str>, report: &mut ImportReport) -> Result<PoliticalEntity> {
@@ -491,6 +495,18 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
                     report.initial_stocks_applied += 1;
                 }
             }
+        }
+    }
+
+    // 5b. The villages the world no longer holds a depot of stop being simulated, and those it holds
+    //     again resume. Not when the world answers no village at all: a planet being loaded, or a world
+    //     just purged, would turn the whole federation off, its open orders with it.
+    if report.villages > 0 {
+        let seen: Vec<Uuid> = positions.iter().map(|(id, _, _)| *id).collect();
+        report.villages_back = world::mark_villages_back(&st.pool, &seen).await?;
+        report.villages_gone = world::mark_villages_gone(&st.pool, fed.id, &seen).await?;
+        if !report.villages_gone.is_empty() || !report.villages_back.is_empty() {
+            info!(federation = %fed.code, gone = ?report.villages_gone, back = ?report.villages_back, "villages left or came back to the world");
         }
     }
 
