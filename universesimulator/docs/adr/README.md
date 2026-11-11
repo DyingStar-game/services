@@ -34,3 +34,4 @@ with the same conventions as the admin panel (`adminpanel/docs/adr`).
 | [0015](./0015-mission-tiers-and-economy-scale.md) | Mission tiers, and one scale for the whole economy | Proposed | 2026-11-09 |
 | [0016](./0016-issuer-kind.md) | The issuer's kind is data: ARES is a corporation | Proposed | 2026-11-10 |
 | [0017](./0017-off-mission-sales.md) | Off-mission sales: the issuer buys what no mission counted | Proposed | 2026-11-11 |
+| [0018](./0018-one-job-per-mission.md) | One job per mission: deliveries and refinings of their own | Proposed | 2026-11-11 |

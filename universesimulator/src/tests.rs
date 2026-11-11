@@ -392,6 +392,49 @@ async fn a_shortage_of_ingots_ships_the_ore_to_refine(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_refining_village_holding_the_ore_refines_it_at_home(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let ingot = ingots(&st).await;
+    let ore = catalog::find_resource(&st.pool, Some("ore_fer"), None).await.unwrap().unwrap();
+    // The city refines and holds 120 of crushed ore; the mining village holds more, further away.
+    world::set_village_refines(&st.pool, id(V3), true).await.unwrap();
+    fake.set_quantity(Holder::warehouse(id(D3A)), "ore_fer", 120);
+    fake.set_quantity(Holder::warehouse(id(D1)), "ore_fer", 500);
+    world::upsert_policy(&st.pool, &world::VillagePolicy { village_id: id(V3), resource_id: ingot.id, min_threshold: 100, target_level: 300 }).await.unwrap();
+    simulation::tick(&st, true).await.unwrap();
+    let filter = orders::OrderFilter { kind: Some("transport".into()), resource: Some(ingot.id), ..Default::default() };
+    let (refining, _) = orders::list_orders(&st.pool, &filter).await.unwrap();
+    assert_eq!(refining.len(), 1);
+    assert_eq!(refining[0].quantity, 120, "what the city holds, not the whole gap");
+    assert_eq!((refining[0].origin_village_id, refining[0].destination_village_id), (Some(id(V3)), id(V3)));
+    let leg = legs(&st).await.into_iter().find(|l| l.order_id == refining[0].id).unwrap();
+    assert_eq!((leg.from_warehouse_id, leg.to_warehouse_id), (Some(id(D3A)), Some(id(D3A))));
+    let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
+    assert!(mission.title.contains("Refine 120 kg Iron ingots at"), "{}", mission.title);
+    assert_eq!(mission.category, "mining");
+    let params = &mission.objectives[0]["params"];
+    assert_eq!((params["goodType"].as_str(), params["deliverGoodType"].as_str()), (Some("ore_fer"), Some("ingot_fer")));
+    assert_eq!(params["source"], params["zone"], "taken from the warehouse it goes back to");
+    // The ore of an open refining is not promised twice: the next tick orders nothing more of it.
+    simulation::tick(&st, true).await.unwrap();
+    let (again, _) = orders::list_orders(&st.pool, &filter).await.unwrap();
+    assert_eq!(again.iter().filter(|o| o.origin_village_id == Some(id(V3))).count(), 1);
+    let owed = orders::outgoing(&st.pool, refining[0].federation_id).await.unwrap();
+    assert_eq!(owed.into_iter().find(|(v, r, _)| *v == id(V3) && *r == ore.id).map(|(_, _, q)| q), Some(120));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn goods_carried_as_they_are_make_a_delivery(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    simulation::tick(&st, true).await.unwrap();
+    let leg = legs(&st).await.into_iter().find(|l| l.from_warehouse_id.is_some() && l.mission_id.is_some()).unwrap();
+    let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
+    assert!(mission.title.contains("Deliver "), "{}", mission.title);
+    assert_eq!(mission.category, "delivery");
+    assert_eq!(mission.giver.as_ref().map(|g| g["division"].clone()), Some(serde_json::json!("hauling")));
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn ingots_nobody_has_the_ore_for_are_mined_and_delivered_in_one_mission(pool: PgPool) {
     let (st, fake) = setup(pool, 1_000_000).await;
     let ingot = ingots(&st).await;
