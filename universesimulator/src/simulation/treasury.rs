@@ -13,9 +13,15 @@ pub async fn run(st: &AppState, fed: &Federation, funds_short: bool, report: &mu
         return Ok(());
     }
     let reason = if funds_short { "escrow refused: treasury insufficient" } else { "treasury below floor" };
-    st.clients.economie.mint(fed.political_entity_id, fed.mint_batch, &fed.currency, reason).await?;
-    history::record_mint(&st.pool, fed.id, fed.mint_batch, reason).await?;
+    mint(st, fed, reason).await?;
     report.minted += fed.mint_batch;
     info!(federation = %fed.code, amount = fed.mint_batch, balance, reason, "minted");
     Ok(())
+}
+
+/// Mints one batch into [fed]'s treasury and records it: the tick's, or a payment's that the treasury
+/// could not make (an off-mission sale).
+pub async fn mint(st: &AppState, fed: &Federation, reason: &str) -> Result<()> {
+    st.clients.economie.mint(fed.political_entity_id, fed.mint_batch, &fed.currency, reason).await?;
+    history::record_mint(&st.pool, fed.id, fed.mint_batch, reason).await
 }

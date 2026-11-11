@@ -87,7 +87,7 @@ async fn publish(st: &AppState, fed: &Federation, leg: &Leg) -> Result<bool> {
         Some(id) => world::get_warehouse(&st.pool, id).await?,
         None => None,
     };
-    let names = village_names(st, &leg).await?;
+    let names = village_names(st, fed, &leg, input.id != resource.id).await?;
     let reward = reward(st, fed, &order, &leg, &resource).await?;
     let from_poi = match &from {
         Some(w) => Some(warehouse_poi(st, fed, w).await?),
@@ -130,18 +130,36 @@ async fn source_warehouse(st: &AppState, order: &SupplyOrder, leg: &Leg, village
     Ok(best.map(|(w, _)| w))
 }
 
-/// Village names of a leg, for mission texts: (from, to).
-async fn village_names(st: &AppState, leg: &Leg) -> Result<(Option<String>, String)> {
-    let to = world::get_village(&st.pool, leg.to_village_id).await?.map(|v| v.name).unwrap_or_default();
+/// Village names of a leg, for mission texts: (from, to, refinery) -- the refinery, asked for only when
+/// the goods are [refined] on the way, being the destination when it refines, else the refining village
+/// nearest to it (None when the federation has none).
+async fn village_names(st: &AppState, fed: &Federation, leg: &Leg, refined: bool) -> Result<(Option<String>, String, Option<String>)> {
+    let to_village = world::get_village(&st.pool, leg.to_village_id).await?;
+    let refinery = match &to_village {
+        Some(_) if !refined => None,
+        Some(v) if v.refines => Some(v.name.clone()),
+        Some(v) => nearest_refinery(&world::active_villages(&st.pool, fed.id).await?, v),
+        None => None,
+    };
+    let to = to_village.map(|v| v.name).unwrap_or_default();
     let from = match leg.from_village_id {
         Some(id) => world::get_village(&st.pool, id).await?.map(|v| v.name),
         None => None,
     };
-    Ok((from, to))
+    Ok((from, to, refinery))
+}
+
+/// The name of the refining village of [villages] nearest to [to] (the first one when positions are unknown).
+pub fn nearest_refinery(villages: &[world::Village], to: &world::Village) -> Option<String> {
+    let distance = |v: &world::Village| match (v.x, v.y, v.z, to.x, to.y, to.z) {
+        (Some(x), Some(y), Some(z), Some(tx), Some(ty), Some(tz)) => ((x - tx).powi(2) + (y - ty).powi(2) + (z - tz).powi(2)).sqrt(),
+        _ => f64::MAX,
+    };
+    villages.iter().filter(|v| v.refines).min_by(|a, b| distance(a).total_cmp(&distance(b))).map(|v| v.name.clone())
 }
 
 /// A previous publication created the mission but its answer was lost.
-async fn find_by_script(st: &AppState, fed: &Federation, script: &str) -> Result<MissionSummary> {
+pub(super) async fn find_by_script(st: &AppState, fed: &Federation, script: &str) -> Result<MissionSummary> {
     for status in ["available", "active", "completed", "cancelled", "expired"] {
         let found = st.clients.mission.list("politics", fed.political_entity_id, status, None).await?;
         if let Some(m) = found.into_iter().find(|m| m.script_id.as_deref() == Some(script)) {
@@ -203,6 +221,7 @@ async fn warehouse_poi(st: &AppState, fed: &Federation, w: &Warehouse) -> Result
         y,
         z,
         radius_m: WAREHOUSE_POI_RADIUS_M,
+        public: true,
     };
     let id = st.clients.inventory.create_poi(&poi).await?;
     world::set_warehouse_poi(&st.pool, w.id, id).await?;
@@ -216,7 +235,7 @@ const WAREHOUSE_POI_RADIUS_M: f64 = 40.0;
 /// The POI of a village in `inventory` (its `metadata.persistence` the village's uuid), created over the
 /// village's radius when there is none yet: a mission zoned on it shows to the players in the village,
 /// at its town hall. None when the village has no position (its missions then show everywhere).
-async fn village_poi(st: &AppState, fed: &Federation, village_id: Uuid) -> Result<Option<Uuid>> {
+pub(super) async fn village_poi(st: &AppState, fed: &Federation, village_id: Uuid) -> Result<Option<Uuid>> {
     if let Some(id) = st.clients.inventory.find_poi_by_persistence(village_id).await? {
         return Ok(Some(id));
     }
@@ -232,6 +251,7 @@ async fn village_poi(st: &AppState, fed: &Federation, village_id: Uuid) -> Resul
         y,
         z,
         radius_m: v.radius_m.filter(|r| *r > 0.0).unwrap_or(VILLAGE_POI_RADIUS_M),
+        public: true,
     };
     let id = st.clients.inventory.create_poi(&poi).await?;
     info!(village = %v.code, poi = %id, "village POI created");
@@ -283,8 +303,9 @@ fn location(w: &Warehouse, village: &str) -> Value {
 
 /// The mission of a leg. Three kinds, every one measured on the warehouses (`via: warehouse`: the
 /// goods taken off a shelf, the goods shelved) and turned in at the destination's town hall:
-///   - transport: load [input] at the source warehouse, deliver [resource] at the destination's
-///     (the same good, or its refined form — crushed ore loaded, ingots delivered);
+///   - transport: load [input] at the source warehouse, deliver [resource] at the destination's.
+///     The same good is a delivery; crushed ore loaded and ingots delivered, a refining on the way;
+///     and when both warehouses are one (the village refines its own ore), a refining alone;
 ///   - mining: mine [resource] and deliver it at the destination's warehouse;
 ///   - mining_transport: mine [input] in any mining village (the planner's [from_village] is only
 ///     where its source is debited), deliver [resource] at the destination's warehouse.
@@ -297,32 +318,68 @@ pub fn build_mission(
     (resource, input): (&Resource, &Resource),
     from: Option<(&Warehouse, Uuid)>,
     (to, to_poi): (&Warehouse, Uuid),
-    (from_village, to_village): &(Option<String>, String),
+    (from_village, to_village, refinery): &(Option<String>, String, Option<String>),
     reward: i64,
 ) -> NewMission {
-    let payload = json!({ "source": "universesimulator", "orderId": order.id, "legId": leg.id, "seq": leg.seq, "resource": resource.code });
+    // `refineAt`: where the ore is refined on the way (the game lists it as a step); absent when nothing is.
+    let refined = input.id != resource.id;
+    // Refined at home: the ore is taken from the warehouse the metal goes back to.
+    let home = refined && from.is_some_and(|(w, _)| w.id == to.id);
+    // `issuer`: who orders it, by name and kind (ADR 0016) -- the mission service only knows the issuer as
+    // a political entity's id, and the game showed "politics".
+    let mut payload = json!({
+        "source": "universesimulator", "orderId": order.id, "legId": leg.id, "seq": leg.seq, "resource": resource.code,
+        "issuer": { "name": fed.name, "kind": fed.kind },
+    });
+    if let (true, Some(name)) = (refined, refinery) {
+        payload["refineAt"] = json!(name);
+    }
+    // Where to refine, as the texts say it: the refining village, else any factory city.
+    let refine_en = refinery.as_ref().map_or("in a factory city".to_string(), |r| format!("at {r}"));
+    let refine_fr = refinery.as_ref().map_or("dans une ville usine".to_string(), |r| format!("à {r}"));
     let zone = json!({ "kind": "poi", "poiId": to_poi });
     let fr = |r: &Resource| r.name_fr.clone().unwrap_or_else(|| r.name.clone());
+    // "Mine gold, crush it": the mineral is mined, then crushed -- crushed ore is not mined (playtest
+    // 2026-11-10). A resource that does not say what is mined reads "Mine and crush".
+    let mine_en = |r: &Resource| r.mined.as_ref().map_or("Mine and crush".to_string(), |m| format!("Mine {m}, crush it"));
+    let mine_fr = |r: &Resource| r.mined_fr.as_ref().map_or("Minez et concassez".to_string(), |m| format!("Minez {m}, concassez-le"));
     let qty = quantity_text(leg.quantity, &resource.unit);
     // Each mission text in English and French: [title], then the objective's.
     let (title, title_fr, objective_fr, category, objective) = match (order.kind.as_str(), from) {
         ("transport", Some((from, from_poi))) => {
             let origin = from_village.as_deref().unwrap_or(&from.name);
             (
-                format!("Transport {} {} → {}", qty, resource.name, to_village),
-                format!("Transport : {} — {} → {}", qty, fr(resource), to_village),
-                if input.id == resource.id {
+                if home {
+                    format!("Refine {} {} at {}", qty, resource.name, to_village)
+                } else if refined {
+                    format!("Refine and deliver {} {} → {}", qty, resource.name, to_village)
+                } else {
+                    format!("Deliver {} {} → {}", qty, resource.name, to_village)
+                },
+                if home {
+                    format!("Raffinage : {} — {} à {}", qty, fr(resource), to_village)
+                } else if refined {
+                    format!("Raffinage et livraison : {} — {} → {}", qty, fr(resource), to_village)
+                } else {
+                    format!("Livraison : {} — {} → {}", qty, fr(resource), to_village)
+                },
+                if home {
+                    format!("Prenez « {} » à l'entrepôt de {}, raffinez-le sur place, rangez « {} » au même entrepôt", fr(input), to_village, fr(resource))
+                } else if !refined {
                     format!("Livrez {} — {} de {} à {}", qty, fr(resource), origin, to_village)
                 } else {
-                    format!("Chargez « {} » à {}, raffinez-le à {}, livrez « {} » à son entrepôt", fr(input), origin, to_village, fr(resource))
+                    format!("Chargez « {} » à l'entrepôt de {}, raffinez-le {}, livrez « {} » à l'entrepôt de {}", fr(input), origin, refine_fr, fr(resource), to_village)
                 },
-                "transport",
+                // Who gives it: a refining is the miners' trade, carrying goods the haulers' (giver_of).
+                if home { "mining" } else if refined { "transport" } else { "delivery" },
                 json!({
                     "type": "transport",
-                    "title": if input.id == resource.id {
+                    "title": if home {
+                        format!("Take {} at the warehouse of {}, refine it there, shelve the {} in the same warehouse", input.name, to_village, resource.name)
+                    } else if !refined {
                         format!("Deliver {} of {} from {} to {}", quantity_text(leg.quantity, &resource.unit), resource.name, origin, to_village)
                     } else {
-                        format!("Load {} at {}, refine it at {}, deliver the {} to its warehouse", input.name, origin, to_village, resource.name)
+                        format!("Load {} at the warehouse of {}, refine it {}, deliver the {} to the warehouse of {}", input.name, origin, refine_en, resource.name, to_village)
                     },
                     "targetQuantity": leg.quantity,
                     "unit": resource.unit,
@@ -344,15 +401,15 @@ pub fn build_mission(
         ("mining_transport", _) => (
             format!("Mine and deliver {} {} to {}", qty, resource.name, to_village),
             format!("Minage et livraison : {} — {} → {}", qty, fr(resource), to_village),
-            format!("Minez « {} » dans un village minier, raffinez-le, livrez « {} » à l'entrepôt de {}", fr(input), fr(resource), to_village),
+            format!("{} dans un village minier, faites-le raffiner {}, livrez « {} » à l'entrepôt de {}", mine_fr(input), refine_fr, fr(resource), to_village),
             "mining",
             json!({
                 "type": "deliver_material",
                 // Any mining village's crusher will do: the delivery counts the good, wherever it was
                 // mined (the planner's source village is only its bookkeeping).
                 "title": format!(
-                    "Mine {} in any mining village, refine it, deliver the {} to the warehouse of {}",
-                    input.name, resource.name, to_village
+                    "{} in any mining village, have it refined {}, deliver the {} to the warehouse of {}",
+                    mine_en(input), refine_en, resource.name, to_village
                 ),
                 "targetQuantity": leg.quantity,
                 "unit": resource.unit,
@@ -362,13 +419,13 @@ pub fn build_mission(
             }),
         ),
         _ => (
-            format!("Mine {} {} for {}", qty, resource.name, to_village),
-            format!("Minage : {} — {} pour {}", qty, fr(resource), to_village),
-            format!("Minez {} — {} et apportez-le à l'entrepôt de {}", qty, fr(resource), to_village),
+            format!("Mine and crush {} {} for {}", qty, resource.name, to_village),
+            format!("Minage et concassage : {} — {} pour {}", qty, fr(resource), to_village),
+            format!("{}, puis rangez {} de « {} » à l'entrepôt de {}", mine_fr(resource), qty, fr(resource), to_village),
             "mining",
             json!({
                 "type": "deliver_material",
-                "title": format!("Mine {} of {} and bring it to the warehouse of {}", quantity_text(leg.quantity, &resource.unit), resource.name, to_village),
+                "title": format!("{}, then shelve {} of {} at the warehouse of {}", mine_en(resource), qty, resource.name, to_village),
                 "targetQuantity": leg.quantity,
                 "unit": resource.unit,
                 "locationTo": location(to, to_village),
@@ -383,18 +440,21 @@ pub fn build_mission(
         let en = o.get("title").cloned().unwrap_or(Value::Null);
         o.insert("titleI18n".into(), json!({ "en": en, "fr": objective_fr }));
     }
-    let description = format!("Supply order of {} ({}).", fed.name, order.trigger);
+    // The issuer's name alone: no word for what it is (a corporation, a federation...), and not the
+    // order's trigger, an internal code players read as "(auto_mining)" (playtest 2026-11-10).
+    let description = format!("{} supply order.", fed.name);
     // Its size (tiers): named first in its title, and how many may take it and for how long.
-    let tier = Tier::of(leg.quantity);
+    let tier = Tier::of(leg.quantity, resource.truckload());
     let pace = tiers::pace_of(tier, leg.id.as_u128());
-    let hours = tier.deadline_hours(pace, tiers::work_hours(order.kind.as_str(), input.id != resource.id));
+    let work = if home { tiers::REFINING_HOURS } else { tiers::work_hours(order.kind.as_str(), refined) };
+    let hours = tier.deadline_hours(pace, work);
     let reward = (reward as f64 * tier.reward_share(pace)).round() as i64;
     let (tier_en, tier_fr) = tier.label(pace);
     let title = format!("{tier_en} · {title}");
     let title_fr = format!("{tier_fr} · {title_fr}");
     NewMission {
         title_i18n: Some(json!({ "en": title, "fr": title_fr })),
-        description_i18n: Some(json!({ "en": description, "fr": format!("Commande d'approvisionnement de {} ({}).", fed.name, order.trigger) })),
+        description_i18n: Some(json!({ "en": description, "fr": format!("Commande d'approvisionnement {}.", fed.name) })),
         title,
         description,
         kind: "dynamic",
@@ -414,13 +474,18 @@ pub fn build_mission(
 }
 
 /// The giver of a federation's mission: its name as the game's faction slug ("ARES" -> `ares`) and the
-/// division of the job (`hauling` for a transport, `mining` otherwise). None when the name makes no slug.
+/// division of the job (`hauling` for a transport or a delivery, `security` for an inspection, `mining`
+/// otherwise). None when the name makes no slug.
 pub fn giver_of(federation: &str, category: &str) -> Option<Value> {
     let faction: String = federation.trim().to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
     if faction.is_empty() || faction.len() > 32 || !faction.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) {
         return None;
     }
-    let division = if category == "transport" { "hauling" } else { "mining" };
+    let division = match category {
+        "transport" | "delivery" => "hauling",
+        "exploration" => "security",
+        _ => "mining",
+    };
     Some(json!({ "faction": faction, "division": division }))
 }
 
@@ -433,6 +498,7 @@ mod quantity_tests {
     #[test]
     fn a_federation_s_mission_is_given_by_its_company() {
         assert_eq!(super::giver_of("ARES", "transport"), Some(serde_json::json!({ "faction": "ares", "division": "hauling" })));
+        assert_eq!(super::giver_of("ARES", "delivery"), Some(serde_json::json!({ "faction": "ares", "division": "hauling" })));
         assert_eq!(super::giver_of("ARES", "mining"), Some(serde_json::json!({ "faction": "ares", "division": "mining" })));
         assert_eq!(super::giver_of("  ", "mining"), None);
     }

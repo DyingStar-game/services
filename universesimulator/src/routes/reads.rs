@@ -39,6 +39,51 @@ pub async fn resources(State(st): State<AppState>) -> Result<Json<Value>> {
     Ok(Json(json!({ "items": catalog::list_resources(&st.pool).await? })))
 }
 
+/// How many points of a resource's price the market gives: enough for a small curve.
+pub const MARKET_POINTS: usize = 32;
+
+/// The market, as a town hall's board shows it (players): each resource with its price now, its price a
+/// day ago (`previousPrice`, the oldest point of the last 24 h) and the curve between the two (`points`,
+/// at most MARKET_POINTS prices, oldest first), with the supply and demand the price comes from.
+pub async fn market(State(st): State<AppState>, Query(q): Query<FederationQuery>) -> Result<Json<Value>> {
+    let fed = federation(&st, q.federation).await?;
+    let indices: HashMap<Uuid, history::PriceIndex> = history::price_indices(&st.pool, fed.id).await?.into_iter().map(|p| (p.resource_id, p)).collect();
+    let from = time::OffsetDateTime::now_utc() - time::Duration::hours(24);
+    let mut items = Vec::new();
+    for r in catalog::list_resources(&st.pool).await? {
+        let Some(index) = indices.get(&r.id) else { continue };
+        let prices: Vec<f64> = history::price_history(&st.pool, fed.id, r.id, from).await?.into_iter().map(|p| p.unit_price).collect();
+        let points = sample(&prices, MARKET_POINTS);
+        items.push(json!({
+            "resourceId": r.id, "code": r.code, "name": r.name, "nameFr": r.name_fr, "unit": r.unit,
+            "basePrice": r.base_price, "unitPrice": index.unit_price, "supply": index.supply, "demand": index.demand,
+            "previousPrice": points.first().copied().unwrap_or(index.unit_price), "points": points,
+        }));
+    }
+    Ok(Json(json!({ "federationId": fed.id, "currency": fed.currency, "items": items })))
+}
+
+/// At most [max] of [values], evenly spread, the first and the last kept.
+pub fn sample(values: &[f64], max: usize) -> Vec<f64> {
+    if values.len() <= max || max < 2 {
+        return values.to_vec();
+    }
+    (0..max).map(|i| values[i * (values.len() - 1) / (max - 1)]).collect()
+}
+
+#[cfg(test)]
+mod market_tests {
+    use super::sample;
+
+    #[test]
+    fn a_long_curve_is_thinned_keeping_its_ends() {
+        let values: Vec<f64> = (0..100).map(f64::from).collect();
+        let s = sample(&values, 5);
+        assert_eq!(s, vec![0.0, 24.0, 49.0, 74.0, 99.0]);
+        assert_eq!(sample(&[1.0, 2.0], 5), vec![1.0, 2.0], "short: as it is");
+    }
+}
+
 pub async fn prices(State(st): State<AppState>, Query(q): Query<FederationQuery>) -> Result<Json<Value>> {
     let fed = federation(&st, q.federation).await?;
     Ok(Json(json!({ "federationId": fed.id, "items": history::price_indices(&st.pool, fed.id).await? })))

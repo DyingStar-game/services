@@ -1,10 +1,14 @@
 //! Turns village shortages into supply orders: mining where the village has a mineral source,
 //! otherwise transport from the nearest village with a surplus (ADR 0006, 0007, 0013).
 //!
-//! A refined resource (ingots, `refined_from` crushed ore) is met with its INPUT: a transport of the
-//! input from the nearest village holding a surplus of it (refined on the way, delivered as the
-//! resource), or else one mission that mines it in the nearest village with a source and delivers
-//! the result (`mining_transport`).
+//! A refined resource (ingots, `refined_from` crushed ore) is met with its INPUT: refined at home when
+//! the village refines and holds the input itself (a transport from its warehouse to its warehouse),
+//! else a transport of the input from the nearest village holding a surplus of it (refined on the way,
+//! delivered as the resource), or else one mission that mines it in the nearest village with a source
+//! and delivers the result (`mining_transport`).
+//!
+//! A village keeps its target level of a resource and gives the rest away -- but keeps nothing of what
+//! it mines: a mining village's ore is there to be shipped, its policy only says how far ahead it mines.
 
 use std::collections::{HashMap, HashSet};
 
@@ -51,8 +55,11 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
         .into_iter()
         .map(|s| ((s.village_id, s.resource_id), s))
         .collect();
+    let refiners: HashSet<Uuid> = world::active_villages(&st.pool, fed.id).await?.into_iter().filter(|v| v.refines).map(|v| v.id).collect();
+    // What a village keeps of a resource when others ask for it (see the module's note).
+    let keeps = |v: Uuid, r: Uuid| if sources.contains_key(&(v, r)) { Some(0) } else { targets.get(&(v, r)).copied() };
     let mut incoming: HashMap<_, _> = orders::incoming(&st.pool, fed.id).await?.into_iter().map(|(v, r, q)| ((v, r), q)).collect();
-    // Goods promised by legs not yet held are not available to new orders.
+    // Goods promised to open transports are not available to new orders.
     let mut promised: HashMap<_, _> = orders::outgoing(&st.pool, fed.id).await?.into_iter().map(|(v, r, q)| ((v, r), q)).collect();
     let graph = graph(st, fed).await?;
 
@@ -74,15 +81,25 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
             let src_key = |v: Uuid| (v, input);
             let surplus_of = |v: Uuid, promised: &HashMap<(Uuid, Uuid), i64>| {
                 let avail = stocks.village(v, input).available() - promised.get(&src_key(v)).copied().unwrap_or(0);
-                surplus(avail, targets.get(&src_key(v)).copied())
+                surplus(avail, keeps(v, input))
             };
+            // The village refines and holds the input itself: refined at home, nothing is carried.
+            let at_home = stocks.village(p.village_id, input).available() - promised.get(&src_key(p.village_id)).copied().unwrap_or(0);
+            if refiners.contains(&p.village_id) && at_home > 0 {
+                qty = qty.min(at_home);
+                report.orders_created += create_tiered(st, refining_order(fed, p.resource_id, qty, p.village_id), res).await?;
+                *incoming.entry(key).or_default() += qty;
+                *promised.entry(src_key(p.village_id)).or_default() += qty;
+                info!(village = %p.village_id, resource = %res.code, qty, "refining order");
+                continue;
+            }
             let path = graph
                 .nearest_source(p.village_id, |v| v != p.village_id && surplus_of(v, &promised) >= qty)
                 .or_else(|| graph.nearest_source(p.village_id, |v| v != p.village_id && surplus_of(v, &promised) > 0));
             if let Some(path) = path {
                 let origin = path.hops[0].from;
                 qty = qty.min(surplus_of(origin, &promised));
-                report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None)).await?;
+                report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None), res).await?;
                 *incoming.entry(key).or_default() += qty;
                 *promised.entry(src_key(origin)).or_default() += qty;
                 info!(from = %origin, to = %p.village_id, resource = %res.code, qty, "refining transport order");
@@ -111,7 +128,7 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                 created_by: None,
                 legs: vec![NewLeg { from: Some(mine), to: p.village_id, distance_m: path.hops.iter().map(|h| h.distance_m).sum() }],
             };
-            report.orders_created += create_tiered(st, order).await?;
+            report.orders_created += create_tiered(st, order, res).await?;
             *incoming.entry(key).or_default() += amount;
             info!(mine = %mine, to = %p.village_id, resource = %res.code, amount, "mining + transport order");
             continue;
@@ -138,7 +155,7 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                 created_by: None,
                 legs: vec![NewLeg { from: None, to: p.village_id, distance_m: 0.0 }],
             };
-            report.orders_created += create_tiered(st, order).await?;
+            report.orders_created += create_tiered(st, order, res).await?;
             *incoming.entry(key).or_default() += qty;
             info!(village = %p.village_id, resource = %res.code, qty, "mining order");
             continue;
@@ -146,7 +163,7 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
 
         let surplus_of = |v: Uuid, promised: &HashMap<(Uuid, Uuid), i64>| {
             let avail = stocks.village(v, p.resource_id).available() - promised.get(&(v, p.resource_id)).copied().unwrap_or(0);
-            surplus(avail, targets.get(&(v, p.resource_id)).copied())
+            surplus(avail, keeps(v, p.resource_id))
         };
         // Closest village covering the whole need, else the closest with any surplus.
         let path = graph
@@ -175,14 +192,14 @@ pub async fn run(st: &AppState, fed: &Federation, stocks: &Stocks, report: &mut 
                     created_by: None,
                     legs: vec![NewLeg { from: None, to: mine, distance_m: 0.0 }],
                 };
-                report.orders_created += create_tiered(st, order).await?;
+                report.orders_created += create_tiered(st, order, res).await?;
                 info!(village = %mine, for_village = %p.village_id, resource = %res.code, amount, "mining order for a remote shortage");
             }
             continue;
         };
         let origin = path.hops[0].from;
         qty = qty.min(surplus_of(origin, &promised));
-        report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None)).await?;
+        report.orders_created += create_tiered(st, transport_order(fed, p.resource_id, qty, &path, "auto_shortage", None), res).await?;
         *incoming.entry(key).or_default() += qty;
         *promised.entry((origin, p.resource_id)).or_default() += qty;
         info!(from = %origin, to = %p.village_id, resource = %res.code, qty, hops = path.hops.len(), "transport order");
@@ -198,8 +215,8 @@ pub fn input_of(res: &catalog::Resource, by_code: &HashMap<String, Uuid>) -> Uui
 
 /// [order] cut into the missions of its tiers (tiers::chunks): one order per piece, each published as
 /// its own mission. Returns how many orders were made.
-async fn create_tiered(st: &AppState, order: NewOrder) -> Result<usize> {
-    let pieces = tiers::chunks(order.quantity);
+async fn create_tiered(st: &AppState, order: NewOrder, res: &catalog::Resource) -> Result<usize> {
+    let pieces = tiers::chunks(order.quantity, res.truckload());
     for quantity in &pieces {
         let mut piece = order.clone();
         piece.quantity = *quantity;
@@ -240,6 +257,23 @@ fn transport_order(
         trigger,
         created_by,
         legs: path.hops.iter().map(|h| NewLeg { from: Some(h.from), to: h.to, distance_m: h.distance_m }).collect(),
+    }
+}
+
+/// The order that has [village] refine [quantity] of [resource] from the input its own warehouse holds:
+/// a transport from the village to itself (the publisher names it a refining).
+fn refining_order(fed: &Federation, resource: Uuid, quantity: i64, village: Uuid) -> NewOrder {
+    NewOrder {
+        kind: "transport",
+        federation_id: fed.id,
+        resource_id: resource,
+        quantity,
+        origin: Some(village),
+        destination: village,
+        path: vec![village],
+        trigger: "auto_shortage",
+        created_by: None,
+        legs: vec![NewLeg { from: Some(village), to: village, distance_m: 0.0 }],
     }
 }
 

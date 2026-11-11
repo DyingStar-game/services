@@ -37,6 +37,8 @@ pub trait SocialClient: Send + Sync {
     async fn set_parent(&self, id: Uuid, parent_id: Option<Uuid>) -> Result<()>;
     /// Ancestors from the direct parent up to the root.
     async fn ancestors(&self, id: Uuid) -> Result<Vec<PoliticalEntity>>;
+    /// Tells a player something (`{type, data}`), while they are online; not delivered is no error.
+    async fn notify_player(&self, player: Uuid, notification: &serde_json::Value) -> Result<()>;
 }
 
 // ── Inventory ────────────────────────────────────────────────────────────────
@@ -91,6 +93,9 @@ pub struct NewPoi {
     pub y: f64,
     pub z: f64,
     pub radius_m: f64,
+    /// Shown to every player on their chart (a village, a depot). Off: a place of a mission, which
+    /// only its holder is shown -- 29 inspection zones were on everybody's chart (playtest 2026-11-11).
+    pub public: bool,
 }
 
 #[async_trait]
@@ -107,6 +112,8 @@ pub trait InventoryClient: Send + Sync {
     async fn release_hold(&self, hold_id: Uuid) -> Result<()>;
     /// Creates a POI; returns the id `inventory` gave it.
     async fn create_poi(&self, poi: &NewPoi) -> Result<Uuid>;
+    /// Moves a POI to [x, y, z], its radius [radius_m].
+    async fn move_poi(&self, id: Uuid, position: [f64; 3], radius_m: f64) -> Result<()>;
     /// The POI standing for a game object (its `metadata.persistence`), None when there is none.
     async fn find_poi_by_persistence(&self, persistence_id: Uuid) -> Result<Option<Uuid>>;
 }
@@ -181,6 +188,11 @@ pub trait EconomieClient: Send + Sync {
     async fn political_balance(&self, entity_id: Uuid, currency: &str) -> Result<i64>;
     async fn set_minting(&self, entity_id: Uuid, allow: bool, ceiling: Option<i64>) -> Result<()>;
     async fn mint(&self, entity_id: Uuid, amount: i64, currency: &str, reason: &str) -> Result<()>;
+    /// Takes [amount] out of [entity_id]'s treasury, once per [key]: done already is Ok, a treasury that
+    /// cannot pay is the upstream error `INSUFFICIENT_FUNDS`.
+    async fn debit_treasury(&self, entity_id: Uuid, amount: i64, currency: &str, key: &str, reference: &str) -> Result<()>;
+    /// Credits [player] with [amount], once per [key]: done already is Ok.
+    async fn credit_player(&self, player: Uuid, amount: i64, currency: &str, key: &str, reference: &str) -> Result<()>;
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────

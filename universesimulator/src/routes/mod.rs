@@ -2,7 +2,9 @@
 
 pub mod admin;
 pub mod deliveries;
+pub mod sales;
 pub mod health;
+pub mod inspections;
 pub mod reads;
 pub mod views;
 
@@ -21,6 +23,7 @@ fn reads() -> Router<AppState> {
         .route("/federations", get(reads::federations))
         .route("/resources", get(reads::resources))
         .route("/prices", get(reads::prices))
+        .route("/market", get(reads::market))
         .route("/villages", get(reads::villages))
         .route("/villages/{id}", get(reads::village))
         .route("/warehouses", get(reads::warehouses))
@@ -39,6 +42,9 @@ pub fn build(st: AppState) -> Router {
     let internal = reads()
         .route("/warehouses/by-poi/{uuid}", get(reads::warehouse))
         .route("/warehouse-deliveries", post(deliveries::create))
+        .route("/warehouse-sales", post(sales::create))
+        .route("/inspection-sites/ungrounded", get(inspections::ungrounded))
+        .route("/inspection-sites/{id}/ground", put(inspections::set_ground))
         .route("/orders", post(admin::create_order_internal))
         .layer(middleware::from_fn_with_state(st.clone(), auth::service_layer));
 

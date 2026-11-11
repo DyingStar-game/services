@@ -84,6 +84,9 @@ pub struct Profile {
     pub capacities: Vec<CapacityFile>,
     #[serde(default)]
     pub mineral_sources: Vec<MineralSourceFile>,
+    /// The village has a refinery (the factory cities): missions send ore to be refined there.
+    #[serde(default)]
+    pub refines: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -239,6 +242,7 @@ fn merge(profiles: &[&Profile]) -> Profile {
         flows: by_resource(profiles.iter().map(|p| p.flows.clone()), |f| format!("{}|{}", f.resource, f.source)),
         capacities: by_resource(profiles.iter().map(|p| p.capacities.clone()), |c| c.resource.clone()),
         mineral_sources: by_resource(profiles.iter().map(|p| p.mineral_sources.clone()), |s| s.resource.clone()),
+        refines: profiles.iter().rev().find_map(|p| p.refines),
     }
 }
 
@@ -427,6 +431,7 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
         let profile_key = profile_key(&file.villages, village_type.as_deref(), &snap.name);
         let profile = merge(&[&file.villages.defaults, profile_key.and_then(|t| file.villages.by_type.get(t)).unwrap_or(&empty), overrides]);
         let forced = |resource: &str, list: &dyn Fn(&Profile) -> Vec<String>| list(overrides).iter().any(|r| r == resource);
+        world::set_village_refines(&st.pool, item.uuid, profile.refines.unwrap_or(false)).await?;
         for p in &profile.policies {
             let policy = VillagePolicy {
                 village_id: item.uuid,

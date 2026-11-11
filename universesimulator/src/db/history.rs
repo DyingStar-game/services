@@ -58,6 +58,63 @@ pub async fn purge_history(pool: &PgPool, days: i64) -> Result<()> {
 
 // ── Prices ───────────────────────────────────────────────────────────────────
 
+/// An off-mission sale in a warehouse (ADR 0017).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Sale {
+    pub idempotency_key: String,
+    pub player_id: Uuid,
+    pub warehouse_id: Uuid,
+    pub resource_id: Uuid,
+    pub quantity: i64,
+    pub unit_price: f64,
+    pub amount: i64,
+    pub currency: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    /// When the player was paid; None while the payment is still to make (or to resume).
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub paid_at: Option<OffsetDateTime>,
+}
+
+pub struct NewSale<'a> {
+    pub key: &'a str,
+    pub player: Uuid,
+    pub warehouse: Uuid,
+    pub resource: Uuid,
+    pub quantity: i64,
+    pub unit_price: f64,
+    pub amount: i64,
+    pub currency: &'a str,
+}
+
+pub async fn get_sale(pool: &PgPool, key: &str) -> Result<Option<Sale>> {
+    Ok(sqlx::query_as("SELECT * FROM warehouse_sales WHERE idempotency_key = $1").bind(key).fetch_optional(pool).await?)
+}
+
+/// Marks the sale of [key] paid; false when it already was (another request got there first).
+pub async fn mark_sale_paid(pool: &PgPool, key: &str) -> Result<bool> {
+    Ok(sqlx::query("UPDATE warehouse_sales SET paid_at = now() WHERE idempotency_key = $1 AND paid_at IS NULL").bind(key).execute(pool).await?.rows_affected() > 0)
+}
+
+/// Records [s], not paid yet; None when a sale with its key is already there.
+pub async fn insert_sale(pool: &PgPool, s: &NewSale<'_>) -> Result<Option<Sale>> {
+    Ok(sqlx::query_as(
+        "INSERT INTO warehouse_sales (idempotency_key, player_id, warehouse_id, resource_id, quantity, unit_price, amount, currency)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (idempotency_key) DO NOTHING RETURNING *",
+    )
+    .bind(s.key)
+    .bind(s.player)
+    .bind(s.warehouse)
+    .bind(s.resource)
+    .bind(s.quantity)
+    .bind(s.unit_price)
+    .bind(s.amount)
+    .bind(s.currency)
+    .fetch_optional(pool)
+    .await?)
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct PriceIndex {

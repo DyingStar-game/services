@@ -44,7 +44,7 @@ vi.mock('../src/services/social.client.js', async (importOriginal) => ({
 
 const { db } = await import('../src/db/connection.js');
 const { missionAssignments } = await import('../src/db/schema/index.js');
-const { applyMove } = await import('../src/services/goodsMoves.service.js');
+const { applyMove, usedBefore } = await import('../src/services/goodsMoves.service.js');
 
 const PLAYER = '9a8b7c6d-5e4f-4a3b-b2c1-0d9e8f7a6b5c';
 const ROLES = 'mission:read,mission:write,mission:complete,mission:progress';
@@ -172,6 +172,42 @@ describe('warehouse deliveries', () => {
     const once = applyMove(objective, m, WAREHOUSES);
     expect(once?.state.delivered).toBe(5);
     expect(applyMove({ ...objective, state: once!.state }, m, WAREHOUSES)).toBeNull();
+  });
+
+  it('a move answers what the missions counted, and a replay answers the same', async () => {
+    const mission = await createMission({
+      type: 'deliver_material',
+      targetQuantity: 15,
+      params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' },
+    });
+    const body = { playerId: PLAYER, goodType: 'ore.gold', quantity: 20, direction: 'drop', warehouseId: MINE_DEPOT, key: 'replayed' };
+    const first = await call('/missions/goods-moves', 'POST', body);
+    expect(first.body.counted).toBe(15); // 5 left: the player's own
+    const again = await call('/missions/goods-moves', 'POST', body);
+    expect(again.body.counted).toBe(15); // not 0: nothing of the mission's is sold on a retry
+    expect(again.body.applied).toEqual([]);
+    expect((await objectiveOf(mission)).currentProgress).toBe(15);
+    expect((await move('drop', 'ore.gold', MINE_DEPOT, 20)).body.counted).toBe(0); // the mission is full
+  });
+
+  it('a move remembered without its count answers the whole of it', () => {
+    const m = { key: 'old', quantity: 7 };
+    expect(usedBefore({ state: { moveKeys: ['old'] } }, m)).toBe(7);
+    expect(usedBefore({ state: { moveKeys: ['old'], moveUsed: { old: 3 } } }, m)).toBe(3);
+    expect(usedBefore({ state: {} }, m)).toBeNull();
+  });
+
+  it('with inventory down nothing is counted and the answer says so', async () => {
+    const mission = await createMission({
+      type: 'deliver_material',
+      targetQuantity: 15,
+      params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' },
+    });
+    inventory.resolvePois.mockRejectedValueOnce(new Error('down'));
+    const body = { playerId: PLAYER, goodType: 'ore.gold', quantity: 20, direction: 'drop', warehouseId: MINE_DEPOT, key: 'while-down' };
+    expect((await call('/missions/goods-moves', 'POST', body)).body.counted).toBeNull();
+    expect((await call('/missions/goods-moves', 'POST', body)).body.counted).toBe(15); // the retry counts
+    expect((await objectiveOf(mission)).currentProgress).toBe(15);
   });
 
   it('a crate counts once: it fills the oldest mission, the rest goes to the next', async () => {

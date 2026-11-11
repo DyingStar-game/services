@@ -77,6 +77,10 @@ impl Upstream {
         self.send(Method::PUT, path, Some(body)).await
     }
 
+    pub async fn patch<B: Serialize + ?Sized, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+        self.send(Method::PATCH, path, Some(body)).await
+    }
+
     fn decode_error(&self, e: serde_json::Error) -> AppError {
         AppError::Upstream { service: self.name, status: 0, code: "DECODE".into(), message: e.to_string() }
     }

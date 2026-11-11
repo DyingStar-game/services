@@ -14,6 +14,9 @@ pub struct Federation {
     pub id: Uuid,
     pub code: String,
     pub name: String,
+    /// What it is, as players read it (`corporation`, `federation`, `organisation`...): a slug the game
+    /// names in their language. The table's name is history: not every entity here is a federation.
+    pub kind: String,
     pub political_entity_id: Uuid,
     pub planet_internal_name: String,
     pub planet_poi_uuid: Option<Uuid>,
@@ -57,6 +60,8 @@ impl Federation {
 pub struct FederationInput {
     pub code: Option<String>,
     pub name: Option<String>,
+    /// See `Federation::kind`; `federation` when never said.
+    pub kind: Option<String>,
     pub political_entity_id: Option<Uuid>,
     pub planet_internal_name: Option<String>,
     pub planet_poi_uuid: Option<Uuid>,
@@ -83,18 +88,27 @@ pub async fn get_federation(pool: &PgPool, id: Uuid) -> Result<Option<Federation
     Ok(sqlx::query_as("SELECT * FROM federations WHERE id = $1").bind(id).fetch_optional(pool).await?)
 }
 
+/// Whether [kind] is a kind's slug: lower case, a letter first, at most 32 characters.
+pub fn is_kind(kind: &str) -> bool {
+    let mut chars = kind.chars();
+    kind.len() <= 32 && chars.next().is_some_and(|c| c.is_ascii_lowercase()) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// Inserts or updates a federation by `code` (all of code, name, politicalEntityId and
 /// planetInternalName are required on insert).
 pub async fn upsert_federation(pool: &PgPool, id: Option<Uuid>, f: &FederationInput) -> Result<Federation> {
+    if f.kind.as_deref().is_some_and(|k| !is_kind(k)) {
+        return Err(crate::error::AppError::BadRequest("kind must be a slug: lower case letters, digits and _, a letter first, at most 32".into()));
+    }
     Ok(sqlx::query_as(
         r#"
         INSERT INTO federations (id, code, name, political_entity_id, planet_internal_name, currency,
             managed_categories, treasury_floor, mint_batch, mint_ceiling, elasticity, price_min_factor,
-            price_max_factor, spread, freight_rate_per_tkm, urgency_max, miner_share, leg_base_reward, planet_poi_uuid)
+            price_max_factor, spread, freight_rate_per_tkm, urgency_max, miner_share, leg_base_reward, planet_poi_uuid, kind)
         VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, COALESCE($6, 'credits'),
             COALESCE($7, '{ore,food,water}'), COALESCE($8, 100000), COALESCE($9, 1000000), $10,
             COALESCE($11, 0.8), COALESCE($12, 0.25), COALESCE($13, 4.0), COALESCE($14, 0.1),
-            COALESCE($15, 2.0), COALESCE($16, 1.0), COALESCE($17, 0.6), COALESCE($18, 50), $19)
+            COALESCE($15, 2.0), COALESCE($16, 1.0), COALESCE($17, 0.6), COALESCE($18, 50), $19, COALESCE($20, 'federation'))
         ON CONFLICT (code) DO UPDATE SET
             name = COALESCE($3, federations.name),
             political_entity_id = COALESCE($4, federations.political_entity_id),
@@ -113,6 +127,7 @@ pub async fn upsert_federation(pool: &PgPool, id: Option<Uuid>, f: &FederationIn
             miner_share = COALESCE($17, federations.miner_share),
             leg_base_reward = COALESCE($18, federations.leg_base_reward),
             planet_poi_uuid = COALESCE($19, federations.planet_poi_uuid),
+            kind = COALESCE($20, federations.kind),
             updated_at = now()
         RETURNING *
         "#,
@@ -136,6 +151,7 @@ pub async fn upsert_federation(pool: &PgPool, id: Option<Uuid>, f: &FederationIn
     .bind(f.miner_share)
     .bind(f.leg_base_reward)
     .bind(f.planet_poi_uuid)
+    .bind(&f.kind)
     .fetch_one(pool)
     .await?)
 }
@@ -156,6 +172,20 @@ pub struct Resource {
     /// The resource it is refined from (its `code`): ingots from crushed ore. A shortage of it is
     /// met with its input, refined at the destination.
     pub refined_from: Option<String>,
+    /// What is mined to make it, as a mission's text says it ("gold"): crushed ore is not mined, the
+    /// mineral is, then crushed. None: the texts do not name it.
+    pub mined: Option<String>,
+    /// The same in French, with its article ("de l'or").
+    pub mined_fr: Option<String>,
+    /// What a crate of it typically weighs in the game (kg): a truckload is TRUCK_CRATES of them.
+    pub crate_kg: f64,
+}
+
+impl Resource {
+    /// A truckload of it, in its own unit (simulation::tiers::truckload): the unit of the mission tiers.
+    pub fn truckload(&self) -> i64 {
+        crate::simulation::tiers::truckload(self.crate_kg, self.mass_per_unit_kg)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -175,6 +205,15 @@ pub struct ResourceInput {
     /// Code of the resource it is refined from (declared before it in the seed).
     #[serde(default)]
     pub refined_from: Option<String>,
+    /// What is mined to make it, for the missions' texts ("gold"), and in French with its article
+    /// ("de l'or").
+    #[serde(default)]
+    pub mined: Option<String>,
+    #[serde(default)]
+    pub mined_fr: Option<String>,
+    /// What a crate of it typically weighs in the game (kg).
+    #[serde(default = "default_crate_kg")]
+    pub crate_kg: f64,
 }
 
 fn default_unit() -> String {
@@ -185,14 +224,21 @@ fn default_mass() -> f64 {
     1.0
 }
 
+fn default_crate_kg() -> f64 {
+    25.0
+}
+
+/// The columns of a `Resource`, in every query that reads one.
+const RESOURCE_COLS: &str = "id, code, name, name_fr, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from, mined, mined_fr, crate_kg";
+
 pub async fn list_resources(pool: &PgPool) -> Result<Vec<Resource>> {
-    Ok(sqlx::query_as("SELECT id, code, name, name_fr, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from FROM resources ORDER BY code")
+    Ok(sqlx::query_as(&format!("SELECT {RESOURCE_COLS} FROM resources ORDER BY code"))
         .fetch_all(pool)
         .await?)
 }
 
 pub async fn get_resource(pool: &PgPool, id: Uuid) -> Result<Option<Resource>> {
-    Ok(sqlx::query_as("SELECT id, code, name, name_fr, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from FROM resources WHERE id = $1")
+    Ok(sqlx::query_as(&format!("SELECT {RESOURCE_COLS} FROM resources WHERE id = $1"))
         .bind(id)
         .fetch_optional(pool)
         .await?)
@@ -200,10 +246,10 @@ pub async fn get_resource(pool: &PgPool, id: Uuid) -> Result<Option<Resource>> {
 
 /// Finds a resource by code or inventory good type.
 pub async fn find_resource(pool: &PgPool, code: Option<&str>, good_type: Option<&str>) -> Result<Option<Resource>> {
-    Ok(sqlx::query_as(
-        "SELECT id, code, name, name_fr, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from FROM resources
-         WHERE ($1::TEXT IS NOT NULL AND code = $1) OR ($2::TEXT IS NOT NULL AND inventory_good_type = $2)",
-    )
+    Ok(sqlx::query_as(&format!(
+        "SELECT {RESOURCE_COLS} FROM resources
+         WHERE ($1::TEXT IS NOT NULL AND code = $1) OR ($2::TEXT IS NOT NULL AND inventory_good_type = $2)"
+    ))
     .bind(code)
     .bind(good_type)
     .fetch_optional(pool)
@@ -211,16 +257,16 @@ pub async fn find_resource(pool: &PgPool, code: Option<&str>, good_type: Option<
 }
 
 pub async fn upsert_resource(pool: &PgPool, r: &ResourceInput) -> Result<Resource> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as(&format!(
         r#"
-        INSERT INTO resources (code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from, name_fr)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO resources (code, name, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from, name_fr, mined, mined_fr, crate_kg)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (code) DO UPDATE SET
             name = $2, category = $3, unit = $4, inventory_good_type = $5,
-            mass_per_unit_kg = $6, base_price = $7, refined_from = $8, name_fr = $9, updated_at = now()
-        RETURNING id, code, name, name_fr, category, unit, inventory_good_type, mass_per_unit_kg, base_price, refined_from
-        "#,
-    )
+            mass_per_unit_kg = $6, base_price = $7, refined_from = $8, name_fr = $9, mined = $10, mined_fr = $11, crate_kg = $12, updated_at = now()
+        RETURNING {RESOURCE_COLS}
+        "#
+    ))
     .bind(&r.code)
     .bind(&r.name)
     .bind(&r.category)
@@ -230,6 +276,9 @@ pub async fn upsert_resource(pool: &PgPool, r: &ResourceInput) -> Result<Resourc
     .bind(r.base_price)
     .bind(&r.refined_from)
     .bind(&r.name_fr)
+    .bind(&r.mined)
+    .bind(&r.mined_fr)
+    .bind(r.crate_kg)
     .fetch_one(pool)
     .await?)
 }

@@ -307,14 +307,19 @@ pub async fn incoming(pool: &PgPool, federation: Uuid) -> Result<Vec<(Uuid, Uuid
     .await?)
 }
 
-/// Quantity promised by each village to legs not yet held (per village, resource).
+/// Quantity each village owes to the open transports leaving it (per village, resource): the good
+/// loaded, so the input of a refined resource. Nothing holds the goods in `inventory` any more, so a
+/// leg counts until it is completed -- a little too long (its crates may be on the road already), never
+/// too short: the same crates are not promised twice.
 pub async fn outgoing(pool: &PgPool, federation: Uuid) -> Result<Vec<(Uuid, Uuid, i64)>> {
     Ok(sqlx::query_as(
-        "SELECT l.from_village_id, o.resource_id, sum(l.quantity)::BIGINT FROM supply_order_legs l
+        "SELECT l.from_village_id, COALESCE(i.id, o.resource_id), sum(l.quantity)::BIGINT FROM supply_order_legs l
          JOIN supply_orders o ON o.id = l.order_id
-         WHERE o.federation_id = $1 AND o.status IN ('planned', 'in_progress')
-           AND l.from_village_id IS NOT NULL AND l.status IN ('pending')
-         GROUP BY l.from_village_id, o.resource_id",
+         JOIN resources r ON r.id = o.resource_id
+         LEFT JOIN resources i ON i.code = r.refined_from
+         WHERE o.federation_id = $1 AND o.status IN ('planned', 'in_progress') AND o.kind = 'transport'
+           AND l.from_village_id IS NOT NULL AND l.status IN ('pending', 'held', 'published')
+         GROUP BY l.from_village_id, COALESCE(i.id, o.resource_id)",
     )
     .bind(federation)
     .fetch_all(pool)

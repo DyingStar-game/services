@@ -99,7 +99,7 @@ fn world_file(initial_treasury: i64) -> WorldFile {
 fn world_json(initial_treasury: i64) -> String {
     json!({
         "federation": {
-            "code": "ARES", "name": "ARES", "planetInternalName": "tarsis_3", "planetPoiUuid": id(PLANET),
+            "code": "ARES", "name": "ARES", "kind": "corporation", "planetInternalName": "tarsis_3", "planetPoiUuid": id(PLANET),
             "initialTreasury": initial_treasury, "treasuryFloor": 0, "mintBatch": 100000, "elasticity": 1.0
         },
         "resources": [
@@ -347,6 +347,9 @@ async fn ingots(st: &AppState) -> catalog::Resource {
         code: "ingot_fer".into(),
         name: "Iron ingots".into(),
         name_fr: Some("Lingots de fer".into()),
+        mined: None,
+        mined_fr: None,
+        crate_kg: 25.0,
         category: "ore".into(),
         unit: "kg".into(),
         inventory_good_type: "ingot_fer".into(),
@@ -389,6 +392,95 @@ async fn a_shortage_of_ingots_ships_the_ore_to_refine(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_refining_village_holding_the_ore_refines_it_at_home(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let ingot = ingots(&st).await;
+    let ore = catalog::find_resource(&st.pool, Some("ore_fer"), None).await.unwrap().unwrap();
+    // The city refines and holds 120 of crushed ore; the mining village holds more, further away.
+    world::set_village_refines(&st.pool, id(V3), true).await.unwrap();
+    fake.set_quantity(Holder::warehouse(id(D3A)), "ore_fer", 120);
+    fake.set_quantity(Holder::warehouse(id(D1)), "ore_fer", 500);
+    world::upsert_policy(&st.pool, &world::VillagePolicy { village_id: id(V3), resource_id: ingot.id, min_threshold: 100, target_level: 300 }).await.unwrap();
+    simulation::tick(&st, true).await.unwrap();
+    let filter = orders::OrderFilter { kind: Some("transport".into()), resource: Some(ingot.id), ..Default::default() };
+    let (refining, _) = orders::list_orders(&st.pool, &filter).await.unwrap();
+    assert_eq!(refining.len(), 1);
+    assert_eq!(refining[0].quantity, 120, "what the city holds, not the whole gap");
+    assert_eq!((refining[0].origin_village_id, refining[0].destination_village_id), (Some(id(V3)), id(V3)));
+    let leg = legs(&st).await.into_iter().find(|l| l.order_id == refining[0].id).unwrap();
+    assert_eq!((leg.from_warehouse_id, leg.to_warehouse_id), (Some(id(D3A)), Some(id(D3A))));
+    let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
+    assert!(mission.title.contains("Refine 120 kg Iron ingots at"), "{}", mission.title);
+    assert_eq!(mission.category, "mining");
+    let params = &mission.objectives[0]["params"];
+    assert_eq!((params["goodType"].as_str(), params["deliverGoodType"].as_str()), (Some("ore_fer"), Some("ingot_fer")));
+    assert_eq!(params["source"], params["zone"], "taken from the warehouse it goes back to");
+    // The ore of an open refining is not promised twice: the next tick orders nothing more of it.
+    simulation::tick(&st, true).await.unwrap();
+    let (again, _) = orders::list_orders(&st.pool, &filter).await.unwrap();
+    assert_eq!(again.iter().filter(|o| o.origin_village_id == Some(id(V3))).count(), 1);
+    let owed = orders::outgoing(&st.pool, refining[0].federation_id).await.unwrap();
+    assert_eq!(owed.into_iter().find(|(v, r, _)| *v == id(V3) && *r == ore.id).map(|(_, _, q)| q), Some(120));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn each_village_has_one_inspection_open_on_the_site_seen_the_longest_ago(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    // The sites are made at their village's altitude: no mission before the game server laid them on
+    // the ground.
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.inspections_published, 0, "not on the ground yet");
+    let to_lay = crate::db::inspections::ungrounded(&st.pool).await.unwrap();
+    assert!(!to_lay.is_empty());
+    for (site, _, x, y, z) in &to_lay {
+        assert!(crate::db::inspections::set_ground(&st.pool, *site, [*x, *y + 800.0, *z]).await.unwrap());
+    }
+    let (first_site, _, x, y, z) = to_lay[0].clone();
+    assert!(!crate::db::inspections::set_ground(&st.pool, first_site, [x, y, z]).await.unwrap(), "laid once");
+    let laid = crate::db::inspections::get(&st.pool, first_site).await.unwrap().unwrap();
+    assert_eq!((laid.x, laid.y, laid.z), (x, y + 800.0, z));
+    assert!(crate::db::inspections::ungrounded(&st.pool).await.unwrap().is_empty());
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    let sites = crate::db::inspections::list(&st.pool, fed.id).await.unwrap();
+    let of_v1: Vec<_> = sites.iter().filter(|s| s.village_id == id(V1)).collect();
+    assert_eq!(of_v1.len(), simulation::inspections::SITES_PER_VILLAGE as usize);
+    let open: Vec<_> = of_v1.iter().filter(|s| s.mission_id.is_some()).collect();
+    assert_eq!(open.len(), 1, "one mission a village");
+    assert_eq!(r.inspections_published, sites.iter().filter(|s| s.mission_id.is_some()).count());
+    let first = open[0];
+    let mission = fake.with(|s| s.missions[&first.mission_id.unwrap()].mission.clone());
+    assert_eq!((mission.category, mission.auto_complete), ("exploration", true));
+    assert_eq!(mission.giver.as_ref().map(|g| g["division"].clone()), Some(serde_json::json!("security")));
+    let objective = &mission.objectives[0];
+    assert_eq!(objective["type"], "visit");
+    assert_eq!(objective["params"]["zone"]["poiId"], serde_json::json!(first.inventory_poi_id.unwrap()));
+    assert!(!fake.with(|s| s.pois[&first.inventory_poi_id.unwrap()].public), "a zone only its mission's holder is shown");
+    // Nothing more while it is open; inspected, the next mission is on another site.
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert_eq!(r.inspections_published, 0);
+    fake.complete_mission(first.mission_id.unwrap());
+    simulation::tick(&st, true).await.unwrap();
+    let sites = crate::db::inspections::list(&st.pool, fed.id).await.unwrap();
+    let open: Vec<_> = sites.iter().filter(|s| s.village_id == id(V1) && s.mission_id.is_some()).collect();
+    assert_eq!(open.len(), 1);
+    assert_ne!(open[0].id, first.id, "the site just inspected waits its turn");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn goods_carried_as_they_are_make_a_delivery(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    simulation::tick(&st, true).await.unwrap();
+    let leg = legs(&st).await.into_iter().find(|l| l.from_warehouse_id.is_some() && l.mission_id.is_some()).unwrap();
+    let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
+    assert!(mission.title.contains("Deliver "), "{}", mission.title);
+    assert_eq!(mission.category, "delivery");
+    assert_eq!(mission.giver.as_ref().map(|g| g["division"].clone()), Some(serde_json::json!("hauling")));
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn ingots_nobody_has_the_ore_for_are_mined_and_delivered_in_one_mission(pool: PgPool) {
     let (st, fake) = setup(pool, 1_000_000).await;
     let ingot = ingots(&st).await;
@@ -404,6 +496,11 @@ async fn ingots_nobody_has_the_ore_for_are_mined_and_delivered_in_one_mission(po
     let mission = fake.with(|s| s.missions[&leg.mission_id.unwrap()].mission.clone());
     assert_eq!(mission.objectives[0]["type"], "deliver_material");
     assert_eq!(mission.objectives[0]["params"]["goodType"], "ingot_fer");
+    // The mineral is mined then crushed (crushed ore is not mined); no refining village here: a factory city.
+    let text = mission.objectives[0]["title"].as_str().unwrap_or_default().to_string();
+    assert!(text.starts_with("Mine and crush in any mining village, have it refined in a factory city"), "{text}");
+    // Who orders it, by name and kind, for the game to name (ADR 0016).
+    assert_eq!(mission.objectives[0]["payload"]["issuer"], json!({ "name": "ARES", "kind": "corporation" }));
 
     fake.complete_mission(leg.mission_id.unwrap());
     simulation::tick(&st, true).await.unwrap();
@@ -552,4 +649,113 @@ async fn warehouse_deliveries(pool: PgPool) {
     }))).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(res["error"], "INSUFFICIENT_STOCK");
+}
+
+/// A kind is a slug the game can key a translation on; anything else is refused before the database.
+#[test]
+fn a_kind_is_a_slug() {
+    for ok in ["corporation", "federation", "trade_league2"] {
+        assert!(catalog::is_kind(ok), "{ok}");
+    }
+    for bad in ["", "Corporation", "2corp", "méga", "a b", &"x".repeat(33)] {
+        assert!(!catalog::is_kind(bad), "{bad}");
+    }
+}
+
+// ── Off-mission sales (ADR 0017) ─────────────────────────────────────────────
+
+fn sale_body(key: &str, player: Uuid, quantity: i64) -> serde_json::Value {
+    json!({ "idempotencyKey": key, "warehouseId": id(D1), "goodType": "water", "quantity": quantity, "playerId": player })
+}
+
+/// Paid once at the market price from the treasury, the player told; a replay answers the same sale.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_off_mission_sale_is_paid_once_and_told(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    let treasury = fake.with(|s| s.wallets[&fed.political_entity_id]);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-1", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED, "{res}");
+    let amount = res["amount"].as_i64().unwrap();
+    assert!(amount > 0, "{res}");
+    assert_eq!(res["paid"], true);
+    let (status, again) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-1", player, 40))).await;
+    assert_eq!(status, StatusCode::OK, "a replay");
+    assert_eq!(again["amount"], amount);
+    assert_eq!(fake.with(|s| s.payments.clone()), vec![(player, amount)], "paid once");
+    assert_eq!(fake.with(|s| s.wallets[&fed.political_entity_id]), treasury - amount, "debited once");
+    assert_eq!(fake.with(|s| s.notifications.len()), 1, "told once");
+    assert_eq!(fake.with(|s| s.notifications[0].1["type"].clone()), "warehouse.sale");
+}
+
+/// The credit fails after the treasury was debited (a role missing, a frozen account): nothing is lost,
+/// the same key pays what is left to pay, at the price recorded the first time.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_whose_credit_failed_is_paid_by_a_replay(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    let treasury = fake.with(|s| s.wallets[&fed.political_entity_id]);
+    fake.with(|s| s.failing_credits = 1);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-2", player, 40))).await;
+    assert!(status.is_client_error() || status.is_server_error(), "the credit failed: {status} {res}");
+    assert!(fake.with(|s| s.payments.is_empty()));
+    let debited = treasury - fake.with(|s| s.wallets[&fed.political_entity_id]);
+    assert!(debited > 0, "the treasury was debited");
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-2", player, 40))).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(res["paid"], true);
+    assert_eq!(fake.with(|s| s.payments.clone()), vec![(player, debited)], "the player gets what the treasury gave");
+    assert_eq!(treasury - fake.with(|s| s.wallets[&fed.political_entity_id]), debited, "and the treasury gave it once");
+    assert_eq!(fake.with(|s| s.notifications.len()), 1);
+}
+
+/// A key is one sale: another player or another quantity under it is refused.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_key_used_for_another_sale_is_refused(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-3", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-3", player, 41))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(res["error"], "IDEMPOTENCY_CONFLICT");
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-3", Uuid::new_v4(), 40))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(fake.with(|s| s.payments.len()), 1);
+}
+
+/// A treasury that cannot pay mints a batch first, as for a mission's escrow.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_the_treasury_cannot_pay_mints_first(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    fake.with(|s| {
+        s.wallets.insert(fed.political_entity_id, 0);
+        s.minted.clear();
+    });
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-4", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED, "{res}");
+    assert_eq!(fake.with(|s| s.minted.len()), 1, "one batch");
+    assert_eq!(fake.with(|s| s.payments.len()), 1);
+}
+
+/// Refused before any money moves: an unknown warehouse or good, nothing to sell.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_sale_of_nothing_or_nowhere_is_refused(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-5", player, 0))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut elsewhere = sale_body("sale-6", player, 5);
+    elsewhere["warehouseId"] = json!(Uuid::new_v4());
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(elsewhere)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let mut unknown = sale_body("sale-7", player, 5);
+    unknown["goodType"] = json!("moon_cheese");
+    let (status, _) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(unknown)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(fake.with(|s| s.payments.is_empty()));
 }

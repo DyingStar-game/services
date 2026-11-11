@@ -2,6 +2,7 @@
   "economyScale": 25,
   "federation": {
     "code": "ARES",
+    "kind": "corporation",
     "name": "ARES",
     "planetInternalName": "tarsis_3",
     "planetPoiUuid": "4a7e3ece-926a-4dc0-a85c-561cf522263e",
@@ -31,7 +32,10 @@
       "unit": "kg",
       "inventoryGoodType": "ore.gold",
       "massPerUnitKg": 1.0,
-      "basePrice": 30.0
+      "basePrice": 30.0,
+      "crateKg": 22.0,
+      "mined": "gold",
+      "minedFr": "de l'or"
     },
     {
       "code": "ingot.gold",
@@ -42,6 +46,7 @@
       "inventoryGoodType": "ingot.gold",
       "massPerUnitKg": 1.0,
       "basePrice": 60.0,
+      "crateKg": 15.0,
       "refinedFrom": "ore.gold"
     }
   ],
@@ -68,7 +73,13 @@
           {
             "resource": "ingot.gold",
             "minThreshold": 40,
-            "targetLevel": 120,
+            "targetLevel": 320,
+            "perThousand": true
+          },
+          {
+            "resource": "ore.gold",
+            "minThreshold": 60,
+            "targetLevel": 320,
             "perThousand": true
           }
         ],
@@ -86,8 +97,14 @@
             "resource": "ingot.gold",
             "capacity": 800,
             "initialBelowThreshold": 0.9
+          },
+          {
+            "resource": "ore.gold",
+            "capacity": 800,
+            "initialBelowThreshold": 0.9
           }
-        ]
+        ],
+        "refines": true
       },
       "mining": {
         "mineralSources": [
@@ -101,7 +118,7 @@
           {
             "resource": "ore.gold",
             "minThreshold": 60,
-            "targetLevel": 180,
+            "targetLevel": 720,
             "perThousand": true
           }
         ],

@@ -16,7 +16,8 @@ The service **orchestrates** the existing game services (see [ADR 0003](docs/adr
 | Treasury and money issuance | economie |
 | Route graph, village policies and flows, warehouse capacities, mineral sources, supply orders, prices, tick | **universesimulator** (PostgreSQL) |
 
-The first federation, **ARES**, governs planet `tarsis_3` (SandBox). Decisions are recorded in
+The first entity governing supply, **ARES**, a corporation (its `kind`, ADR 0016; the table and the routes
+say `federations` for all of them), governs planet `tarsis_3` (SandBox). Decisions are recorded in
 [`docs/adr`](docs/adr/README.md).
 
 ## Villages and warehouses (ADR 0013)
@@ -57,7 +58,7 @@ Contract: [`openapi.yaml`](openapi.yaml) (also served at `GET /openapi.yaml`).
 |---|---|---|
 | `/healthz` | none | health |
 | `/api/*` | player token | federations, entities, resources, prices, villages (aggregated stocks, warehouses), warehouses (live stocks), entity stock, paths, orders |
-| `/api/internal/*` | service account, `aud=universesimulator-api` | same reads (`usim:read`), `GET /warehouses/by-poi/{uuid}`, `POST /warehouse-deliveries` (`usim:deliver`), `POST /orders` (`usim:write`) |
+| `/api/internal/*` | service account, `aud=universesimulator-api` | same reads (`usim:read`), `GET /warehouses/by-poi/{uuid}`, `POST /warehouse-deliveries` and `POST /warehouse-sales` (`usim:deliver`), `POST /orders` (`usim:write`) |
 | `/api/admin/*` | moderation role (writes: `admin`/`supervisor`) | dashboard, network, histories, local prices, configuration (villages, village policies, flows, warehouse capacities, routes, mineral sources), orders, simulation control, `POST /import` |
 
 ### Off-mission deliveries (game server)
@@ -72,6 +73,18 @@ POST /api/internal/warehouse-deliveries
 The accepted quantity (capped by the warehouse capacity) is transferred from the player to the
 warehouse in inventory. No payment (ADR 0012). Replays with the same key return `200`.
 
+### Off-mission sales (game server, ADR 0017)
+
+```http
+POST /api/internal/warehouse-sales
+{ "idempotencyKey": "drop-…:sale", "warehouseId": "…", "goodType": "ore.gold", "quantity": 120, "playerId": "…" }
+→ 201 { "quantity": 120, "unitPrice": 30.0, "amount": 3600, "currency": "credits", "paid": true, "sale": { … } }
+```
+
+What a player shelved that no mission of theirs counted is bought at the market price, from the treasury.
+The sale is recorded before it is paid: a replay with the same key returns `200` and pays what was left to
+pay; the same key for another sale returns `409 IDEMPOTENCY_CONFLICT`.
+
 ## Service roles
 
 Inbound: `usim:read`, `usim:write`, `usim:deliver` (realm roles, audience `universesimulator-api`).
@@ -83,8 +96,8 @@ Outbound, client `svc-universesimulator` (client credentials) needs:
 |---|---|
 | mission (`mission-api`) | `mission:read`, `mission:write`, `mission:escrow:politics` |
 | inventory (`inventory-api`) | `inventory:read`, `inventory:hold`, `inventory:transfer`, `inventory:credit` |
-| social (`social-api`) | `social:politics:read`, `social:politics:write` |
-| economie (`economie-api`) | `economie:wallet:ensure`, `economie:politics:read`, `economie:politics:manage`, `economie:money:issue` |
+| social (`social-api`) | `social:politics:read`, `social:politics:write`, `social:notify:write` |
+| economie (`economie-api`) | `economie:wallet:ensure`, `economie:wallet:credit`, `economie:politics:read`, `economie:politics:manage`, `economie:money:issue` |
 
 and must be listed in `INTERNAL_SERVICE_CLIENTS` of these four services.
 
