@@ -46,6 +46,7 @@ fn config() -> Config {
         sim_leg_max_attempts: 2,
         sim_political_refresh_minutes: 15,
         sim_history_days: 14,
+        sim_breakdowns_open: 1,
         oidc_issuer: "http://keycloak.test/realms/dyingstar".into(),
         oidc_jwks_url: "http://keycloak.test/certs".into(),
         oidc_audience: None,
@@ -200,6 +201,26 @@ async fn new_depots_are_attached_by_the_tick(pool: PgPool) {
     let ws = world::list_warehouses(&st.pool, &world::WarehouseFilter { village: Some(id(V2)), ..Default::default() }).await.unwrap();
     assert_eq!(ws.len(), 2);
     assert_eq!(world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().main_warehouse_id, Some(id(D2)), "main unchanged");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_village_whose_depots_left_the_world_is_off_until_they_are_back(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    // The tick replays the world file that was kept.
+    import::import_and_keep(&st, serde_json::from_str::<Value>(&world_json(1_000_000)).unwrap()).await.unwrap();
+    let depot = fake.with(|s| s.items[&id(D2)].clone());
+    // The persisted world was purged: V2's depot is back only once the village is loaded again.
+    fake.remove_item(id(D2));
+    simulation::tick(&st, true).await.unwrap();
+    assert!(!world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().active, "nowhere to deliver to");
+    assert!(world::get_village(&st.pool, id(V1)).await.unwrap().unwrap().active);
+    fake.with(|s| s.items.insert(id(D2), depot));
+    simulation::tick(&st, true).await.unwrap();
+    assert!(world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().active, "back with its depot");
+    // A village an admin turned off stays off, its depot in the world.
+    world::set_village_active(&st.pool, id(V2), false).await.unwrap();
+    simulation::tick(&st, true).await.unwrap();
+    assert!(!world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().active);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -421,6 +442,74 @@ async fn a_refining_village_holding_the_ore_refines_it_at_home(pool: PgPool) {
     assert_eq!(again.iter().filter(|o| o.origin_village_id == Some(id(V3))).count(), 1);
     let owed = orders::outgoing(&st.pool, refining[0].federation_id).await.unwrap();
     assert_eq!(owed.into_iter().find(|(v, r, _)| *v == id(V3) && *r == ore.id).map(|(_, _, q)| q), Some(120));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_machine_breaks_down_and_stays_broken_until_the_game_says_it_is_repaired(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let (crusher, furnace, lost) = (Uuid::from_u128(0xC1), Uuid::from_u128(0xC2), Uuid::from_u128(0xC3));
+    let listing = json!({ "scene": "tarsis_3", "machines": [
+        { "id": crusher, "kind": "crusher", "position": pos(50.0) },
+        { "id": furnace, "kind": "refinery", "position": pos(10_100.0) },
+        { "id": lost, "kind": "lift", "position": pos(60_000.0) },
+    ] });
+    // Nothing breaks before the game server said what machines there are.
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert_eq!(r.repairs_published, 0);
+    let (status, res) = call(&st, "PUT", "/api/internal/machines", &[SERVICE], Some(listing.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(res["known"], 2, "the lift stands in no village");
+    assert_eq!(res["broken"].as_array().unwrap().len(), 0);
+
+    // One at a time (sim_breakdowns_open: 1), its repair offered by ARES Machinery.
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.repairs_published, 1);
+    let (_, res) = call(&st, "PUT", "/api/internal/machines", &[SERVICE], Some(listing.clone())).await;
+    let broken = res["broken"].as_array().unwrap().clone();
+    assert_eq!(broken.len(), 1);
+    let first: Uuid = broken[0]["machineId"].as_str().unwrap().parse().unwrap();
+    let breakdown: Uuid = broken[0]["breakdownId"].as_str().unwrap().parse().unwrap();
+    let mission_id: Uuid = broken[0]["missionId"].as_str().unwrap().parse().unwrap();
+    let mission = fake.with(|s| s.missions[&mission_id].mission.clone());
+    assert_eq!(mission.objectives[0]["type"], "manual", "confirmed by the game server");
+    let (status, res) = call(&st, "GET", "/api/breakdowns", &[("x-player-id", "00000000-0000-0000-0000-000000000077")], None).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(res["items"][0]["machineId"], json!(first), "what a client draws as broken");
+    assert_eq!(mission.objectives[0]["payload"]["machineId"], json!(first));
+    assert_eq!(mission.giver.as_ref().unwrap()["division"], "machinery");
+    assert_eq!(mission.category, "divers");
+    assert!(mission.auto_complete);
+
+    // Nobody repairs it: it stays broken, and a mission that expired is offered again.
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert_eq!(r.repairs_published, 0);
+    fake.with(|s| s.missions.get_mut(&mission_id).unwrap().status = "expired".into());
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert_eq!(r.repairs_published, 1, "another mission on the same breakdown");
+    let (_, res) = call(&st, "PUT", "/api/internal/machines", &[SERVICE], Some(listing.clone())).await;
+    assert_eq!(res["broken"][0]["breakdownId"], json!(breakdown));
+    let second_mission: Uuid = res["broken"][0]["missionId"].as_str().unwrap().parse().unwrap();
+    assert_ne!(second_mission, mission_id);
+
+    // The game server confirmed the objective (the mission is done) and says the machine works.
+    fake.complete_mission(second_mission);
+    let player = Uuid::from_u128(0x77);
+    let path = format!("/api/internal/breakdowns/{breakdown}/repaired");
+    let (status, res) = call(&st, "PUT", &path, &[SERVICE], Some(json!({ "playerId": player }))).await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    assert_eq!(res["repaired"], true);
+    let (_, res) = call(&st, "PUT", &path, &[SERVICE], Some(json!({ "playerId": player }))).await;
+    assert_eq!(res["repaired"], false, "once");
+
+    // The next to break is the one never repaired.
+    let r = simulation::tick(&st, true).await.unwrap();
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.repairs_published, 1);
+    let (_, res) = call(&st, "PUT", "/api/internal/machines", &[SERVICE], Some(listing)).await;
+    let broken = res["broken"].as_array().unwrap();
+    assert_eq!(broken.len(), 1);
+    assert_ne!(broken[0]["machineId"], json!(first));
 }
 
 #[sqlx::test(migrations = "./migrations")]

@@ -5,6 +5,7 @@ pub mod deliveries;
 pub mod sales;
 pub mod health;
 pub mod inspections;
+pub mod machines;
 pub mod reads;
 pub mod views;
 
@@ -24,6 +25,7 @@ fn reads() -> Router<AppState> {
         .route("/resources", get(reads::resources))
         .route("/prices", get(reads::prices))
         .route("/market", get(reads::market))
+        .route("/breakdowns", get(machines::broken))
         .route("/villages", get(reads::villages))
         .route("/villages/{id}", get(reads::village))
         .route("/warehouses", get(reads::warehouses))
@@ -45,6 +47,8 @@ pub fn build(st: AppState) -> Router {
         .route("/warehouse-sales", post(sales::create))
         .route("/inspection-sites/ungrounded", get(inspections::ungrounded))
         .route("/inspection-sites/{id}/ground", put(inspections::set_ground))
+        .route("/machines", put(machines::list))
+        .route("/breakdowns/{id}/repaired", put(machines::repaired))
         .route("/orders", post(admin::create_order_internal))
         .layer(middleware::from_fn_with_state(st.clone(), auth::service_layer));
 

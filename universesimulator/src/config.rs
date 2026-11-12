@@ -30,6 +30,8 @@ pub struct Config {
     pub sim_political_refresh_minutes: i64,
     /// Days of stock and price history kept.
     pub sim_history_days: i64,
+    /// Machines broken at once, a federation (ADR 0020); 0: none breaks.
+    pub sim_breakdowns_open: usize,
 
     // ── Inbound auth (ADR 0011) ──
     pub oidc_issuer: String,
@@ -83,6 +85,7 @@ impl Config {
             sim_leg_max_attempts: parsed("SIM_LEG_MAX_ATTEMPTS", 3),
             sim_political_refresh_minutes: parsed("SIM_POLITICAL_REFRESH_MINUTES", 15),
             sim_history_days: parsed("SIM_HISTORY_DAYS", 14),
+            sim_breakdowns_open: parsed("SIM_BREAKDOWNS_OPEN", 2),
             oidc_jwks_url: env::var("OIDC_JWKS_URL")
                 .unwrap_or_else(|_| format!("{oidc_issuer}/protocol/openid-connect/certs")),
             oidc_token_url: env::var("OIDC_TOKEN_URL")

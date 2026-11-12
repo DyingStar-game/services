@@ -477,15 +477,21 @@ pub fn build_mission(
 /// division of the job (`hauling` for a transport or a delivery, `security` for an inspection, `mining`
 /// otherwise). None when the name makes no slug.
 pub fn giver_of(federation: &str, category: &str) -> Option<Value> {
-    let faction: String = federation.trim().to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
-    if faction.is_empty() || faction.len() > 32 || !faction.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) {
-        return None;
-    }
     let division = match category {
         "transport" | "delivery" => "hauling",
         "exploration" => "security",
         _ => "mining",
     };
+    giver_in(federation, division)
+}
+
+/// The giver of a mission of [federation]'s subsidiary [division] (a slug the game knows: hauling,
+/// mining, security, machinery...). None when the federation's name makes no faction slug.
+pub fn giver_in(federation: &str, division: &str) -> Option<Value> {
+    let faction: String = federation.trim().to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+    if faction.is_empty() || faction.len() > 32 || !faction.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
     Some(json!({ "faction": faction, "division": division }))
 }
 

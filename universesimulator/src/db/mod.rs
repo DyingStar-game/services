@@ -4,5 +4,6 @@ pub mod catalog;
 pub mod connection;
 pub mod history;
 pub mod inspections;
+pub mod machines;
 pub mod orders;
 pub mod world;

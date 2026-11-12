@@ -70,6 +70,11 @@ impl FakeWorld {
         self.with(|s| s.items.insert(uuid, PoiItem { uuid, object_type: object_type.into(), data }));
     }
 
+    /// Takes a persistence object out of the world.
+    pub fn remove_item(&self, uuid: Uuid) {
+        self.with(|s| s.items.remove(&uuid));
+    }
+
     pub fn quantity(&self, holder: Holder, good_type: &str) -> i64 {
         self.with(|s| s.stacks.get(&(holder, good_type.to_string())).copied().unwrap_or(0))
     }

@@ -38,7 +38,10 @@ vi.mock('../src/config/env.js', async (importOriginal) => {
   };
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe('MQTT publisher', () => {
   it('sends the service token as the username, as the jwt backend reads it', async () => {
@@ -46,5 +49,30 @@ describe('MQTT publisher', () => {
     const { publishNotification } = await import('../src/mqtt/publisher.js');
     expect(await publishNotification('player-1', '{}')).toBe(true);
     expect(mqtt.options[0]).toMatchObject({ username: 'the.jwt.token', password: 'jwt' });
+  });
+
+  it('opens the connection again with a fresh token once the first one has expired', async () => {
+    // The broker checks the token at every publish: an expired one drops every notification without
+    // a word while the socket stays open (local playtest 2026-11-11: no notification after 5 minutes).
+    vi.resetModules();
+    mqtt.options.length = 0;
+    let issued = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ access_token: `token-${++issued}`, expires_in: 300 }))),
+    );
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const { publishNotification } = await import('../src/mqtt/publisher.js');
+
+    expect(await publishNotification('player-1', '{}')).toBe(true);
+    clock.mockReturnValue(start + 60_000);
+    expect(await publishNotification('player-1', '{}')).toBe(true);
+    expect(mqtt.options).toHaveLength(1); // still good: the same connection
+
+    clock.mockReturnValue(start + 300_000);
+    expect(await publishNotification('player-1', '{}')).toBe(true);
+    expect(mqtt.options).toHaveLength(2);
+    expect(mqtt.options[1]).toMatchObject({ username: 'token-2', password: 'jwt' });
   });
 });

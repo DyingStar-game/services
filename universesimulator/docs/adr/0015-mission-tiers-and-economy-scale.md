@@ -50,10 +50,15 @@ We will take option 2.
   (the town hall's market board).
   A truckload is what a truck's bed holds in the game, not its rated payload of 1 300 kg: a fixed number
   of crates (`TRUCK_CRATES` = 16 ore crates, one layer of 4 x 4 in the mini truck's bed),
-  whatever they hold. Each resource says what a crate of it typically weighs (`crateKg` in the seed:
-  22 kg of crushed gold ore, 15 kg of ingots), so a truckload is 16 × `crateKg`: a solo mission of gold
-  ore is up to 352 kg, a team one 704 kg to 1.41 t, an operation 3.5 to 7 t. (The game does let players
-  pile more on top: the truckload sizes the missions, it is not a limit.)
+  whatever they hold. Each resource says what a crate of it typically holds (`crateKg` in the seed:
+  15 kg for crushed gold ore and for ingots alike), so a truckload is 16 × `crateKg`: a solo mission of
+  gold ore is up to 240 kg, a team one 480 to 960 kg, an operation 2.4 to 4.8 t. (The game does let
+  players pile more on top: the truckload sizes the missions, it is not a limit.)
+  Amended 2026-11-11: a kilogram of crushed ore is a kilogram of the METAL it holds, not of the crate's
+  weight. The game counts a crushed crate by its metal (the barren rock weighs and is worth nothing), so
+  that purity pays -- in a sale, in a mission's count -- and that refining gives as many kilograms of
+  ingots as went in. A typical crate (30 % pure) holds 15 kg of gold whether crushed or refined; it was
+  22 kg crushed while the rock counted.
 
 ## Consequences
 
