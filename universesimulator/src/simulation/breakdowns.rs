@@ -27,19 +27,44 @@ pub const REPAIR_HOURS: i32 = 3;
 /// A machine further than this from every village is nobody's (m).
 pub const MAX_VILLAGE_DISTANCE_M: f64 = 3_000.0;
 
-/// A machine's name in a mission's text, (en, fr), by its kind; "machine" for one unknown here.
-pub fn machine_name(kind: &str) -> (&'static str, &'static str) {
-    match kind {
-        "crusher" => ("crusher", "concasseur"),
-        "refinery" => ("refinery", "raffinerie"),
-        "dispenser" => ("dispenser", "distributeur"),
-        "terminal" => ("vehicle terminal", "borne de v\u{e9}hicules"),
-        "kiosk" => ("mission kiosk", "borne de missions"),
-        "screen" => ("information screen", "\u{e9}cran d'information"),
-        "lift" => ("lift", "ascenseur"),
-        "teleporter" => ("teleporter", "t\u{e9}l\u{e9}porteur"),
-        _ => ("machine", "machine"),
-    }
+/// A machine's name in a mission's text.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MachineName {
+    pub en: &'static str,
+    /// The bare French name, for a title ("raffinerie" in the repair of the refinery of M0001).
+    pub fr: &'static str,
+    /// The French name with its article, for a sentence ("la raffinerie", "le concasseur").
+    pub fr_the: &'static str,
+    /// The French pronoun that stands for it at the end of the sentence ("le", "la").
+    pub fr_it: &'static str,
+}
+
+/// The name of a machine of [kind]; "machine" for a kind unknown here. A lift's kind says which lift it
+/// is (a mine's, a canyon's) and which of its parts broke -- the platform, or a landing, whose screen
+/// calls it: "the lift of M0001" was several machines under one name, and the player repaired the
+/// wrong one (playtest 2026-11-12).
+#[rustfmt::skip]
+pub fn machine_name(kind: &str) -> MachineName {
+    let (en, fr, fr_the, fr_it) = match kind {
+        "crusher" => ("crusher", "concasseur", "le concasseur", "le"),
+        "refinery" => ("refinery", "raffinerie", "la raffinerie", "la"),
+        "dispenser" => ("dispenser", "distributeur", "le distributeur", "le"),
+        "terminal" => ("vehicle terminal", "borne de v\u{e9}hicules", "la borne de v\u{e9}hicules", "la"),
+        "kiosk" => ("mission kiosk", "borne de missions", "la borne de missions", "la"),
+        "screen" => ("information screen", "\u{e9}cran d'information", "l'\u{e9}cran d'information", "le"),
+        "lift" => ("lift", "ascenseur", "l'ascenseur", "le"),
+        "teleporter" => ("teleporter", "t\u{e9}l\u{e9}porteur", "le t\u{e9}l\u{e9}porteur", "le"),
+        "mine_lift_platform" => ("mine lift platform", "plateforme de l'ascenseur de mine", "la plateforme de l'ascenseur de mine", "la"),
+        "mine_lift_landing_upper" => ("mine lift upper landing", "palier haut de l'ascenseur de mine", "le palier haut de l'ascenseur de mine", "le"),
+        "mine_lift_landing_lower" => ("mine lift lower landing", "palier bas de l'ascenseur de mine", "le palier bas de l'ascenseur de mine", "le"),
+        "mine_lift_landing_stop" => ("mine lift level landing", "palier interm\u{e9}diaire de l'ascenseur de mine", "le palier interm\u{e9}diaire de l'ascenseur de mine", "le"),
+        "canyon_lift_platform" => ("canyon lift platform", "plateforme de l'ascenseur de canyon", "la plateforme de l'ascenseur de canyon", "la"),
+        "canyon_lift_landing_upper" => ("canyon lift upper landing", "palier haut de l'ascenseur de canyon", "le palier haut de l'ascenseur de canyon", "le"),
+        "canyon_lift_landing_lower" => ("canyon lift lower landing", "palier bas de l'ascenseur de canyon", "le palier bas de l'ascenseur de canyon", "le"),
+        "canyon_lift_landing_stop" => ("canyon lift level landing", "palier interm\u{e9}diaire de l'ascenseur de canyon", "le palier interm\u{e9}diaire de l'ascenseur de canyon", "le"),
+        _ => ("machine", "machine", "la machine", "la"),
+    };
+    MachineName { en, fr, fr_the, fr_it }
 }
 
 /// The village among [villages] nearest to [at], no further than MAX_VILLAGE_DISTANCE_M.
@@ -135,11 +160,14 @@ async fn publish(st: &AppState, fed: &Federation, village: &Village, row: &Break
 
 /// The mission that has [row]'s machine repaired, [poi] its village's place in `inventory`.
 pub fn build_mission(fed: &Federation, village: &Village, row: &Breakdown, poi: Option<Uuid>) -> NewMission {
-    let (name, name_fr) = machine_name(&row.kind);
-    let title = format!("Solo \u{b7} Repair the {name} of {}", village.name);
-    let title_fr = format!("Solo \u{b7} R\u{e9}paration : {name_fr} de {}", village.name);
-    let objective = format!("Diagnose the {name} of {} and repair it", village.name);
-    let objective_fr = format!("Diagnostiquez le {name_fr} de {} et r\u{e9}parez-le", village.name);
+    let name = machine_name(&row.kind);
+    let title = format!("Solo \u{b7} Repair the {} of {}", name.en, village.name);
+    let title_fr = format!("Solo \u{b7} R\u{e9}paration : {} de {}", name.fr, village.name);
+    let objective = format!("Diagnose the {} of {} and repair it", name.en, village.name);
+    let objective_fr = format!(
+        "Diagnostiquez {} de {} et r\u{e9}parez-{}",
+        name.fr_the, village.name, name.fr_it
+    );
     let description = format!("{} maintenance order.", fed.name);
     NewMission {
         title_i18n: Some(json!({ "en": title, "fr": title_fr })),
@@ -191,7 +219,25 @@ mod tests {
 
     #[test]
     fn a_kind_unknown_here_is_a_machine() {
-        assert_eq!(machine_name("crusher"), ("crusher", "concasseur"));
-        assert_eq!(machine_name("espresso"), ("machine", "machine"));
+        assert_eq!(machine_name("crusher").fr, "concasseur");
+        assert_eq!(machine_name("espresso").en, "machine");
+    }
+
+    #[test]
+    fn a_lift_s_part_is_named_with_its_lift() {
+        // "The lift of M0001" was the mine's and the canyon's, and any of their screens.
+        let landing = machine_name("mine_lift_landing_upper");
+        assert_eq!(landing.en, "mine lift upper landing");
+        assert_eq!(landing.fr_the, "le palier haut de l'ascenseur de mine");
+        let platform = machine_name("canyon_lift_platform");
+        assert_eq!(platform.fr_the, "la plateforme de l'ascenseur de canyon");
+        assert_eq!(platform.fr_it, "la");
+    }
+
+    #[test]
+    fn a_french_sentence_takes_the_machine_s_article() {
+        // "Diagnostiquez le raffinerie" before: every machine was "le".
+        assert_eq!(machine_name("refinery").fr_the, "la raffinerie");
+        assert_eq!(machine_name("screen").fr_the, "l'\u{e9}cran d'information");
     }
 }
