@@ -17,11 +17,11 @@ pub fn now_unix() -> f64 {
 }
 
 /// East and north unit vectors of the ground at (lon, lat), in the body-fixed frame. East is the
-/// direction the body turns toward: DEcreasing longitude in this frame (spin.rs).
+/// direction the body turns toward: INcreasing longitude in this frame (spin.rs, dir_of).
 pub fn local_axes(lon_deg: f64, lat_deg: f64) -> (Vec3f, Vec3f) {
     let (lon, lat) = (lon_deg.to_radians(), lat_deg.to_radians());
-    let east = Vec3f { x: lon.sin(), y: 0.0, z: -lon.cos() };
-    let north = Vec3f { x: -lat.sin() * lon.cos(), y: lat.cos(), z: -lat.sin() * lon.sin() };
+    let east = Vec3f { x: -lon.sin(), y: 0.0, z: -lon.cos() };
+    let north = Vec3f { x: -lat.sin() * lon.cos(), y: lat.cos(), z: lat.sin() * lon.sin() };
     (east, north)
 }
 

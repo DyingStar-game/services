@@ -22,17 +22,17 @@ pub fn to_body_frame(basis: Mat3, dir: Vec3) -> Vec3 {
     basis.transposed().apply(dir)
 }
 
-/// Longitude and latitude (degrees) of a body-fixed unit direction: `lon = atan2(z, x)`,
+/// Longitude and latitude (degrees) of a body-fixed unit direction: `lon = atan2(-z, x)`,
 /// `lat = asin(y)`, the game's HEALPix.vec2lonlat.
 pub fn lonlat_of(dir: Vec3) -> (f64, f64) {
     let d = dir.normalized();
-    (d.z.atan2(d.x).to_degrees(), d.y.clamp(-1.0, 1.0).asin().to_degrees())
+    ((-d.z).atan2(d.x).to_degrees(), d.y.clamp(-1.0, 1.0).asin().to_degrees())
 }
 
 /// Body-fixed unit direction of a longitude/latitude (degrees): HEALPix.lonlat2vec.
 pub fn dir_of(lon_deg: f64, lat_deg: f64) -> Vec3 {
     let (lon, lat) = (lon_deg.to_radians(), lat_deg.to_radians());
-    Vec3::new(lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin())
+    Vec3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin())
 }
 
 /// Where the star stands overhead: longitude and latitude (degrees) of the sub-stellar point, from
@@ -50,10 +50,11 @@ pub fn declination_deg(tilt_rad: f64, to_star_parent: Vec3) -> f64 {
 
 /// Local solar time in hours (0–24, 12 = the star at its highest) at longitude `lon_deg`, given
 /// the sub-stellar longitude. The day is split into 24 hours whatever its real length, as
-/// `Planet.get_local_solar_time` does: with a positive spin about +Y, longitude `atan2(z, x)`
-/// DEcreases as the body turns, so a point east of noon (smaller longitude) is in the afternoon.
+/// `Planet.get_local_solar_time` does: with a positive spin about +Y, longitude `atan2(-z, x)`
+/// INcreases as the body turns (the game's convention since its QGIS re-export: longitude runs
+/// from +X toward -Z), so a point east of noon (larger longitude) is in the afternoon.
 pub fn local_solar_hours(lon_deg: f64, substellar_lon_deg: f64) -> f64 {
-    let angle = substellar_lon_deg - lon_deg;
+    let angle = lon_deg - substellar_lon_deg;
     fposmod(angle / 360.0 * 24.0 + 12.0, 24.0)
 }
 
@@ -78,11 +79,11 @@ mod tests {
     #[test]
     fn a_quarter_turn_later_the_substellar_longitude_moved_by_90_degrees() {
         // Spin is a positive turn about +Y: +X goes toward -Z, so the star, fixed in the parent
-        // frame, drifts toward +Z in the body frame — longitude atan2(z, x) INCREASES.
+        // frame, drifts toward +Z in the body frame — longitude atan2(-z, x) DECREASES.
         let to_star = Vec3::new(1.0, 0.0, 0.0);
         let (lon0, _) = substellar_point(0.0, 100.0, 0.0, to_star);
         let (lon1, _) = substellar_point(0.0, 100.0, 25.0, to_star);
-        assert!(((lon1 - lon0).rem_euclid(360.0) - 90.0).abs() < 1e-6, "{lon0} -> {lon1}");
+        assert!(((lon1 - lon0).rem_euclid(360.0) - 270.0).abs() < 1e-6, "{lon0} -> {lon1}");
     }
 
     #[test]

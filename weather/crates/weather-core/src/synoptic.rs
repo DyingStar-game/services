@@ -254,9 +254,10 @@ pub fn offset_on_sphere(r: f64, from_lon_deg: f64, from_lat_deg: f64, to_lon_deg
     let dlon = lon2 - lon1;
     let a = ((lat2 - lat1) / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     let d = 2.0 * r * a.sqrt().min(1.0).asin();
-    // Longitude runs from +X toward +Z; east is the direction the body turns toward, which is
-    // DEcreasing longitude in this frame (see spin.rs). So the east component is −Δlon.
-    let east = -(dlon.sin() * lat2.cos());
+    // Longitude runs from +X toward -Z (the game's QGIS convention); east is the direction the
+    // body turns toward, which is INcreasing longitude in this frame (see spin.rs). So the east
+    // component is +Δlon.
+    let east = dlon.sin() * lat2.cos();
     let north = lat2.cos() * lat1.sin() * dlon.cos() * -1.0 + lat2.sin() * lat1.cos();
     let n = (east * east + north * north).sqrt();
     if n < 1e-12 {
@@ -369,8 +370,9 @@ mod tests {
         for s in candidates {
             if s.kind == Kind::Depression && s.centre_lat_deg > 35.0 && s.centre_lat_deg < 58.0 && s.intensity > 0.3 {
                 found = true;
-                // East of the centre the wind blows north (counter-clockwise seen from above).
-                let east_point = wrap_lon(s.centre_lon_deg - (s.sigma_m / (c.radius_m * s.centre_lat_deg.to_radians().cos())).to_degrees());
+                // East of the centre (larger longitude) the wind blows north (counter-clockwise seen
+                // from above).
+                let east_point = wrap_lon(s.centre_lon_deg + (s.sigma_m / (c.radius_m * s.centre_lat_deg.to_radians().cos())).to_degrees());
                 let k = contribution(&c, &s, east_point, s.centre_lat_deg);
                 assert!(k.wind_north_m_s > 0.0, "{k:?} for {s:?}");
                 assert!(s.drift_east_m_s > 0.0, "westerlies carry systems east: {}", s.drift_east_m_s);

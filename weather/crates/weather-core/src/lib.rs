@@ -7,7 +7,7 @@
 //!
 //! Conventions shared with the game: the reference plane of an orbit is XZ with +Y as its north,
 //! orbits run counter-clockwise seen from +Y (the sense bodies spin in), a body-fixed direction has
-//! longitude `atan2(z, x)` and latitude `asin(y)` (HEALPix.vec2lonlat), and an axial tilt tips the
+//! longitude `atan2(-z, x)` and latitude `asin(y)` (HEALPix.vec2lonlat, the QGIS convention), and an axial tilt tips the
 //! spin axis about +Z (`Planet.spin_basis_at`).
 
 pub mod bodies;

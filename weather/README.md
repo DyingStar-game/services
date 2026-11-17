@@ -15,7 +15,7 @@ plugin as `weather_system` objects, plus an HTTP API for maps. The model is a **
 - `data/climate/<system>.json` — the knobs the celestial data does not carry (seed, dust grains, lift
   bias, thermal inertia, humidity, wind and dust caps), by body name.
 
-Science, conventions and simplifications: `H:\DyingStars\.claude-docs\rapports\2026-10-06-meteo\`
+Science, conventions and simplifications: the weather R&D report of 2026-10-06 (not in this repository yet)
 (to be published in technical-docs with the PR).
 
 ## Run
