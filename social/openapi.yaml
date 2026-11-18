@@ -1375,7 +1375,10 @@ paths:
               required: [title, description]
               properties:
                 title: { type: string, minLength: 3, maxLength: 80 }
-                description: { type: string, minLength: 1, maxLength: 1500 }
+                description: { type: string, minLength: 1, maxLength: 1000 }
+                steps: { type: string, maxLength: 1500, description: How to get there }
+                actual: { type: string, maxLength: 700, description: What happened }
+                expected: { type: string, maxLength: 700, description: What should have happened }
                 context:
                   type: object
                   description: What the client knows (version, server, place...), shown as-is.

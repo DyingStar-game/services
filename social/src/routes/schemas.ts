@@ -377,10 +377,17 @@ export const createReportBody = z.object({
   message: z.string().trim().max(1000).optional(),
 });
 
-/** An in-game bug report. The capture is base64 (about 4/3 of its size); the log is a tail. */
+/**
+ * An in-game bug report, on the QA template: what is wrong, how to get there, what happened and
+ * what should have. The four texts together fit one Discord embed (4096 characters). The capture
+ * is base64 (about 4/3 of its size); the log is a tail.
+ */
 export const createBugReportBody = z.object({
   title: z.string().trim().min(3).max(80),
-  description: z.string().trim().min(1).max(1500),
+  description: z.string().trim().min(1).max(1000),
+  steps: z.string().trim().max(1500).optional(),
+  actual: z.string().trim().max(700).optional(),
+  expected: z.string().trim().max(700).optional(),
   context: z
     .record(z.string().trim().min(1).max(40), z.union([z.string().max(200), z.number(), z.boolean()]))
     .optional(),

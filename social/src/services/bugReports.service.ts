@@ -10,6 +10,7 @@
  * feature off (503), which is the default everywhere.
  */
 import { env } from '../config/env.js';
+import { t } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 import type { AuthenticatedPlayer } from '../middleware/auth.js';
 
@@ -25,6 +26,10 @@ const SCREENSHOT_MAX_BYTES = 4 * 1024 * 1024;
 export interface BugReportInput {
   title: string;
   description: string;
+  /** How to get there, what happened, what should have: the rest of the QA template. */
+  steps?: string;
+  actual?: string;
+  expected?: string;
   /** What the client knows of where and on what it happened; shown as-is, never trusted. */
   context?: Record<string, string | number | boolean>;
   /** The capture, base64 (JPEG or PNG). */
@@ -85,6 +90,23 @@ export function reportTitle(input: BugReportInput): string {
   return clip(`${tags} ${input.title}`, THREAD_NAME_MAX);
 }
 
+/**
+ * The report's text on the QA template: one titled section per part the player filled in, in the
+ * language they wrote it in (the request's).
+ */
+export function reportBody(input: BugReportInput): string {
+  const sections: [string, string | undefined][] = [
+    [t('bug_report.description'), input.description],
+    [t('bug_report.steps'), input.steps],
+    [t('bug_report.actual'), input.actual],
+    [t('bug_report.expected'), input.expected],
+  ];
+  return sections
+    .filter(([, text]) => text !== undefined && text !== '')
+    .map(([label, text]) => `**${label}**\n${text}`)
+    .join('\n\n');
+}
+
 /** The capture as an attachment, or null when none was sent. Refuses anything but JPEG / PNG. */
 function screenshotFile(base64: string | undefined): { blob: Blob; name: string } | null {
   if (!base64) return null;
@@ -114,7 +136,7 @@ export function reportPayload(player: AuthenticatedPlayer, input: BugReportInput
     embeds: [
       {
         title: clip(title, EMBED_TITLE_MAX),
-        description: input.description,
+        description: reportBody(input),
         fields,
         footer: { text: `${player.username} · ${player.id}` },
         timestamp: new Date().toISOString(),

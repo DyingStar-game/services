@@ -105,10 +105,23 @@ describe('POST /api/bug-reports', () => {
     expect(relayed[0].url).toBe(`${WEBHOOK}?wait=true`);
     const payload = payloadOf(relayed[0]);
     expect(payload.embeds[0].title).toBe('[BUG][PREPROD][0.0.1-dev] Stuck in the truck');
-    expect(payload.embeds[0].description).toBe(REPORT.description);
+    expect(payload.embeds[0].description).toBe(`**Description**\n${REPORT.description}`);
     expect(payload.embeds[0].fields).toContainEqual({ name: 'server', value: 'ut-22878', inline: true });
     expect(payload.embeds[0].image).toEqual({ url: 'attachment://screenshot.jpg' });
     expect(payload.thread_name).toBeUndefined();
+  });
+
+  it('lays the report out on the QA template, in the language of the player', async () => {
+    const template = { ...REPORT, steps: '1. Sit\n2. Teleport', actual: 'Frozen', expected: 'Still at the wheel' };
+    await send(template);
+    expect(payloadOf(relayed[0]).embeds[0].description).toBe(
+      `**Description**\n${REPORT.description}\n\n**Steps**\n1. Sit\n2. Teleport\n\n**Actual result**\nFrozen\n\n**Expected result**\nStill at the wheel`,
+    );
+    resetBugReportLimits();
+    const { runWithLang } = await import('../src/i18n/lang.js');
+    const { reportBody } = await import('../src/services/bugReports.service.js');
+    expect(runWithLang('fr', () => reportBody(template))).toContain('**Étapes**\n1. Sit');
+    expect(runWithLang('fr', () => reportBody(template))).toContain('**Résultat attendu**\nStill at the wheel');
   });
 
   it('names the player of the token and lets no mention through', async () => {

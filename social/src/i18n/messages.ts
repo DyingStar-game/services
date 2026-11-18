@@ -129,6 +129,10 @@ export const en = {
   "sanction.banned": "Account banned: {reason}",
   "sanction.suspended_until": "Account suspended until {until}: {reason}",
   "sanction.suspended": "Account suspended: {reason}",
+  "bug_report.description": "Description",
+  "bug_report.steps": "Steps",
+  "bug_report.actual": "Actual result",
+  "bug_report.expected": "Expected result",
 } as const;
 
 /** Keys of the construction-time catalog (typed from the English source). */
@@ -248,6 +252,10 @@ export const fr: Record<MessageKey, string> = {
   "sanction.banned": "Compte banni : {reason}",
   "sanction.suspended_until": "Compte suspendu jusqu'à {until} : {reason}",
   "sanction.suspended": "Compte suspendu : {reason}",
+  "bug_report.description": "Description",
+  "bug_report.steps": "Étapes",
+  "bug_report.actual": "Résultat obtenu",
+  "bug_report.expected": "Résultat attendu",
 };
 
 /** French overrides keyed by error code (English remains the thrown message). */
