@@ -377,6 +377,17 @@ export const createReportBody = z.object({
   message: z.string().trim().max(1000).optional(),
 });
 
+/** An in-game bug report. The capture is base64 (about 4/3 of its size); the log is a tail. */
+export const createBugReportBody = z.object({
+  title: z.string().trim().min(3).max(80),
+  description: z.string().trim().min(1).max(1500),
+  context: z
+    .record(z.string().trim().min(1).max(40), z.union([z.string().max(200), z.number(), z.boolean()]))
+    .optional(),
+  screenshot: z.string().max(6_000_000).optional(),
+  log: z.string().max(300_000).optional(),
+});
+
 export const reportIdParams = z.object({ id: z.coerce.number().int().positive() });
 
 export const reportsQuery = limitQuery.extend({

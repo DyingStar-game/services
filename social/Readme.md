@@ -44,6 +44,10 @@ Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en 
 | `PRESENCE_TTL_SECONDS` | TTL de présence en cache (défaut `90`) : sans heartbeat pendant ce délai, un joueur repasse `offline` |
 | `PLAYTIME_FLUSH_INTERVAL_MINUTES` | Intervalle de flush du temps de jeu accumulé vers PostgreSQL (défaut `5`, `0` désactive le scheduler) |
 | `PRESENCE_BATCH_MAX` | Joueurs max par heartbeat batch (défaut `5000`) |
+| `DISCORD_BUG_WEBHOOK_URL` | Webhook Discord des rapports de bug en jeu — **secret** (qui l'a peut poster), un par environnement ; **vide = fonction éteinte** (`503 BUG_REPORT_DISABLED`) |
+| `DISCORD_BUG_WEBHOOK_FORUM`, `DISCORD_BUG_WEBHOOK_TAG_IDS` | `true` si le salon du webhook est un forum (chaque rapport ouvre un fil nommé par son titre) ; étiquettes de forum à poser (CSV d'identifiants) |
+| `BUG_REPORT_ENVIRONMENT` | Étiquette de l'environnement dans le titre (`[BUG][PREPROD]…`) |
+| `BUG_REPORT_MIN_INTERVAL_SECONDS`, `BUG_REPORT_DAILY_MAX` | Rythme par joueur (défauts `60` s et `20` par 24 h, en mémoire) |
 
 ## Cache Valkey (présence + temps de jeu)
 
@@ -126,6 +130,8 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/me/sanctions` | Mes sanctions actives (accessible même suspendu) |
 | POST | `/api/reports` `{targetType: player\|corporation, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
 | GET | `/api/reports?limit=&offset=` | Mes signalements |
+| GET | `/api/bug-reports/status` | `{enabled}` : cet environnement relaie-t-il les rapports de bug ? |
+| POST | `/api/bug-reports` `{title, description, context?, screenshot?, log?}` | Rapport de bug en jeu, relayé au salon QA de Discord (capture JPEG/PNG en base64, fin du journal du client ; corps jusqu'à 8 Mo). Rien n'est stocké ; l'auteur est celui du jeton |
 
 Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 

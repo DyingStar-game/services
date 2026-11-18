@@ -8,6 +8,7 @@ import { playerAuth } from '../middleware/auth.js';
 import { enforceSanctions } from '../middleware/sanctions.js';
 import { adminRoutes } from './admin.routes.js';
 import { blocksRoutes } from './blocks.routes.js';
+import { bugReportsRoutes } from './bugReports.routes.js';
 import { corporationsRoutes } from './corporations.routes.js';
 import { friendsRoutes } from './friends.routes.js';
 import { groupsRoutes } from './groups.routes.js';
@@ -32,6 +33,7 @@ apiRouter.use('/corporations', playerAuth, enforceSanctions, corporationsRoutes)
 apiRouter.use('/groups', playerAuth, enforceSanctions, groupsRoutes);
 apiRouter.use('/politics', playerAuth, enforceSanctions, politicsRoutes);
 apiRouter.use('/reports', playerAuth, enforceSanctions, reportsRoutes);
+apiRouter.use('/bug-reports', playerAuth, enforceSanctions, bugReportsRoutes);
 apiRouter.use('/admin', playerAuth, adminRoutes);
 
 /** Skips the sanction check for the two self-service moderation endpoints. */
