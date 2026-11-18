@@ -37,12 +37,12 @@
     "P2_a_AU": 0.148665,
     "P2_e": 0.04,
     "P2_i_deg": 0.141,
-    "P3_Albedo": 0.32,
+    "P3_Albedo": 0.66,
     "P3_Atm_Ar_pct": 1.1,
     "P3_Atm_CH4_pct": 0.2,
-    "P3_Atm_CO2_pct": 2.0,
-    "P3_Atm_N2_pct": 78.1,
-    "P3_Atm_O2_pct": 18.6,
+    "P3_Atm_CO2_pct": 0.5,
+    "P3_Atm_N2_pct": 78.7,
+    "P3_Atm_O2_pct": 19.5,
     "P3_Atm_pressure_bar": 1.02,
     "P3_Densite": 5.20,
     "P3_Masse_Me": 0.788,
@@ -50,7 +50,7 @@
     "P3_Period_days": 171.05,
     "P3_Rayon_km": 6356,
     "P3_T_Day_K": 290,
-    "P3_T_Eq_K": 258,
+    "P3_T_Eq_K": 217,
     "P3_T_Night_K": 275,
     "P3_T_Surface_K": 283,
     "P3_Type": "Terrestrial",
@@ -521,7 +521,7 @@
       {
       	"name": "Sandbox",
         "M0_deg": 20.0,
-        "albedo": 0.32,
+        "albedo": 0.66,
         "apoapsis_AU": 0.5665,
         "arg_peri_deg": 45.0,
         "ascending_node_deg": 110.0,
@@ -529,9 +529,9 @@
           "gases_pct": {
             "Ar": 1.1,
             "CH4": 0.2,
-            "CO2": 2.0,
-            "N2": 78.1,
-            "O2": 18.6
+            "CO2": 0.5,
+            "N2": 78.7,
+            "O2": 19.5
           },
           "pressure_bar": 1.02,
           "thickness_km": 110.0
@@ -893,7 +893,7 @@
           "T_day_K": 290,
           "T_night_K": 275,
           "T_surface_K": 283,
-          "Teq_K": 258.5
+          "Teq_K": 217.4
         },
         "tidal_locked": false,
         "tilt_deg": 15,
