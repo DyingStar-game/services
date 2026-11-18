@@ -20,11 +20,26 @@ const EMBED_TITLE_MAX = 256;
 const EMBED_FIELD_VALUE_MAX = 1024;
 /** Context entries shown as embed fields (Discord allows 25). */
 const CONTEXT_FIELDS_MAX = 20;
+/**
+ * How bad a bug is, worst first, with the round mark that opens its title and the colour of its
+ * embed: red, orange, yellow, purple. The mark is what QA reads down the list of posts.
+ */
+export const BUG_SEVERITIES = ['blocker', 'major', 'minor', 'cosmetic'] as const;
+export type BugSeverity = (typeof BUG_SEVERITIES)[number];
+const SEVERITY_MARKS: Record<BugSeverity, string> = { blocker: '🔴', major: '🟠', minor: '🟡', cosmetic: '🟣' };
+const SEVERITY_COLOURS: Record<BugSeverity, number> = {
+  blocker: 0xd32f2f,
+  major: 0xf57c00,
+  minor: 0xfbc02d,
+  cosmetic: 0x9c27b0,
+};
 /** Largest capture accepted once decoded. */
 const SCREENSHOT_MAX_BYTES = 4 * 1024 * 1024;
 
 export interface BugReportInput {
   title: string;
+  /** How bad it is, as the player judged it. */
+  severity?: BugSeverity;
   description: string;
   /** How to get there, what happened, what should have: the rest of the QA template. */
   steps?: string;
@@ -79,15 +94,24 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
-/** `[BUG][PREPROD][0.0.1-dev] The title`: the label of the environment, then the client's build. */
+/**
+ * `🔴 [BUG][PREPROD][BLOCKER][0.0.1-dev] The title`: how bad it is as a round mark, the label of
+ * the environment, the severity again in a word, then the client's build. In a forum this is the
+ * post's name, 100 characters at most: the build, which is also in the fields below, leaves it
+ * before the player's words are cut.
+ */
 export function reportTitle(input: BugReportInput): string {
   const environment = env.bugReport.environment.toUpperCase();
   const version = input.context?.version;
-  const tags = ['BUG', environment, version === undefined ? '' : String(version)]
-    .filter((tag) => tag !== '')
-    .map((tag) => `[${tag}]`)
-    .join('');
-  return clip(`${tags} ${input.title}`, THREAD_NAME_MAX);
+  const mark = input.severity ? `${SEVERITY_MARKS[input.severity]} ` : '';
+  const titled = (tags: string[]): string =>
+    `${mark}${tags
+      .filter((tag) => tag !== '')
+      .map((tag) => `[${tag}]`)
+      .join('')} ${input.title}`;
+  const tags = ['BUG', environment, (input.severity ?? '').toUpperCase()];
+  const full = titled([...tags, version === undefined ? '' : String(version)]);
+  return clip(full.length <= THREAD_NAME_MAX ? full : titled(tags), THREAD_NAME_MAX);
 }
 
 /**
@@ -96,6 +120,7 @@ export function reportTitle(input: BugReportInput): string {
  */
 export function reportBody(input: BugReportInput): string {
   const sections: [string, string | undefined][] = [
+    [t('bug_report.severity'), input.severity === undefined ? undefined : t(`bug_report.severity.${input.severity}`)],
     [t('bug_report.description'), input.description],
     [t('bug_report.steps'), input.steps],
     [t('bug_report.actual'), input.actual],
@@ -138,6 +163,7 @@ export function reportPayload(player: AuthenticatedPlayer, input: BugReportInput
         title: clip(title, EMBED_TITLE_MAX),
         description: reportBody(input),
         fields,
+        ...(input.severity ? { color: SEVERITY_COLOURS[input.severity] } : {}),
         footer: { text: `${player.username} · ${player.id}` },
         timestamp: new Date().toISOString(),
         ...(image ? { image: { url: `attachment://${image}` } } : {}),

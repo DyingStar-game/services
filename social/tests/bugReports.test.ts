@@ -124,6 +124,33 @@ describe('POST /api/bug-reports', () => {
     expect(runWithLang('fr', () => reportBody(template))).toContain('**Résultat attendu**\nStill at the wheel');
   });
 
+  it('says how bad the bug is: a mark and a word in the title, a line of the text, its colour', async () => {
+    const blocker = { ...REPORT, severity: 'blocker' as const };
+    expect((await send(blocker)).status).toBe(201);
+    const embed = payloadOf(relayed[0]).embeds[0];
+    expect(embed.title).toBe('🔴 [BUG][PREPROD][BLOCKER][0.0.1-dev] Stuck in the truck');
+    expect(embed.description.startsWith('**Severity**\nBlocker\n\n**Description**')).toBe(true);
+    expect(embed.color).toBe(0xd32f2f);
+    const { runWithLang } = await import('../src/i18n/lang.js');
+    const { reportBody } = await import('../src/services/bugReports.service.js');
+    expect(runWithLang('fr', () => reportBody(blocker)).startsWith('**Sévérité**\nBloquant')).toBe(true);
+    resetBugReportLimits();
+    expect((await send({ ...REPORT, severity: 'catastrophic' })).status).toBe(400);
+  });
+
+  it('drops the build from a title too long before it cuts the words of the player', async () => {
+    const title = 'x'.repeat(60);
+    await send({ ...REPORT, severity: 'cosmetic', title, context: { version: '0.0.1-dev · 20261117-1250-551351' } });
+    expect(payloadOf(relayed[0]).embeds[0].title).toBe(`🟣 [BUG][PREPROD][COSMETIC] ${title}`);
+  });
+
+  it('leaves a report with no severity as it was: no mark, no colour', async () => {
+    await send(REPORT);
+    const embed = payloadOf(relayed[0]).embeds[0];
+    expect(embed.title).toBe('[BUG][PREPROD][0.0.1-dev] Stuck in the truck');
+    expect(embed.color).toBeUndefined();
+  });
+
   it('names the player of the token and lets no mention through', async () => {
     await send({ ...REPORT, title: '@everyone look', context: { ...REPORT.context, username: 'someone else' } });
     const payload = payloadOf(relayed[0]);

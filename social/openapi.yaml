@@ -1375,13 +1375,14 @@ paths:
               required: [title, description]
               properties:
                 title: { type: string, minLength: 3, maxLength: 80 }
+                severity: { type: string, enum: [blocker, major, minor, cosmetic], description: How bad it is }
                 description: { type: string, minLength: 1, maxLength: 1000 }
                 steps: { type: string, maxLength: 1500, description: How to get there }
                 actual: { type: string, maxLength: 700, description: What happened }
                 expected: { type: string, maxLength: 700, description: What should have happened }
                 context:
                   type: object
-                  description: What the client knows (version, server, place...), shown as-is.
+                  description: What the client knows (build, machine, place...), shown as-is; 20 entries kept.
                   additionalProperties: true
                 screenshot: { type: string, description: 'JPEG or PNG, base64, under 4 MB decoded' }
                 log: { type: string, maxLength: 300000, description: Tail of the client log }

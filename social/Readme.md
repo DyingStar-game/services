@@ -131,7 +131,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/reports` `{targetType: player\|corporation, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
 | GET | `/api/reports?limit=&offset=` | Mes signalements |
 | GET | `/api/bug-reports/status` | `{enabled}` : cet environnement relaie-t-il les rapports de bug ? |
-| POST | `/api/bug-reports` `{title, description, steps?, actual?, expected?, context?, screenshot?, log?}` | Rapport de bug en jeu sur le gabarit QA (description, étapes, résultat obtenu, résultat attendu), relayé au salon QA de Discord (capture JPEG/PNG en base64, fin du journal du client ; corps jusqu'à 8 Mo). Les sections sont titrées dans la langue de la requête. Rien n'est stocké ; l'auteur est celui du jeton |
+| POST | `/api/bug-reports` `{title, severity?, description, steps?, actual?, expected?, context?, screenshot?, log?}` | Rapport de bug en jeu sur le gabarit QA (sévérité `blocker` / `major` / `minor` / `cosmetic` : pastille de couleur et mot dans le titre ; description, étapes, résultat obtenu, résultat attendu), relayé au salon QA de Discord (capture JPEG/PNG en base64, fin du journal du client ; corps jusqu'à 8 Mo). Les sections sont titrées dans la langue de la requête. Rien n'est stocké ; l'auteur est celui du jeton |
 
 Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 
