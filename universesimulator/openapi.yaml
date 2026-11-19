@@ -479,7 +479,8 @@ paths:
         mission of theirs counted (ADR 0017). The sale is recorded with its price, then paid. Idempotent on
         `idempotencyKey`: a replay returns 200 with the same sale, and pays what was left to pay if an
         earlier attempt failed half-way; the same key with another content returns 409
-        `IDEMPOTENCY_CONFLICT`."
+        `IDEMPOTENCY_CONFLICT`. The warehouse buys what it had room for before the drop (its capacity for
+        the resource): `bought`, the rest is `refused` and not paid."
       requestBody:
         required: true
         content:
@@ -1398,6 +1399,8 @@ components:
       type: object
       required:
       - quantity
+      - bought
+      - refused
       - unitPrice
       - amount
       - currency
@@ -1406,6 +1409,13 @@ components:
       properties:
         quantity:
           type: integer
+          description: What the player shelved.
+        bought:
+          type: integer
+          description: What of it the warehouse had room for, and paid.
+        refused:
+          type: integer
+          description: The rest, left on the shelf and not paid (`quantity - bought`).
         unitPrice:
           type: number
         amount:

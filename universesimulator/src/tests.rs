@@ -779,6 +779,37 @@ async fn an_off_mission_sale_is_paid_once_and_told(pool: PgPool) {
     assert_eq!(fake.with(|s| s.notifications[0].1["type"].clone()), "warehouse.sale");
 }
 
+/// A warehouse buys what it had room for before the drop and no more: the rest stays on its shelf, not
+/// paid, and the player is told how much.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_full_warehouse_buys_only_what_it_had_room_for(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    let player = Uuid::new_v4();
+    let water = catalog::find_resource(&st.pool, Some("water"), None).await.unwrap().unwrap();
+    world::upsert_capacity(&st.pool, &world::WarehouseCapacityInput { warehouse_id: id(D1), resource_id: water.id, capacity: Some(1_000) }).await.unwrap();
+    // 990 on the shelf, then 40 dropped: 10 fitted.
+    fake.set_quantity(Holder::warehouse(id(D1)), "water", 1_030);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-full-1", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED, "{res}");
+    assert_eq!((res["bought"].as_i64(), res["refused"].as_i64()), (Some(10), Some(30)), "{res}");
+    let amount = res["amount"].as_i64().unwrap();
+    assert_eq!(amount, crate::routes::sales::amount_for(10, res["unitPrice"].as_f64().unwrap()));
+    assert_eq!(fake.with(|s| s.payments.clone()), vec![(player, amount)]);
+    let notice = fake.with(|s| s.notifications[0].1.clone());
+    assert_eq!((notice["data"]["quantity"].as_i64(), notice["data"]["refused"].as_i64()), (Some(10), Some(30)));
+    // Full before the drop: nothing is bought, nothing is paid, and the player is told that too.
+    fake.set_quantity(Holder::warehouse(id(D1)), "water", 1_070);
+    let (status, res) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-full-2", player, 40))).await;
+    assert_eq!(status, StatusCode::CREATED, "{res}");
+    assert_eq!((res["bought"].as_i64(), res["amount"].as_i64(), res["paid"].as_bool()), (Some(0), Some(0), Some(true)), "{res}");
+    assert_eq!(fake.with(|s| s.payments.len()), 1, "nothing more paid");
+    assert_eq!(fake.with(|s| s.notifications.len()), 2);
+    // A replay answers what was decided, whatever the shelf holds now.
+    fake.set_quantity(Holder::warehouse(id(D1)), "water", 0);
+    let (_, again) = call(&st, "POST", "/api/internal/warehouse-sales", &[SERVICE], Some(sale_body("sale-full-1", player, 40))).await;
+    assert_eq!(again["bought"].as_i64(), Some(10));
+}
+
 /// The credit fails after the treasury was debited (a role missing, a frozen account): nothing is lost,
 /// the same key pays what is left to pay, at the price recorded the first time.
 #[sqlx::test(migrations = "./migrations")]

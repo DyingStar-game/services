@@ -66,7 +66,10 @@ pub struct Sale {
     pub player_id: Uuid,
     pub warehouse_id: Uuid,
     pub resource_id: Uuid,
+    /// What the player shelved.
     pub quantity: i64,
+    /// What of it was bought: what the warehouse had room for (ADR 0017, amended).
+    pub bought: i64,
     pub unit_price: f64,
     pub amount: i64,
     pub currency: String,
@@ -83,6 +86,7 @@ pub struct NewSale<'a> {
     pub warehouse: Uuid,
     pub resource: Uuid,
     pub quantity: i64,
+    pub bought: i64,
     pub unit_price: f64,
     pub amount: i64,
     pub currency: &'a str,
@@ -100,8 +104,8 @@ pub async fn mark_sale_paid(pool: &PgPool, key: &str) -> Result<bool> {
 /// Records [s], not paid yet; None when a sale with its key is already there.
 pub async fn insert_sale(pool: &PgPool, s: &NewSale<'_>) -> Result<Option<Sale>> {
     Ok(sqlx::query_as(
-        "INSERT INTO warehouse_sales (idempotency_key, player_id, warehouse_id, resource_id, quantity, unit_price, amount, currency)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (idempotency_key) DO NOTHING RETURNING *",
+        "INSERT INTO warehouse_sales (idempotency_key, player_id, warehouse_id, resource_id, quantity, unit_price, amount, currency, bought)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (idempotency_key) DO NOTHING RETURNING *",
     )
     .bind(s.key)
     .bind(s.player)
@@ -111,6 +115,7 @@ pub async fn insert_sale(pool: &PgPool, s: &NewSale<'_>) -> Result<Option<Sale>>
     .bind(s.unit_price)
     .bind(s.amount)
     .bind(s.currency)
+    .bind(s.bought)
     .fetch_optional(pool)
     .await?)
 }
