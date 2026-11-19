@@ -215,7 +215,8 @@ pub async fn warehouse(State(st): State<AppState>, Path(id): Path<Uuid>) -> Resu
         let level = stocks::refresh_one(&st, id, r.id, &r.inventory_good_type).await?;
         let capacity = capacities.iter().find(|c| c.resource_id == r.id).and_then(|c| c.capacity);
         if level.quantity != 0 || capacity.is_some() {
-            rows.push(json!({ "resourceId": r.id, "code": r.code, "quantity": level.quantity, "held": level.held, "available": level.available(), "capacity": capacity }));
+            // `goodType`: the name the game knows the good by, to tell a player what is bought no more.
+            rows.push(json!({ "resourceId": r.id, "code": r.code, "goodType": r.inventory_good_type, "quantity": level.quantity, "held": level.held, "available": level.available(), "capacity": capacity }));
         }
     }
     let village = world::get_village(&st.pool, w.village_id).await?;
