@@ -1339,6 +1339,69 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /api/bug-reports/status:
+    get:
+      tags: [reports]
+      operationId: bugReportsStatus
+      summary: Whether this environment relays in-game bug reports
+      responses:
+        '200':
+          description: Relay status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/bug-reports:
+    post:
+      tags: [reports]
+      operationId: createBugReport
+      summary: Send an in-game bug report
+      description: >-
+        Relayed to the Discord webhook of the environment (`DISCORD_BUG_WEBHOOK_URL`); nothing is stored.
+        The author is the player of the token. Body up to 8 MB. Paced per player
+        (`BUG_REPORT_MIN_INTERVAL_SECONDS`, `BUG_REPORT_DAILY_MAX`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description]
+              properties:
+                title: { type: string, minLength: 3, maxLength: 80 }
+                severity: { type: string, enum: [blocker, major, minor, cosmetic], description: How bad it is }
+                description: { type: string, minLength: 1, maxLength: 1000 }
+                steps: { type: string, maxLength: 1500, description: How to get there }
+                actual: { type: string, maxLength: 700, description: What happened }
+                expected: { type: string, maxLength: 700, description: What should have happened }
+                context:
+                  type: object
+                  description: What the client knows (build, machine, place...), shown as-is; 20 entries kept.
+                  additionalProperties: true
+                screenshot: { type: string, description: 'JPEG or PNG, base64, under 4 MB decoded' }
+                log: { type: string, maxLength: 300000, description: Tail of the client log }
+      responses:
+        '201':
+          description: Report relayed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  delivered: { type: boolean }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '429': { description: 'Too many reports (`BUG_REPORT_RATE_LIMITED`)' }
+        '502': { description: 'Discord refused the report (`BUG_REPORT_UPSTREAM`)' }
+        '503': { description: 'No webhook on this environment (`BUG_REPORT_DISABLED`)' }
+
   /api/reports:
     post:
       tags: [reports]

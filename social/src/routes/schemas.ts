@@ -18,6 +18,7 @@ import {
   SANCTION_TYPES,
 } from '../db/schema/index.js';
 import { pageQuery } from '../lib/pagination.js';
+import { BUG_SEVERITIES } from '../services/bugReports.service.js';
 import { ACTION_MAX_LENGTH, ACTION_RE } from '../services/permissionCatalog.js';
 
 export const uuidSchema = z.string().uuid();
@@ -375,6 +376,25 @@ export const createReportBody = z.object({
   targetId: uuidSchema,
   reason: z.enum(REPORT_REASONS),
   message: z.string().trim().max(1000).optional(),
+});
+
+/**
+ * An in-game bug report, on the QA template: how bad it is, what is wrong, how to get there, what
+ * happened and what should have. The four texts together fit one Discord embed (4096 characters). The capture
+ * is base64 (about 4/3 of its size); the log is a tail.
+ */
+export const createBugReportBody = z.object({
+  title: z.string().trim().min(3).max(80),
+  severity: z.enum(BUG_SEVERITIES).optional(),
+  description: z.string().trim().min(1).max(1000),
+  steps: z.string().trim().max(1500).optional(),
+  actual: z.string().trim().max(700).optional(),
+  expected: z.string().trim().max(700).optional(),
+  context: z
+    .record(z.string().trim().min(1).max(40), z.union([z.string().max(200), z.number(), z.boolean()]))
+    .optional(),
+  screenshot: z.string().max(6_000_000).optional(),
+  log: z.string().max(300_000).optional(),
 });
 
 export const reportIdParams = z.object({ id: z.coerce.number().int().positive() });
