@@ -44,8 +44,17 @@ role, a frozen account) lost the money for good, every replay stopping on the de
 - A crate taken off a warehouse's shelf (a transport's load, `carrier_id`) or kept for a mission is never
   sold: putting it back is no sale.
 - The amount is rounded to the credit: a sale worth less than half a credit pays nothing and is recorded.
-- The sale is not tied to a delivery nor to the warehouse's capacity: the simulator pays the quantity the
-  game server states. A warehouse that is full still buys.
+- The sale is not tied to a delivery: the simulator pays the quantity the game server states, up to the
+  room the warehouse had.
+  Amended 2026-11-19 (WarpZone, playtest 2026-11-18; ddurieux to confirm): it was "nor to the warehouse's
+  capacity ... A warehouse that is full still buys". With no limit, the only brake was the price, which
+  stops falling at a quarter of the base: in preprod M0001 held 8 367 kg of crushed ore for a capacity of
+  5 000 and a target of 4 000, and still bought. A warehouse now buys what fitted under its capacity for
+  the resource before the drop (`bought`); the rest (`refused`) stays on its shelf, not paid, and the
+  notice says how much. The stock is read from inventory at the sale, not from the last tick. A resource
+  without a capacity is bought whole.
+  Not done: the goods are shelved before the sale is asked, so a player learns it from the notice of the
+  first crate refused. Saying it before (the town hall's board, the depot's screen) is still to do.
 - A sale recorded and never replayed stays unpaid: the game server retries, and the table shows what is
   owed (`paid_at IS NULL`).
 - The economie wallet records the credit as a `deposit` whose reference names the sale
