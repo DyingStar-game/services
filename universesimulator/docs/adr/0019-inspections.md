@@ -23,13 +23,18 @@ corporation's security has a place looked at, 5 to 40 km from a village.
   (`PUT /api/internal/inspection-sites/{id}/ground`, role `usim:deliver`), once per site (`grounded_at`,
   migration 0012). Only then does the site get its POI in `inventory`, 500 m around that point, and its
   missions. A site that had a POI is moved with it; a mission open on a site not laid is cancelled.
-- **One mission a village.** Each tick, a village without an open inspection gets one on its site
-  inspected the longest ago. A mission that ends frees its site; cancelled or expired, the site keeps its
-  turn.
+- **A few missions a village.** Each tick, a village with fewer than `OPEN_PER_VILLAGE` (3) open
+  inspections gets more, on its sites inspected the longest ago. A mission that ends frees its site;
+  cancelled or expired, the site keeps its turn.
+  Amended 2026-11-19: it was one mission a village. One seat for a whole village left the others nothing,
+  and a player who kept it past its deadline left the village none at all (preprod, 2026-11-18).
 - **The mission** is the mission service's `visit` on the site's POI: being there is enough ("just be on
   the spot", WarpZone). Category `exploration`, giver `{faction, division: security}`, one player, three
   hours, `autoComplete`: paid on arrival, nothing to turn in. It is offered in its village. Its reward is
-  2 000 credits, and the base reward of a leg once more per 10 km: the drive is the player's time.
+  3 000 credits, and 350 more for each kilometre to the site: the drive is the player's time.
+  Amended 2026-11-19: it was 2 000 credits and the base reward of a leg once more per 10 km, 2 300 to
+  3 000 credits in all. Nobody drove 40 km for 3 000 (playtests 2026-11-11 and 2026-11-18); a site 5 km
+  away now pays 4 750, one 40 km away 17 000.
 - **Its place travels with it.** The objective's `locationTo` carries the site's name, planet (`scene`),
   position and radius: the game draws the zone on its star chart for the player who took the mission.
   The POI itself is private: public, the zones of every village's inspection were on everybody's chart.

@@ -513,7 +513,7 @@ async fn a_machine_breaks_down_and_stays_broken_until_the_game_says_it_is_repair
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn each_village_has_one_inspection_open_on_the_site_seen_the_longest_ago(pool: PgPool) {
+async fn each_village_keeps_inspections_open_on_the_sites_seen_the_longest_ago(pool: PgPool) {
     let (st, fake) = setup(pool, 1_000_000).await;
     // The sites are made at their village's altitude: no mission before the game server laid them on
     // the ground.
@@ -537,7 +537,8 @@ async fn each_village_has_one_inspection_open_on_the_site_seen_the_longest_ago(p
     let of_v1: Vec<_> = sites.iter().filter(|s| s.village_id == id(V1)).collect();
     assert_eq!(of_v1.len(), simulation::inspections::SITES_PER_VILLAGE as usize);
     let open: Vec<_> = of_v1.iter().filter(|s| s.mission_id.is_some()).collect();
-    assert_eq!(open.len(), 1, "one mission a village");
+    let seats = simulation::inspections::OPEN_PER_VILLAGE;
+    assert_eq!(open.len(), seats, "a few missions a village, a site left to rest");
     assert_eq!(r.inspections_published, sites.iter().filter(|s| s.mission_id.is_some()).count());
     let first = open[0];
     let mission = fake.with(|s| s.missions[&first.mission_id.unwrap()].mission.clone());
@@ -547,15 +548,15 @@ async fn each_village_has_one_inspection_open_on_the_site_seen_the_longest_ago(p
     assert_eq!(objective["type"], "visit");
     assert_eq!(objective["params"]["zone"]["poiId"], serde_json::json!(first.inventory_poi_id.unwrap()));
     assert!(!fake.with(|s| s.pois[&first.inventory_poi_id.unwrap()].public), "a zone only its mission's holder is shown");
-    // Nothing more while it is open; inspected, the next mission is on another site.
+    // Nothing more while they are open; one inspected, the next mission is on the site left to rest.
     let r = simulation::tick(&st, true).await.unwrap();
     assert_eq!(r.inspections_published, 0);
     fake.complete_mission(first.mission_id.unwrap());
     simulation::tick(&st, true).await.unwrap();
     let sites = crate::db::inspections::list(&st.pool, fed.id).await.unwrap();
     let open: Vec<_> = sites.iter().filter(|s| s.village_id == id(V1) && s.mission_id.is_some()).collect();
-    assert_eq!(open.len(), 1);
-    assert_ne!(open[0].id, first.id, "the site just inspected waits its turn");
+    assert_eq!(open.len(), seats);
+    assert!(open.iter().all(|s| s.id != first.id), "the site just inspected waits its turn");
 }
 
 #[sqlx::test(migrations = "./migrations")]

@@ -16,7 +16,7 @@
     "mintCeiling": 1000000000,
     "elasticity": 0.8,
     "priceMinFactor": 0.25,
-    "priceMaxFactor": 4.0,
+    "priceMaxFactor": 2.0,
     "spread": 0.1,
     "freightRatePerTkm": 25.0,
     "urgencyMax": 1.0,
@@ -117,7 +117,7 @@
         "policies": [
           {
             "resource": "ore.gold",
-            "minThreshold": 60,
+            "minThreshold": 360,
             "targetLevel": 720,
             "perThousand": true
           }

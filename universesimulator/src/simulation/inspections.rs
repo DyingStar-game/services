@@ -1,9 +1,9 @@
-//! Inspections (ADR 0019): each village's security keeps one mission open that sends a player to look at
-//! a place 5 to 40 km away. The mission is the mission service's `visit`: being there is enough, and it
+//! Inspections (ADR 0019): each village's security keeps a few missions open, each sending a player to
+//! look at a place 5 to 40 km away. The mission is the mission service's `visit`: being there is enough, and it
 //! pays at once (no turn-in). Unlike the supply orders, nothing is moved and no stock is read.
 //!
 //! A village has SITES_PER_VILLAGE sites, made once from its position (the same village always gets the
-//! same); the one inspected the longest ago gets the next mission.
+//! same); the ones inspected the longest ago get the next missions.
 //!
 //! The simulator knows no relief: a site is made at its village's altitude, and the game server, which
 //! has the terrain, lays it on the ground (routes::inspections). Until then it gets no mission -- a zone
@@ -34,11 +34,14 @@ pub const SITE_RADIUS_M: f64 = 500.0;
 pub const MAX_GROUND_SHIFT_M: f64 = 30_000.0;
 /// Hours a player has to get there, once the mission is taken.
 pub const INSPECTION_HOURS: i32 = 3;
-/// An inspection pays the base reward of a leg, once more per this distance (m).
-pub const REWARD_STEP_M: f64 = 10_000.0;
-/// What any inspection pays, whatever its distance: the drive there and back is the player's time, and
-/// a leg's reward alone (a few hundred) was not worth 35 km (playtest 2026-11-11).
-pub const REWARD_FLOOR: i64 = 2_000;
+/// Inspections a village keeps open at once, of its SITES_PER_VILLAGE sites: one alone was one seat for
+/// a whole village, and a player who kept it left the others none (playtest 2026-11-18).
+pub const OPEN_PER_VILLAGE: usize = 3;
+/// What any inspection pays, whatever its distance.
+pub const REWARD_FLOOR: i64 = 3_000;
+/// What it pays more for each kilometre to its site: the drive there and back is the player's time, and
+/// 3 000 credits for 40 km sent nobody (playtests 2026-11-11 and 2026-11-18).
+pub const REWARD_PER_KM: f64 = 350.0;
 
 /// The point at [distance] (m, along the ground) from [from] in the direction [bearing] (rad, around
 /// the vertical of [from]), at the same distance from the planet's centre, the origin.
@@ -87,14 +90,13 @@ pub fn site_name(village: &str, seq: i32) -> String {
     format!("{village}-{}", (b'A' + seq.clamp(0, 25) as u8) as char)
 }
 
-/// What an inspection [distance_m] away pays: REWARD_FLOOR, and the base reward of a leg once more per
-/// REWARD_STEP_M.
-pub fn reward(base: i64, distance_m: f64) -> i64 {
-    REWARD_FLOOR + ((base as f64) * (1.0 + distance_m / REWARD_STEP_M)).round().max(0.0) as i64
+/// What an inspection [distance_m] away pays: REWARD_FLOOR, and REWARD_PER_KM for each kilometre.
+pub fn reward(distance_m: f64) -> i64 {
+    REWARD_FLOOR + (REWARD_PER_KM * distance_m / 1000.0).round().max(0.0) as i64
 }
 
-/// Closes the inspections that ended, makes the sites of new villages, and opens a mission for every
-/// village that has none. Returns `true` when the treasury could not pay an escrow.
+/// Closes the inspections that ended, makes the sites of new villages, and opens missions for every
+/// village that has fewer than OPEN_PER_VILLAGE. Returns `true` when the treasury could not pay an escrow.
 pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Result<bool> {
     let villages: Vec<(Village, [f64; 3])> = world::active_villages(&st.pool, fed.id)
         .await?
@@ -124,18 +126,24 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
     }
 
     let by_id: HashMap<Uuid, &Village> = villages.iter().map(|(v, _)| (v.id, v)).collect();
-    let busy: HashSet<Uuid> = sites.iter().filter(|s| s.mission_id.is_some()).map(|s| s.village_id).collect();
-    let mut seen = HashSet::new();
+    let mut open: HashMap<Uuid, usize> = HashMap::new();
+    for site in sites.iter().filter(|s| s.mission_id.is_some()) {
+        *open.entry(site.village_id).or_default() += 1;
+    }
     let mut funds_short = false;
-    // The sites come a village's together, the next to inspect first: the first of each village that is
-    // laid on the ground is it.
-    for site in sites.iter().filter(|s| s.grounded_at.is_some() && !busy.contains(&s.village_id)) {
+    // The sites come a village's together, the next to inspect first: those of each village that are
+    // laid on the ground and free get a mission, until OPEN_PER_VILLAGE are open.
+    for site in sites.iter().filter(|s| s.grounded_at.is_some() && s.mission_id.is_none()) {
         let Some(village) = by_id.get(&site.village_id) else { continue };
-        if !seen.insert(site.village_id) {
+        let count = open.entry(site.village_id).or_default();
+        if *count >= OPEN_PER_VILLAGE {
             continue;
         }
         match publish(st, fed, village, site).await {
-            Ok(()) => report.inspections_published += 1,
+            Ok(()) => {
+                *count += 1;
+                report.inspections_published += 1;
+            }
             Err(e) if e.upstream_code().is_some_and(|c| INSUFFICIENT_FUNDS_CODES.contains(&c)) => funds_short = true,
             Err(e) => report.error("publish inspection", e),
         }
@@ -230,7 +238,7 @@ pub fn build_mission(fed: &Federation, village: &Village, site: &Site, poi: Uuid
         category,
         issuer_type: "politics",
         issuer_id: fed.political_entity_id,
-        rewards: vec![json!({ "type": "credits", "currency": fed.currency, "amount": reward(fed.leg_base_reward, site.distance_m) })],
+        rewards: vec![json!({ "type": "credits", "currency": fed.currency, "amount": reward(site.distance_m) })],
         escrow: Some(json!({ "payerType": "politics", "payerId": fed.political_entity_id })),
         script_id: format!("usim:inspection:{}:{}", site.id, site.attempts),
         objectives: vec![json!({
@@ -293,9 +301,10 @@ mod tests {
     }
 
     #[test]
-    fn a_far_inspection_pays_more() {
-        assert_eq!(reward(100, 0.0), 2_100);
-        assert_eq!(reward(100, 40_000.0), 2_500);
-        assert_eq!(reward(0, 40_000.0), REWARD_FLOOR);
+    fn an_inspection_pays_by_the_kilometre() {
+        assert_eq!(reward(0.0), REWARD_FLOOR);
+        assert_eq!(reward(5_000.0), 4_750);
+        assert_eq!(reward(20_000.0), 10_000);
+        assert_eq!(reward(40_000.0), 17_000);
     }
 }

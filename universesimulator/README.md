@@ -137,6 +137,32 @@ kubectl -n <namespace> exec deploy/service-universesimulator -- ./universesimula
 `tick` runs a forced tick and prints its report. Both use the pod's configuration (database,
 service account) and exit.
 
+### An environment whose seed changed
+
+An import never changes what a village already has: its policies, flows, mineral sources and
+capacities are inserted only when missing (ADR 0015). An environment imported before a change of the
+seed (the economy scale, a threshold, a mission's size) keeps its old values, and its economy stays
+the size it was. Seen in preprod on 2026-11-18: profiles from before `economyScale: 25`, a factory
+aiming at 120 kg of ingots where the seed says 8 000, mining missions of 60 kg.
+
+To bring it to the seed, clear the profiles of the resources concerned, then import and tick:
+
+```sql
+-- The profiles of the gold chain. Stocks are left alone: the crates in the world are the truth.
+DELETE FROM village_policies     WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
+DELETE FROM village_flows        WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
+DELETE FROM mineral_sources      WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
+DELETE FROM warehouse_capacities WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
+```
+
+A capacity inserted again applies its initial stock again (`initialBelowThreshold`: just under the
+village's threshold), on top of what the warehouse holds: keep the `warehouse_capacities` rows to add
+nothing.
+
+Check first that no supply order is open (`GET /api/admin/dashboard`, `openOrders`), and after the
+tick that the villages are linked (`GET /api/admin/network`, `routes`): without routes the planner
+finds no supplier and orders no transport, and says so only in its log.
+
 ## Tests
 
 ```bash
