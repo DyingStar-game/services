@@ -46,7 +46,7 @@ role, a frozen account) lost the money for good, every replay stopping on the de
 - The amount is rounded to the credit: a sale worth less than half a credit pays nothing and is recorded.
 - The sale is not tied to a delivery: the simulator pays the quantity the game server states, up to the
   room the warehouse had.
-  Amended 2026-11-19 (WarpZone, playtest 2026-11-18; ddurieux to confirm): it was "nor to the warehouse's
+  Amended 2026-11-19 (WarpZone, playtest 2026-11-18): it was "nor to the warehouse's
   capacity ... A warehouse that is full still buys". With no limit, the only brake was the price, which
   stops falling at a quarter of the base: in preprod M0001 held 8 367 kg of crushed ore for a capacity of
   5 000 and a target of 4 000, and still bought. A warehouse now buys what fitted under its capacity for
