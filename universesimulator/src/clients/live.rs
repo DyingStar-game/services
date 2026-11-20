@@ -327,6 +327,25 @@ impl PersistenceClient for HttpPersistence {
         }
         Ok(out)
     }
+
+    async fn find_planet(&self, internal_name: &str) -> Result<Option<Uuid>> {
+        let page_size = 200;
+        let mut read = 0;
+        for page in 1.. {
+            let path = format!("/items?object_type={}&page={page}&page_size={page_size}", enc(super::PLANET_TYPE));
+            let res: ItemPage = self.0.get(&path).await?;
+            let n = res.items.len();
+            read += n;
+            let found = res.items.into_iter().find(|i| i.object_data["scenename"].as_str().is_some_and(|s| super::scene_name(s) == internal_name));
+            if let Some(planet) = found {
+                return Ok(planet.object_uuid);
+            }
+            if n < page_size || res.total.is_some_and(|t| read as i64 >= t) {
+                break;
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// A movement keyed by an `externalId`: the economy answers one it has already made with 409

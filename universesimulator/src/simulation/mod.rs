@@ -121,6 +121,15 @@ async fn run_locked(st: &AppState, force: bool) -> Result<TickReport> {
             // Replays the last world file (new villages, new depots); without one, only
             // attaches new depots to the simulated villages.
             let synced = match crate::import::replay(st, fed).await {
+                // A world file that finds no village is one that names another planet than this
+                // environment's (each has its own): said as an error of the tick, where it is read.
+                Ok(Some(r)) if r.villages == 0 => Err(AppError::conflict(
+                    "WORLD_EMPTY",
+                    format!(
+                        "the world answers no village with a depot for planet {}: is planetPoiUuid this environment's?",
+                        fed.planet_poi_uuid.map(|p| p.to_string()).unwrap_or_else(|| "(none)".into())
+                    ),
+                )),
                 Ok(Some(r)) => Ok(r.villages),
                 Ok(None) => crate::import::sync_warehouses(st, fed).await,
                 Err(e) => Err(e),

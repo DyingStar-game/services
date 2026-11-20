@@ -402,6 +402,16 @@ impl PersistenceClient for FakeWorld {
             items
         }))
     }
+
+    async fn find_planet(&self, internal_name: &str) -> Result<Option<Uuid>> {
+        Ok(self.with(|s| {
+            s.items
+                .values()
+                .filter(|i| i.object_type == super::PLANET_TYPE)
+                .find(|i| i.data["scenename"].as_str().is_some_and(|scene| super::scene_name(scene) == internal_name))
+                .map(|i| i.uuid)
+        }))
+    }
 }
 
 /// An error as the economy answers it.

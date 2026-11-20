@@ -223,6 +223,41 @@ async fn a_village_whose_depots_left_the_world_is_off_until_they_are_back(pool: 
     assert!(!world::get_village(&st.pool, id(V2)).await.unwrap().unwrap().active);
 }
 
+/// A world that answers no village (a purge, or a world file naming another planet) leaves the routes
+/// alone, and the tick says it: every route was pruned, in silence, and no transport was ordered.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_world_that_answers_no_village_keeps_its_routes_and_says_so(pool: PgPool) {
+    let (st, fake) = setup(pool, 1_000_000).await;
+    import::import_and_keep(&st, serde_json::from_str::<Value>(&world_json(1_000_000)).unwrap()).await.unwrap();
+    let routes = world::list_routes(&st.pool, None).await.unwrap().len();
+    assert!(routes > 0);
+    for depot in [D1, D2, D3A, D3B] {
+        fake.remove_item(id(depot));
+    }
+    let report = simulation::tick(&st, true).await.unwrap();
+    assert_eq!(world::list_routes(&st.pool, None).await.unwrap().len(), routes, "the routes are kept");
+    assert!(world::get_village(&st.pool, id(V1)).await.unwrap().unwrap().active, "and the villages on");
+    assert!(report.errors.iter().any(|e| e.contains("WORLD_EMPTY") || e.contains("no village")), "{:?}", report.errors);
+}
+
+/// Each environment gives its planet its own uuid: the import finds the planet by its name in the
+/// world, whatever uuid the world file carries (another environment's, or one from before a purge).
+#[sqlx::test(migrations = "./migrations")]
+async fn the_planet_is_found_by_its_name_whatever_uuid_the_file_names(pool: PgPool) {
+    let fake = Arc::new(FakeWorld::new());
+    let here = Uuid::from_u128(0x200);
+    fake.add_item(here, "planet", Uuid::nil(), json!({ "name": "SandBox", "scenename": "scenes/systems/tarsis/tarsis_3.tscn" }));
+    fake.add_item(Uuid::from_u128(0x201), "planet", here, json!({ "name": "P3_M1", "scenename": "scenes/systems/tarsis/tarsis_3_1.tscn" }));
+    fake.add_item(id(V1), "poi_village", here, json!({ "name": "M0001", "type": "mining", "population": 500, "position": pos(0.0) }));
+    fake.add_item(id(D1), "cargo_depot", here, json!({ "name": "cargo_depot", "poi_uuid": id(V1).to_string(), "position": pos(10.0) }));
+    let st = state(pool, fake.clone(), config());
+    // The file names id(PLANET), which holds nothing here.
+    let report = import::import(&st, serde_json::from_str(&world_json(1_000_000)).unwrap()).await.unwrap();
+    assert_eq!(report.villages, 1, "the villages of the planet named, not of the uuid written");
+    let fed = catalog::list_federations(&st.pool).await.unwrap().remove(0);
+    assert_eq!(fed.planet_poi_uuid, Some(here), "and the federation remembers where it is");
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn new_villages_appear_at_the_next_forced_tick(pool: PgPool) {
     let fake = Arc::new(FakeWorld::new());
