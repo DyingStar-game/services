@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::clients::{Holder, PoiItem, PoliticalEntity};
@@ -46,8 +46,8 @@ pub struct WorldFile {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FederationFile {
-    /// Federation settings (`politicalEntityId` is filled by the import; `planetPoiUuid` is
-    /// required).
+    /// Federation settings (`politicalEntityId` is filled by the import; `planetPoiUuid` is a hint:
+    /// when persistence no longer knows it, the planet is found by `planetInternalName`).
     #[serde(flatten)]
     pub settings: FederationInput,
     /// Minted once when the treasury is empty.
@@ -285,6 +285,45 @@ fn one() -> f64 {
     1.0
 }
 
+pub const PLANET_TYPE: &str = "planet";
+
+/// Whether a planet's scene is the one of [internal_name]: `tarsis_3` is
+/// `scenes/systems/tarsis/tarsis_3.tscn`, not `tarsis_3_1.tscn`.
+pub fn planet_matches(scenename: &str, internal_name: &str) -> bool {
+    let file = scenename.rsplit('/').next().unwrap_or(scenename);
+    file.strip_suffix(".tscn").unwrap_or(file) == internal_name
+}
+
+/// The planet's object in persistence: [hint] while persistence still knows it as a planet, else the
+/// planet whose scene is [internal_name] (a regenerated world gives the planet a new UUID, its villages
+/// and depots keep theirs). Without any match, [hint] as it is.
+async fn resolve_planet(st: &AppState, internal_name: &str, hint: Option<Uuid>) -> Result<Uuid> {
+    if let Some(h) = hint {
+        if st.clients.persistence.get_item(h).await?.is_some_and(|p| p.object_type == PLANET_TYPE) {
+            return Ok(h);
+        }
+    }
+    let found: Vec<Uuid> = st
+        .clients
+        .persistence
+        .list_by_type(PLANET_TYPE)
+        .await?
+        .into_iter()
+        .filter(|p| p.snapshot().scenename.is_some_and(|s| planet_matches(&s, internal_name)))
+        .map(|p| p.uuid)
+        .collect();
+    match found.as_slice() {
+        [one] => {
+            if hint != Some(*one) {
+                warn!(planet = internal_name, old = ?hint, new = %one, "planet found by its scene, its uuid changed");
+            }
+            Ok(*one)
+        }
+        [] => hint.ok_or_else(|| AppError::BadRequest(format!("planet {internal_name} not found in persistence"))),
+        _ => Err(AppError::BadRequest(format!("{} planets in persistence have the scene {internal_name}", found.len()))),
+    }
+}
+
 /// Lists the planet's villages and depots, groups depots by village (`poi_uuid`).
 async fn read_planet(st: &AppState, planet: Uuid) -> Result<(Vec<PoiItem>, HashMap<Uuid, Vec<PoiItem>>, Vec<Uuid>)> {
     let villages = st.clients.persistence.list_items(VILLAGE_TYPE, planet).await?;
@@ -368,7 +407,8 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
     if settings.code.is_none() || settings.planet_internal_name.is_none() {
         return Err(AppError::BadRequest("federation.code and federation.planetInternalName are required".into()));
     }
-    let planet = settings.planet_poi_uuid.ok_or_else(|| AppError::BadRequest("federation.planetPoiUuid is required".into()))?;
+    let planet = resolve_planet(st, settings.planet_internal_name.as_deref().unwrap_or_default(), settings.planet_poi_uuid).await?;
+    settings.planet_poi_uuid = Some(planet);
 
     // 1. Social and simulator: the federation.
     let fed_entity = find_or_create(st, &fed_name, "federation", None, &mut report).await?;
@@ -566,6 +606,14 @@ mod tests {
         let water = m.policies.iter().find(|p| p.resource == "water").unwrap();
         assert_eq!(water.min_threshold, 99);
         assert_eq!(m.policies.len(), 2);
+    }
+
+    #[test]
+    fn planet_by_scene_file() {
+        assert!(planet_matches("scenes/systems/tarsis/tarsis_3.tscn", "tarsis_3"));
+        assert!(!planet_matches("scenes/systems/tarsis/tarsis_3_1.tscn", "tarsis_3"));
+        assert!(!planet_matches("scenes/systems/tarsis/tarsis_3.tscn", "tarsis_3_1"));
+        assert!(planet_matches("tarsis_3", "tarsis_3"));
     }
 
     #[test]
