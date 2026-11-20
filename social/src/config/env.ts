@@ -66,6 +66,11 @@ export const env = {
   bugReport: {
     /** The webhook URL — a SECRET (whoever holds it can post): from a Kubernetes Secret, never logged. */
     webhookUrl: process.env.DISCORD_BUG_WEBHOOK_URL ?? '',
+    /**
+     * Token of the Discord bot that READS the forum (the open bugs a report can be added to) — a
+     * SECRET, never logged. Empty: no list, every report opens its own post.
+     */
+    botToken: process.env.DISCORD_BUG_BOT_TOKEN ?? '',
     /** The webhook's channel is a forum: each report opens a post named after its title. */
     forum: process.env.DISCORD_BUG_WEBHOOK_FORUM === 'true',
     /** Forum tag ids applied to each post (CSV), for a forum that requires a tag. */

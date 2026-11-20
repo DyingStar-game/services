@@ -1357,6 +1357,37 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 
+  /api/bug-reports/open:
+    get:
+      tags: [reports]
+      operationId: openBugReports
+      summary: The bugs of the QA forum that are not closed
+      description: >-
+        Read from Discord by a bot (`DISCORD_BUG_BOT_TOKEN`) and kept two minutes. Where a bug stands is
+        the square the QA team puts under its post (red open, orange taken by a developer, purple to
+        test in the build, green closed and left out). `enabled: false` without the bot.
+      responses:
+        '200':
+          description: The open bugs, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled, bugs]
+                properties:
+                  enabled: { type: boolean }
+                  bugs:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, title, status]
+                      properties:
+                        id: { type: string }
+                        title: { type: string }
+                        status: { type: string, enum: [new, open, in_progress, to_test] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
   /api/bug-reports:
     post:
       tags: [reports]
@@ -1385,6 +1416,14 @@ paths:
                   description: What the client knows (build, machine, place...), shown as-is; 20 entries kept.
                   additionalProperties: true
                 screenshot: { type: string, description: 'JPEG or PNG, base64, under 4 MB decoded' }
+                extra_screenshots:
+                  type: array
+                  maxItems: 4
+                  items: { type: string }
+                  description: More captures of the same bug, as `screenshot`; 8 MB decoded for all of them.
+                thread_id:
+                  type: string
+                  description: Id of an open bug (`GET /api/bug-reports/open`) to add this report to, instead of opening a post.
                 log: { type: string, maxLength: 300000, description: Tail of the client log }
       responses:
         '201':
