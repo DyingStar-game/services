@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::clients::{Holder, PoiItem, PoliticalEntity};
@@ -368,7 +368,18 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
     if settings.code.is_none() || settings.planet_internal_name.is_none() {
         return Err(AppError::BadRequest("federation.code and federation.planetInternalName are required".into()));
     }
-    let planet = settings.planet_poi_uuid.ok_or_else(|| AppError::BadRequest("federation.planetPoiUuid is required".into()))?;
+    // The planet is found in the world by its name: each environment gives it its own uuid, and one
+    // written in the file is another environment's sooner or later (preprod read the villages of a
+    // planet from before a purge for nine days, and found none). A uuid in the file is only what is
+    // tried when the world does not hold the planet.
+    let internal_name = settings.planet_internal_name.clone().unwrap_or_default();
+    let planet = match st.clients.persistence.find_planet(&internal_name).await? {
+        Some(planet) => planet,
+        None => settings.planet_poi_uuid.ok_or_else(|| {
+            AppError::BadRequest(format!("the world holds no planet {internal_name}, and the file names no federation.planetPoiUuid"))
+        })?,
+    };
+    settings.planet_poi_uuid = Some(planet);
 
     // 1. Social and simulator: the federation.
     let fed_entity = find_or_create(st, &fed_name, "federation", None, &mut report).await?;
@@ -510,6 +521,14 @@ pub async fn import(st: &AppState, file: WorldFile) -> Result<ImportReport> {
         }
     }
 
+    // No village at all: the routes are left as they are too. With none wanted, every automatic route was
+    // pruned, and the planner, finding no supplier, ordered no transport and said so only in its log
+    // (preprod, 2026-11-11 to 2026-11-20: a world file naming the planet of before a purge).
+    if report.villages == 0 {
+        warn!(federation = %fed.code, planet = %planet, "the world answers no village with a depot for this planet: nothing synced, the routes kept");
+        return Ok(report);
+    }
+
     // 6. Routes: nearest neighbours and the extra ones; the automatic routes no longer wanted
     //    (e.g. a long link made obsolete by a new village in between) are removed.
     let pair = |a: Uuid, b: Uuid| if a < b { (a, b) } else { (b, a) };
@@ -571,7 +590,8 @@ mod tests {
     #[test]
     fn seed_world_file_parses() {
         let file: WorldFile = serde_json::from_str(include_str!("../../seeds/tarsis_3-ares.json")).unwrap();
-        assert!(file.federation.settings.planet_poi_uuid.is_some());
+        assert_eq!(file.federation.settings.planet_internal_name.as_deref(), Some("tarsis_3"));
+        assert!(file.federation.settings.planet_poi_uuid.is_none(), "found in the world by its name, never written");
         assert!(file.villages.by_type.contains_key("mining"));
     }
 
