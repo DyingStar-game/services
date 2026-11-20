@@ -13,6 +13,7 @@ import { env } from '../config/env.js';
 import { t } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 import type { AuthenticatedPlayer } from '../middleware/auth.js';
+import { openBugs } from './bugThreads.service.js';
 
 /** Discord limits the service must stay under (thread name, embed title/description/field). */
 const THREAD_NAME_MAX = 100;
@@ -33,6 +34,9 @@ const SEVERITY_COLOURS: Record<BugSeverity, number> = {
   minor: 0xfbc02d,
   cosmetic: 0x9c27b0,
 };
+/** Captures a report may carry beside its first one, and the most they may all weigh once decoded. */
+export const EXTRA_SCREENSHOTS_MAX = 4;
+const SCREENSHOTS_TOTAL_MAX_BYTES = 8 * 1024 * 1024;
 /** Largest capture accepted once decoded. */
 const SCREENSHOT_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -49,6 +53,10 @@ export interface BugReportInput {
   context?: Record<string, string | number | boolean>;
   /** The capture, base64 (JPEG or PNG). */
   screenshot?: string;
+  /** More captures of the same bug, base64, taken after the first. */
+  extra_screenshots?: string[];
+  /** The post of the QA forum this report adds to (bugThreads), instead of opening its own. */
+  thread_id?: string;
   /** The tail of the client's log. */
   log?: string;
 }
@@ -95,23 +103,16 @@ function clip(text: string, max: number): string {
 }
 
 /**
- * `🔴 [BUG][PREPROD][BLOCKER][0.0.1-dev] The title`: how bad it is as a round mark, the label of
- * the environment, the severity again in a word, then the client's build. In a forum this is the
- * post's name, 100 characters at most: the build, which is also in the fields below, leaves it
- * before the player's words are cut.
+ * `🔴 [PREPROD] The title`: how bad it is as a round mark, the label of the environment, then the
+ * player's words. In a forum this is the post's name, 100 characters at most, and the QA channel
+ * holds nothing but bugs: "BUG" said nothing, the severity is the mark's colour, and the client's
+ * build is in the fields below (asked by the QA team, 2026-11-20).
  */
 export function reportTitle(input: BugReportInput): string {
   const environment = env.bugReport.environment.toUpperCase();
-  const version = input.context?.version;
   const mark = input.severity ? `${SEVERITY_MARKS[input.severity]} ` : '';
-  const titled = (tags: string[]): string =>
-    `${mark}${tags
-      .filter((tag) => tag !== '')
-      .map((tag) => `[${tag}]`)
-      .join('')} ${input.title}`;
-  const tags = ['BUG', environment, (input.severity ?? '').toUpperCase()];
-  const full = titled([...tags, version === undefined ? '' : String(version)]);
-  return clip(full.length <= THREAD_NAME_MAX ? full : titled(tags), THREAD_NAME_MAX);
+  const tag = environment === '' ? '' : `[${environment}] `;
+  return clip(`${mark}${tag}${input.title}`, THREAD_NAME_MAX);
 }
 
 /**
@@ -132,8 +133,11 @@ export function reportBody(input: BugReportInput): string {
     .join('\n\n');
 }
 
-/** The capture as an attachment, or null when none was sent. Refuses anything but JPEG / PNG. */
-function screenshotFile(base64: string | undefined): { blob: Blob; name: string } | null {
+/**
+ * A capture as an attachment named `<stem>.jpg` or `.png`, or null when none was sent. Refuses
+ * anything but JPEG / PNG.
+ */
+function screenshotFile(base64: string | undefined, stem = 'screenshot'): { blob: Blob; name: string } | null {
   if (!base64) return null;
   const bytes = Buffer.from(base64, 'base64');
   const jpeg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
@@ -143,13 +147,14 @@ function screenshotFile(base64: string | undefined): { blob: Blob; name: string 
   }
   return {
     blob: new Blob([bytes], { type: jpeg ? 'image/jpeg' : 'image/png' }),
-    name: jpeg ? 'screenshot.jpg' : 'screenshot.png',
+    name: `${stem}.${jpeg ? 'jpg' : 'png'}`,
   };
 }
 
 /**
  * The webhook payload of a report. Mentions are switched off: the title and the description
- * are a player's text, and `@everyone` in a bug report must stay text.
+ * are a player's text, and `@everyone` in a bug report must stay text. A report added to a post
+ * that exists (`input.thread_id`) is a message there: it names no post of its own.
  */
 export function reportPayload(player: AuthenticatedPlayer, input: BugReportInput, image: string | null): Record<string, unknown> {
   const title = reportTitle(input);
@@ -170,7 +175,7 @@ export function reportPayload(player: AuthenticatedPlayer, input: BugReportInput
       },
     ],
   };
-  if (env.bugReport.forum) {
+  if (env.bugReport.forum && !input.thread_id) {
     // A forum channel takes a post, not a message: its name is the report's title.
     payload.thread_name = title;
     if (env.bugReport.forumTagIds.length > 0) payload.applied_tags = env.bugReport.forumTagIds;
@@ -182,13 +187,27 @@ export function reportPayload(player: AuthenticatedPlayer, input: BugReportInput
  * Relays a report to Discord.
  * @param player - Who reports (from the token, never from the body).
  * @param input - The validated report.
- * @throws 503 when no webhook is configured, 429 over the limits, 502 when Discord refuses.
+ * @throws 503 when no webhook is configured, 400 for a post that is not an open bug of the forum,
+ *   429 over the limits, 502 when Discord refuses.
  */
 export async function submitBugReport(player: AuthenticatedPlayer, input: BugReportInput): Promise<{ delivered: true }> {
   if (!bugReportsEnabled()) {
     throw new HttpError(503, 'BUG_REPORT_DISABLED', 'Bug reports are not relayed on this environment');
   }
   const image = screenshotFile(input.screenshot);
+  // The first capture is the embed's picture; the others follow it as plain attachments.
+  const extras = (input.extra_screenshots ?? [])
+    .map((picture, index) => screenshotFile(picture, `screenshot-${index + 2}`))
+    .filter((file): file is { blob: Blob; name: string } => file !== null);
+  const weight = [image, ...extras].reduce((sum, file) => sum + (file?.blob.size ?? 0), 0);
+  if (weight > SCREENSHOTS_TOTAL_MAX_BYTES) {
+    throw new HttpError(400, 'BUG_REPORT_BAD_SCREENSHOT', 'The captures of a report must weigh under 8 MB together');
+  }
+  // Only a post the list gave out: the id comes from the client, and the webhook would write in
+  // any thread of its channel.
+  if (input.thread_id && !(await openBugs()).some((bug) => bug.id === input.thread_id)) {
+    throw new HttpError(400, 'BUG_REPORT_UNKNOWN_BUG', 'This bug is not one of the open bugs');
+  }
   const now = Date.now();
   takeSlot(player.id, now);
 
@@ -196,13 +215,15 @@ export async function submitBugReport(player: AuthenticatedPlayer, input: BugRep
   form.append('payload_json', JSON.stringify(reportPayload(player, input, image?.name ?? null)));
   let files = 0;
   if (image) form.append(`files[${files++}]`, image.blob, image.name);
+  for (const extra of extras) form.append(`files[${files++}]`, extra.blob, extra.name);
   if (input.log) form.append(`files[${files++}]`, new Blob([input.log], { type: 'text/plain' }), 'godot-log.txt');
 
   let status = 0;
   let detail = '';
   try {
     // `wait=true`: Discord answers once the message exists, so a refusal is seen here.
-    const res = await fetch(`${env.bugReport.webhookUrl}?wait=true`, { method: 'POST', body: form });
+    const into = input.thread_id ? `&thread_id=${input.thread_id}` : '';
+    const res = await fetch(`${env.bugReport.webhookUrl}?wait=true${into}`, { method: 'POST', body: form });
     status = res.status;
     if (!res.ok) detail = clip(await res.text().catch(() => ''), 300);
   } catch (err) {
@@ -214,6 +235,6 @@ export async function submitBugReport(player: AuthenticatedPlayer, input: BugRep
     console.error(`Bug report of ${player.id} not relayed: Discord answered ${status || 'nothing'} ${detail}`);
     throw new HttpError(502, 'BUG_REPORT_UPSTREAM', 'The bug report could not be delivered');
   }
-  console.log(`Bug report of ${player.id} relayed (${files} file(s))`);
+  console.log(`Bug report of ${player.id} relayed (${files} file(s)${input.thread_id ? `, added to post ${input.thread_id}` : ''})`);
   return { delivered: true };
 }
