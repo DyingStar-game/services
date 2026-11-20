@@ -167,6 +167,9 @@ interface PoiCacheEntry {
 }
 const poiCache = new Map<string, PoiCacheEntry>();
 
+/** Ids Inventory resolves in one call (its `resolvePoisBody`: `ids` at most 100). */
+export const RESOLVE_BATCH = 100;
+
 /**
  * Resolves POI geometries through the Inventory internal API (batched, 60 s cache).
  * Unknown ids are absent from the returned map (a zone on a deleted POI never matches).
@@ -190,12 +193,15 @@ export async function resolvePois(ids: string[]): Promise<Map<string, PoiGeometr
     missing.push(id);
   }
 
-  if (missing.length > 0) {
+  // Inventory takes at most RESOLVE_BATCH ids a call and refuses the whole call past it: asked in one
+  // go, a world with more POIs than that had every zoned mission hidden from everybody.
+  for (let start = 0; start < missing.length; start += RESOLVE_BATCH) {
+    const batch = missing.slice(start, start + RESOLVE_BATCH);
     const body = await call<{ pois: PoiGeometry[] }>('POST', '/api/internal/pois/resolve', {
-      ids: missing,
+      ids: batch,
     });
     const found = new Map(body.pois.map((poi) => [poi.id, poi]));
-    for (const id of missing) {
+    for (const id of batch) {
       const value = found.get(id) ?? null;
       poiCache.set(id, { value, expiresAt: Date.now() + POI_TTL_MS });
       if (value) resolved.set(id, value);
