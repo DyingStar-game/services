@@ -402,6 +402,14 @@ impl PersistenceClient for FakeWorld {
             items
         }))
     }
+
+    async fn list_by_type(&self, object_type: &str) -> Result<Vec<PoiItem>> {
+        Ok(self.with(|s| {
+            let mut items: Vec<PoiItem> = s.items.values().filter(|i| i.object_type == object_type).cloned().collect();
+            items.sort_by_key(|i| i.uuid);
+            items
+        }))
+    }
 }
 
 /// An error as the economy answers it.

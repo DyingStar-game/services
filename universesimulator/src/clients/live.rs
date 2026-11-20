@@ -312,10 +312,22 @@ impl PersistenceClient for HttpPersistence {
     }
 
     async fn list_items(&self, object_type: &str, parent_id: Uuid) -> Result<Vec<PoiItem>> {
+        self.pages(object_type, Some(parent_id)).await
+    }
+
+    async fn list_by_type(&self, object_type: &str) -> Result<Vec<PoiItem>> {
+        self.pages(object_type, None).await
+    }
+}
+
+impl HttpPersistence {
+    /// Every object of a type, under [parent_id] when given (all pages).
+    async fn pages(&self, object_type: &str, parent_id: Option<Uuid>) -> Result<Vec<PoiItem>> {
+        let parent = parent_id.map(|p| format!("&parent_id={p}")).unwrap_or_default();
         let mut out = Vec::new();
         let page_size = 200;
         for page in 1.. {
-            let path = format!("/items?object_type={}&parent_id={parent_id}&page={page}&page_size={page_size}", enc(object_type));
+            let path = format!("/items?object_type={}{parent}&page={page}&page_size={page_size}", enc(object_type));
             let res: ItemPage = self.0.get(&path).await?;
             let n = res.items.len();
             out.extend(res.items.into_iter().filter_map(|i| {

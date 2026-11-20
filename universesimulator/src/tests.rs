@@ -80,7 +80,11 @@ fn pos(x: f64) -> Value {
 
 /// Persistence objects of the planet.
 fn populate(fake: &FakeWorld) {
-    let p = id(PLANET);
+    populate_under(fake, id(PLANET));
+}
+
+/// The test world, its villages and depots under the planet [p].
+fn populate_under(fake: &FakeWorld, p: Uuid) {
     fake.add_item(id(V1), "poi_village", p, json!({ "name": "M0001", "type": "mining", "population": 500, "radius_m": 2000.0, "position": pos(0.0) }));
     fake.add_item(id(V2), "poi_village", p, json!({ "name": "F0002", "type": "factory", "population": 2000, "radius_m": 2000.0, "position": pos(10_000.0) }));
     fake.add_item(id(V3), "poi_village", p, json!({ "name": "C0003", "type": "factory", "population": 10000, "radius_m": 3000.0, "position": pos(30_000.0) }));
@@ -147,6 +151,23 @@ async fn legs(st: &AppState) -> Vec<orders::Leg> {
     let (orders, _) = orders::list_orders(&st.pool, &Default::default()).await.unwrap();
     let ids: Vec<Uuid> = orders.iter().map(|o| o.id).collect();
     orders::legs_of_orders(&st.pool, &ids).await.unwrap()
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn import_finds_a_regenerated_planet_by_its_scene(pool: PgPool) {
+    // The world was regenerated: the planet has a new uuid, its villages and depots kept theirs. The
+    // world file still names the old planet, which persistence no longer knows.
+    let fake = Arc::new(FakeWorld::new());
+    let regenerated = Uuid::from_u128(0x200);
+    fake.add_item(regenerated, "planet", Uuid::nil(), json!({ "name": "SandBox", "scenename": "scenes/systems/tarsis/tarsis_3.tscn" }));
+    fake.add_item(Uuid::from_u128(0x201), "planet", regenerated, json!({ "name": "P3_M1", "scenename": "scenes/systems/tarsis/tarsis_3_1.tscn" }));
+    populate_under(&fake, regenerated);
+    let st = state(pool, fake.clone(), config());
+
+    let r = import::import(&st, world_file(0)).await.unwrap();
+    assert_eq!(r.villages, 3, "the villages of the regenerated planet");
+    let fed = catalog::get_federation(&st.pool, r.federation_id).await.unwrap().unwrap();
+    assert_eq!(fed.planet_poi_uuid, Some(regenerated), "the federation follows the planet");
 }
 
 #[sqlx::test(migrations = "./migrations")]

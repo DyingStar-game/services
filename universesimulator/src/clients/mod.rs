@@ -238,6 +238,8 @@ pub trait PersistenceClient: Send + Sync {
     async fn get_item(&self, uuid: Uuid) -> Result<Option<PoiSnapshot>>;
     /// Every object of a type under a parent (all pages).
     async fn list_items(&self, object_type: &str, parent_id: Uuid) -> Result<Vec<PoiItem>>;
+    /// Every object of a type, whatever its parent (all pages).
+    async fn list_by_type(&self, object_type: &str) -> Result<Vec<PoiItem>>;
 }
 
 // ── Bundle ───────────────────────────────────────────────────────────────────
