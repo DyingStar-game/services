@@ -141,16 +141,17 @@ async function resolveZonePois(zones: MissionZone[]): Promise<PoiGeometryMap> {
 }
 
 /**
- * Resolves the geometry of every POI referenced by any mission zone (listing scope).
- * A mission without `poi` zones never touches Inventory.
- * @returns POI id → geometry (empty when no mission references a POI).
+ * Resolves the geometry of every POI referenced by a zone of a mission that can be listed (open:
+ * `available` or `active`). A mission without `poi` zones never touches Inventory. The missions that
+ * are over are left out: they are never listed, and their POIs only grew the set with time.
+ * @returns POI id → geometry (empty when no open mission references a POI).
  */
 export async function resolveListingPoiGeometry(): Promise<PoiGeometryMap> {
   const result = await db.execute<{ poi_id: string | null }>(
     sql`select distinct z->>'poiId' as "poi_id"
         from ${missions}, jsonb_array_elements(${missions}.zones) as z
-        where z->>'kind' = 'poi'
-        limit 500`,
+        where z->>'kind' = 'poi' and ${missions}.status in ('available', 'active')
+        limit 2000`,
   );
   const ids = [...new Set(result.rows.map((row) => row.poi_id).filter((id): id is string => Boolean(id)))];
   if (ids.length === 0) return {};
