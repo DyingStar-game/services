@@ -1339,6 +1339,69 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /api/bug-reports/status:
+    get:
+      tags: [reports]
+      operationId: bugReportsStatus
+      summary: Whether this environment relays in-game bug reports
+      responses:
+        '200':
+          description: Relay status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+
+  /api/bug-reports:
+    post:
+      tags: [reports]
+      operationId: createBugReport
+      summary: Send an in-game bug report
+      description: >-
+        Relayed to the Discord webhook of the environment (`DISCORD_BUG_WEBHOOK_URL`); nothing is stored.
+        The author is the player of the token. Body up to 8 MB. Paced per player
+        (`BUG_REPORT_MIN_INTERVAL_SECONDS`, `BUG_REPORT_DAILY_MAX`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description]
+              properties:
+                title: { type: string, minLength: 3, maxLength: 80 }
+                severity: { type: string, enum: [blocker, major, minor, cosmetic], description: How bad it is }
+                description: { type: string, minLength: 1, maxLength: 1000 }
+                steps: { type: string, maxLength: 1500, description: How to get there }
+                actual: { type: string, maxLength: 700, description: What happened }
+                expected: { type: string, maxLength: 700, description: What should have happened }
+                context:
+                  type: object
+                  description: What the client knows (build, machine, place...), shown as-is; 20 entries kept.
+                  additionalProperties: true
+                screenshot: { type: string, description: 'JPEG or PNG, base64, under 4 MB decoded' }
+                log: { type: string, maxLength: 300000, description: Tail of the client log }
+      responses:
+        '201':
+          description: Report relayed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  delivered: { type: boolean }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Sanctioned' }
+        '429': { description: 'Too many reports (`BUG_REPORT_RATE_LIMITED`)' }
+        '502': { description: 'Discord refused the report (`BUG_REPORT_UPSTREAM`)' }
+        '503': { description: 'No webhook on this environment (`BUG_REPORT_DISABLED`)' }
+
   /api/reports:
     post:
       tags: [reports]
@@ -1747,6 +1810,78 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
+  /api/internal/players/{playerId}/standing:
+    get:
+      tags: [internal]
+      operationId: internalGetStanding
+      summary: Character standing per domain (empty map when the profile has none)
+      description: >
+        Used by Mission for the `min_standing` prerequisite. Requires the
+        `social:profile:read` capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      responses:
+        '200':
+          description: Standing map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, standing]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  standing:
+                    type: object
+                    additionalProperties: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [internal]
+      operationId: internalAddStanding
+      summary: Apply a signed standing delta on one domain
+      description: >
+        The game server applies mission standing rewards through this route. The score is
+        clamped to [-100000, 100000] per domain. Requires the `social:standing:write`
+        capability role.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/playerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain, amount]
+              properties:
+                domain: { type: string, minLength: 1, maxLength: 32 }
+                amount:
+                  type: integer
+                  minimum: -100000
+                  maximum: 100000
+                  description: Signed non-zero delta
+      responses:
+        '200':
+          description: Updated standing map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playerId, domain, standing]
+                properties:
+                  playerId: { type: string, format: uuid }
+                  domain: { type: string }
+                  standing:
+                    type: object
+                    additionalProperties: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /api/internal/players/{playerId}/presence:
     get:
       tags: [internal]
@@ -1781,6 +1916,9 @@ paths:
       tags: [internal]
       operationId: internalSetPresence
       summary: Set status and location
+      description: >
+        Single-player transition (login, mission start/end, logout). Live presence is
+        stored in the cache with a TTL; the database only follows status changes.
       security: [{ serviceAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/playerId'
@@ -1795,8 +1933,8 @@ paths:
                 status: { $ref: '#/components/schemas/PresenceStatus' }
                 location:
                   oneOf:
-                    - $ref: '#/components/schemas/Location'
-                    - type: 'null'
+                    - { $ref: '#/components/schemas/Location' }
+                    - { type: 'null' }
                   description: '`null` clears the location; omitted keeps the previous one'
       responses:
         '200':
@@ -1813,6 +1951,59 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+
+  /api/internal/players/presence/batch:
+    put:
+      tags: [internal]
+      operationId: internalSetPresenceBatch
+      summary: Batch heartbeat for every active player of a game server
+      description: >
+        One call per minute instead of one per player: every listed player's presence
+        gets a fresh TTL in the cache, and players absent from the call simply expire
+        back to `offline` (no explicit offline event needed). An omitted `status` keeps
+        the player's current non-offline status (`online` when unknown). Requires the
+        `social:profile:write` capability role.
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [players]
+              properties:
+                players:
+                  type: array
+                  minItems: 1
+                  maxItems: 5000
+                  items:
+                    type: object
+                    required: [playerId]
+                    properties:
+                      playerId: { type: string, format: uuid }
+                      status: { $ref: '#/components/schemas/PresenceStatus' }
+                      location:
+                        oneOf:
+                          - { $ref: '#/components/schemas/Location' }
+                          - { type: 'null' }
+                        description: '`null` clears; omitted keeps the previous location'
+      responses:
+        '200':
+          description: Refreshed count and ids without a profile
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [refreshed, unknown]
+                properties:
+                  refreshed: { type: integer, minimum: 0 }
+                  unknown:
+                    type: array
+                    description: Player ids without a profile (not refreshed)
+                    items: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
 
   /api/internal/players/{playerId}/stats:
@@ -2706,10 +2897,45 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/internal/politics:
+    get:
+      tags: [internal]
+      operationId: internalFindPoliticalEntities
+      summary: Look up political entities by exact filters (social:politics:read)
+      description: >
+        Every filter is optional and exact: `name` matches the full (unique) name, so a caller
+        can bootstrap a hierarchy idempotently (look up by name, create when absent). Ordered by name.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: type
+          in: query
+          schema: { $ref: '#/components/schemas/PoliticalEntityType' }
+        - name: parentId
+          in: query
+          description: Direct parent entity
+          schema: { type: string, format: uuid }
+        - name: name
+          in: query
+          description: Exact entity name
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Matching entities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntityListPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
     post:
       tags: [internal]
       operationId: internalCreatePoliticalEntity
-      summary: Create a political entity with an explicit head (player or NPC)
+      summary: Create a political entity with an explicit head (player or NPC), or without head
+      description: >
+        Default offices are seeded according to the level. With `headId`, that profile holds the
+        head office; without it (omitted or null), the entity is system-governed and the head
+        office stays vacant (internal PATCH/DELETE/transfer then answer `409 NO_HEAD`).
       security: [{ serviceAuth: [] }]
       requestBody:
         required: true
@@ -2730,6 +2956,21 @@ paths:
   /api/internal/politics/{entityId}:
     parameters:
       - $ref: '#/components/parameters/politicalEntityId'
+    get:
+      tags: [internal]
+      operationId: internalGetPoliticalEntity
+      summary: Political entity (social:politics:read)
+      security: [{ serviceAuth: [] }]
+      responses:
+        '200':
+          description: Entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [internal]
       operationId: internalUpdatePoliticalEntity
@@ -2758,6 +2999,84 @@ paths:
       security: [{ serviceAuth: [] }]
       responses:
         '204': { description: Entity disbanded }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/politics/{entityId}/children:
+    get:
+      tags: [internal]
+      operationId: internalListPoliticalChildren
+      summary: Direct lower-level entities (social:politics:read)
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: Child summaries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntitySummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/politics/{entityId}/ancestors:
+    get:
+      tags: [internal]
+      operationId: internalListPoliticalAncestors
+      summary: Ancestors up to the root (social:politics:read)
+      description: Ordered from the direct parent up to the root; empty when the entity is independent.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      responses:
+        '200':
+          description: Ancestors, nearest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/ServiceForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/internal/politics/{entityId}/parent:
+    put:
+      tags: [internal]
+      operationId: internalSetPoliticalEntityParent
+      summary: Attach to a higher-level entity, or detach (social:politics:write)
+      description: >
+        Same rules as the player route without any member permission: the parent must be of a
+        strictly higher level (`400 INVALID_PARENT_LEVEL`, `400 INVALID_PARENT` for itself) and
+        cycles are refused (`409 POLITICAL_CYCLE`). Journaled with a null actor.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/politicalEntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parentId]
+              properties:
+                parentId:
+                  type: [string, 'null']
+                  format: uuid
+      responses:
+        '200':
+          description: Updated entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoliticalEntity' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/ServiceForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3099,7 +3418,7 @@ components:
 
     PlayerProfile:
       type: object
-      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, reputation, playtimeSeconds, rpSheet, createdAt, updatedAt]
+      required: [playerId, entityType, displayName, avatarUrl, faction, biography, role, reputation, standing, playtimeSeconds, rpSheet, createdAt, updatedAt]
       properties:
         playerId: { type: string, format: uuid, description: Keycloak subject (players) or server-assigned id (NPCs) }
         entityType: { $ref: '#/components/schemas/ProfileKind' }
@@ -3109,6 +3428,14 @@ components:
         biography: { type: [string, 'null'] }
         role: { type: [string, 'null'], description: In-game role reported by the game server }
         reputation: { type: integer }
+        standing:
+          type: object
+          description: >
+            Character standing per domain (mission categories), written by the game
+            through the internal standing routes and read by Mission. Distinct from
+            `reputation` (moderation/social score).
+          additionalProperties: { type: integer }
+          default: {}
         playtimeSeconds: { type: integer }
         rpSheet:
           oneOf:
@@ -3132,16 +3459,19 @@ components:
 
     Location:
       type: object
+      description: >
+        Player position, relative to the body named by `scene` (local frame, metres).
+        In open space (`scene: "space"`) the frame is the system itself.
       properties:
-        system: { type: string, maxLength: 64 }
-        scene: { type: string, maxLength: 128 }
+        system: { type: string, maxLength: 64, description: Star system }
+        scene: { type: string, maxLength: 128, description: 'Body or sub-scene; `"space"` = open space (frame of the system)' }
         position:
           type: object
           required: [x, y, z]
           properties:
-            x: { type: number }
-            y: { type: number }
-            z: { type: number }
+            x: { type: number, description: Metres from the centre of the body named by scene }
+            y: { type: number, description: Metres in the frame of the body named by scene }
+            z: { type: number, description: Metres in the frame of the body named by scene }
 
     Presence:
       type: object
@@ -3641,9 +3971,11 @@ components:
       allOf:
         - $ref: '#/components/schemas/CreatePoliticalEntity'
         - type: object
-          required: [headId]
           properties:
-            headId: { type: string, format: uuid, description: Profile (player or NPC) to make head }
+            headId:
+              type: [string, 'null']
+              format: uuid
+              description: Profile (player or NPC) to make head; omitted or null for a headless (system-governed) entity
 
     # ── Reputation & moderation ──
     ReputationEvent:
@@ -4283,6 +4615,30 @@ components:
         items:
           items:
             $ref: '#/components/schemas/PoliticalEntitySummary'
+          type: array
+        limit:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        offset:
+          default: 0
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - items
+      - total
+      - limit
+      - offset
+      type: object
+    PoliticalEntityListPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PoliticalEntity'
           type: array
         limit:
           default: 20

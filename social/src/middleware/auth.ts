@@ -33,6 +33,7 @@ export interface AuthenticatedService {
 export const SERVICE_ROLES = {
   profileRead: 'social:profile:read',
   profileWrite: 'social:profile:write',
+  standingWrite: 'social:standing:write',
   playerWrite: 'social:player:write',
   corporationRead: 'social:corporation:read',
   corporationWrite: 'social:corporation:write',
@@ -40,6 +41,7 @@ export const SERVICE_ROLES = {
   politicsRead: 'social:politics:read',
   politicsWrite: 'social:politics:write',
   sanctionsRead: 'social:sanctions:read',
+  notifyWrite: 'social:notify:write',
   reputationWrite: 'social:reputation:write',
   authorize: 'social:authorize',
 } as const;

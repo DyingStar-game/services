@@ -8,6 +8,20 @@
       "when": 1791321406959,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791754261301,
+      "tag": "0001_warehouse_holder",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792007571563,
+      "tag": "0002_carried_and_mission",
+      "breakpoints": true
     }
   ]
 }

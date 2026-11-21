@@ -1,0 +1,21 @@
+# Routing for the driving actions (drive_to_factory). Loaded once at startup
+# (ROUTING_CONFIG). Village and road data come from WORLD_DATA_DIR/<planet>/
+# (copies of the QGIS exports in DyingStar/assets/qgis/export/).
+planet: tarsis_3
+
+# Vertices of two roads closer than this (m) are one intersection.
+road_snap_m: 15
+
+# A village further than this (m) from every road is not reachable by road.
+max_access_m: 2000
+
+# NPC driving speed cap (km/h), whatever the road's speed_limit, and the speed
+# on the off-road stretches garage <-> road <-> village.
+max_speed_kmh: 50
+offroad_speed_kmh: 15
+
+# Static Mining -> Factory choices. A Mining village not listed drives to the
+# Factory nearest BY ROAD (see GET /npcs/villages).
+factory_for:
+  M0001: F0001
+  M0002: F0001

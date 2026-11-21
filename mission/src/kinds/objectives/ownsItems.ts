@@ -19,6 +19,7 @@ export const ownsItemsKind: ObjectiveKind = {
   kind: 'owns_items',
   evaluation: 'service',
   quantity: true,
+  remoteRead: true,
   paramsSchema,
   paramsJsonSchema: {
     type: 'object',
@@ -31,7 +32,7 @@ export const ownsItemsKind: ObjectiveKind = {
   },
   name: { en: 'Own items', fr: "Possession d'objets" },
   summary: { en: 'Holder owns {targetQuantity} of {itemId} (measured against Inventory, snapshot)', fr: 'Le détenteur possède {targetQuantity} de {itemId} (mesuré sur Inventory, instantané)' },
-  categories: ['mining', 'farming', 'crafting', 'construction', 'trading', 'salvage'],
+  categories: ['mining', 'delivery', 'transport'],
   async measure({ playerId, holderType, objective }) {
     const { itemId, scope } = paramsSchema.parse(objective.params ?? {});
     const stack = await getStack({ holderType, holderId: playerId }, itemId);

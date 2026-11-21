@@ -14,7 +14,7 @@ import {
   donate,
   getCorporationReport,
   listCorporationMembers,
-  requireCorporationMember,
+  requireMembership,
   requireTreasuryPermission,
 } from '../services/corporations.service.js';
 import { getTaxDebts } from '../services/politics.service.js';
@@ -51,7 +51,7 @@ corporationsRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
-    await requireCorporationMember(corporationId, player.id);
+    await requireMembership(corporationId, player.id);
     await ensureCorporationAccount(corporationId);
     res.json({ corporationId, accounts: await getCorporationAccounts(corporationId) });
   }),
@@ -65,7 +65,7 @@ corporationsRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
-    await requireCorporationMember(corporationId, player.id);
+    await requireMembership(corporationId, player.id);
     res.json(await listCorporationTransactions(corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
@@ -78,7 +78,7 @@ corporationsRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
-    await requireCorporationMember(corporationId, player.id);
+    await requireMembership(corporationId, player.id);
     res.json(await listCorporationMembers(corporationId, Number(req.query.limit), Number(req.query.offset)));
   }),
 );
@@ -106,7 +106,7 @@ corporationsRoutes.get(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     const { corporationId } = req.params;
-    await requireCorporationMember(corporationId, player.id);
+    await requireMembership(corporationId, player.id);
     res.json(await getTaxDebts('corporation', corporationId, { limit: Number(req.query.limit), offset: Number(req.query.offset) }));
   }),
 );

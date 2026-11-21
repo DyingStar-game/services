@@ -8,24 +8,24 @@ import { MISSION_CATEGORIES, type MissionCategory } from '../db/schema/index.js'
 import { currentLang } from '../i18n/index.js';
 import { d, localizeJsonSchema } from './schemaI18n.js';
 import type { JsonSchema, KindCategories, MessageText, ObjectiveKind, PrerequisiteKind } from './types.js';
-import { deliverItemsKind } from './objectives/deliverItems.js';
 import { deliverMaterialKind } from './objectives/deliverMaterial.js';
-import { hasCreditsKind } from './objectives/hasCredits.js';
 import { manualKind } from './objectives/manual.js';
 import { ownsItemsKind } from './objectives/ownsItems.js';
 import { transportKind } from './objectives/transport.js';
+import { transportPassengerKind } from './objectives/transportPassenger.js';
 import { visitKind } from './objectives/visit.js';
-import { corporationMemberKind } from './prerequisites/corporationMember.js';
-import { hasCreditsPrerequisite } from './prerequisites/hasCredits.js';
 import { minReputationKind } from './prerequisites/minReputation.js';
+import { minStandingKind } from './prerequisites/minStanding.js';
 import { ownsItemsPrerequisite } from './prerequisites/ownsItems.js';
 
 export type {
   EvaluationMode,
   JsonSchema,
   KindCategories,
+  MeasureContext,
   MessageText,
   ObjectiveKind,
+  PrefetchedPlayerState,
   PrerequisiteContext,
   PrerequisiteKind,
 } from './types.js';
@@ -38,19 +38,17 @@ function pickText(text: MessageText): string {
 const OBJECTIVE_KIND_LIST: ObjectiveKind[] = [
   deliverMaterialKind,
   transportKind,
+  transportPassengerKind,
   visitKind,
   manualKind,
   ownsItemsKind,
-  hasCreditsKind,
-  deliverItemsKind,
 ];
 
 /** Prerequisite kinds, checked at acceptance time. */
 const PREREQUISITE_KIND_LIST: PrerequisiteKind[] = [
-  hasCreditsPrerequisite,
-  ownsItemsPrerequisite,
+  minStandingKind,
   minReputationKind,
-  corporationMemberKind,
+  ownsItemsPrerequisite,
 ];
 
 // Fail fast on an inconsistent registry: every `service` objective kind must define its
@@ -72,6 +70,23 @@ export const PREREQUISITE_KINDS: ReadonlyMap<string, PrerequisiteKind> = new Map
 export function getObjectiveKind(kind: string): ObjectiveKind | undefined {
   return OBJECTIVE_KINDS.get(kind);
 }
+
+/**
+ * Kind names evaluated by the service (`measure`), used to filter `mission_objectives`
+ * rows in SQL when selecting what the auto-measure has to look at.
+ */
+export const SERVICE_OBJECTIVE_TYPES: readonly string[] = OBJECTIVE_KIND_LIST.filter(
+  (k) => k.evaluation === 'service',
+).map((k) => k.kind);
+
+/**
+ * Kind names whose `measure()` issues a remote (HTTP) read. The auto-measure budgets
+ * these: they cost a round trip per assignee, unlike the state-based kinds which read
+ * preloaded player states.
+ */
+export const REMOTE_OBJECTIVE_TYPES: readonly string[] = OBJECTIVE_KIND_LIST.filter(
+  (k) => k.remoteRead,
+).map((k) => k.kind);
 
 /** Looks up a prerequisite kind, or undefined when unknown. */
 export function getPrerequisiteKind(kind: string): PrerequisiteKind | undefined {

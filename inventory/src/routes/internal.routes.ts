@@ -9,6 +9,7 @@ import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
+  carriedDelta,
   consumeHold,
   createHold,
   creditStack,
@@ -25,6 +26,7 @@ import {
 import {
   createPoi,
   deletePoi,
+  getPoiByPersistence,
   getPoiView,
   listHolderPois,
   resolvePois,
@@ -32,6 +34,7 @@ import {
 } from '../services/pois.service.js';
 import type { PoiOwnerType } from '../db/schema/index.js';
 import {
+  carriedDeltaBody,
   consumeHoldBody,
   createHoldBody,
   creditBody,
@@ -108,6 +111,17 @@ internalRoutes.post(
   validate(creditBody),
   asyncHandler(async (req, res) => {
     res.status(201).json(await debitStack(holderFrom(req), req.body.goodType, req.body.quantity));
+  }),
+);
+
+/** POST /holders/:holderType/:holderId/stacks/:goodType/carried — Carried-quantity delta (mining / load / drop-off). */
+internalRoutes.post(
+  '/holders/:holderType/:holderId/stacks/:goodType/carried',
+  requireServiceRole(SERVICE_ROLES.carriedWrite),
+  validate(holderStackParams, 'params'),
+  validate(carriedDeltaBody),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await carriedDelta(holderFrom(req), req.params.goodType, req.body.delta, req.body));
   }),
 );
 
@@ -205,6 +219,21 @@ internalRoutes.post(
   validate(resolvePoisBody),
   asyncHandler(async (req, res) => {
     res.json({ pois: await resolvePois(req.body.ids) });
+  }),
+);
+
+/** GET /pois/by-persistence/:poiId — The POI of a game object (`metadata.persistence`): a cargo depot's warehouse. */
+internalRoutes.get(
+  '/pois/by-persistence/:poiId',
+  requireServiceRole(SERVICE_ROLES.read),
+  validate(poiParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const poi = await getPoiByPersistence(req.params.poiId);
+    if (!poi) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'POI not found', status: 404 });
+      return;
+    }
+    res.json(poi);
   }),
 );
 

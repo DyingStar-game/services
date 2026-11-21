@@ -8,6 +8,55 @@
       "when": 1791321407443,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791924775839,
+      "tag": "0001_mission_gameplay",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792008580813,
+      "tag": "0002_player_states_and_divers",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792181380813,
+      "tag": "0003_zone_radius_on_poi",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793750400000,
+      "tag": "0004_mission_giver",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794009600000,
+      "tag": "0005_mission_invitations",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794013200000,
+      "tag": "0006_invitation_declines",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794096000000,
+      "tag": "0007_mission_i18n",
+      "breakpoints": true
     }
   ]
 }

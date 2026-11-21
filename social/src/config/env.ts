@@ -35,10 +35,50 @@ export const env = {
   authDevBypass: process.env.AUTH_DEV_BYPASS === 'true' && nodeEnv !== 'production',
   /** Trusted Keycloak service clients (`azp`) allowed on `/api/internal/*`. */
   internal: {
-    serviceClients: (process.env.INTERNAL_SERVICE_CLIENTS ?? 'svc-game')
+    serviceClients: (process.env.INTERNAL_SERVICE_CLIENTS ?? 'svc-game,svc-universesimulator')
       .split(',')
       .map((client) => client.trim())
       .filter(Boolean),
+  },
+  /** Valkey cache: live presence (TTL) and playtime accumulator. Empty URL disables it. */
+  valkey: {
+    url: process.env.VALKEY_URL ?? '',
+    /** Presence TTL: a player without a heartbeat for this long reads back as offline. */
+    presenceTtlSeconds: int('PRESENCE_TTL_SECONDS', 90),
+    /** How often cached playtime deltas are flushed to PostgreSQL. */
+    playtimeFlushIntervalMinutes: int('PLAYTIME_FLUSH_INTERVAL_MINUTES', 5),
+    /** Maximum players accepted by one `PUT /players/presence/batch` heartbeat. */
+    presenceBatchMax: int('PRESENCE_BATCH_MAX', 5000),
+  },
+  /** MQTT broker for ephemeral player notifications; empty URL disables the publisher. */
+  mqtt: {
+    url: process.env.MOSQUITTO_URL ?? '',
+    /** Service client authenticating on the broker (its token is the MQTT password). */
+    clientId: process.env.MQTT_CLIENT_ID ?? 'svc-social',
+    /** Empty secret connects anonymously (dev broker without the go-auth plugin only). */
+    clientSecret: process.env.MQTT_CLIENT_SECRET ?? '',
+    /** Defaults to `${OIDC_ISSUER}/protocol/openid-connect/token` (client_credentials). */
+    tokenUrl: process.env.MQTT_TOKEN_URL || `${issuer}/protocol/openid-connect/token`,
+    /** Notifications are published to `{topicRoot}/{playerId}`. */
+    topicRoot: process.env.MQTT_TOPIC_ROOT || 'notify',
+  },
+  /** In-game bug reports relayed to a Discord webhook; an empty URL turns the feature off. */
+  bugReport: {
+    /** The webhook URL — a SECRET (whoever holds it can post): from a Kubernetes Secret, never logged. */
+    webhookUrl: process.env.DISCORD_BUG_WEBHOOK_URL ?? '',
+    /** The webhook's channel is a forum: each report opens a post named after its title. */
+    forum: process.env.DISCORD_BUG_WEBHOOK_FORUM === 'true',
+    /** Forum tag ids applied to each post (CSV), for a forum that requires a tag. */
+    forumTagIds: (process.env.DISCORD_BUG_WEBHOOK_TAG_IDS ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean),
+    /** Label of this environment in a report's title (`[BUG][PREPROD]…`); empty leaves it out. */
+    environment: process.env.BUG_REPORT_ENVIRONMENT ?? '',
+    /** Shortest time between two reports of one player. */
+    minIntervalSeconds: int('BUG_REPORT_MIN_INTERVAL_SECONDS', 60),
+    /** Reports one player may send in 24 hours. */
+    dailyMax: int('BUG_REPORT_DAILY_MAX', 20),
   },
   /** Reputation deltas and automatic sanction thresholds (all thresholds are negative scores). */
   reputation: {

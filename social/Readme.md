@@ -1,13 +1,13 @@
 # Service social
 
 API sociale de DyingStar : profils joueurs, amis, présence, corporations, politique, réputation et modération.
-Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak validé via JWKS (`jose`).
+Stack : Node 22, TypeScript, Express 4, drizzle-orm + PostgreSQL, JWT Keycloak validé via JWKS (`jose`), cache Valkey (présence en ligne avec TTL + accumulateur de temps de jeu, optionnel).
 
 ## Lancer en local
 
 ```bash
 cp .env.example .env          # ajuster DATABASE_URL, OIDC_ISSUER, INTERNAL_SERVICE_CLIENTS
-docker compose -f docker/docker-compose.yml --env-file .env up   # API (watch) + postgres
+docker compose -f docker/docker-compose.yml --env-file .env up   # API (watch) + postgres + valkey
 ```
 
 Ou avec un Postgres déjà disponible :
@@ -40,6 +40,24 @@ Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en 
 | `INTERNAL_DEV_BYPASS` | Accepter `X-Internal-Key` sur `/api/internal/*` (ignoré en production) |
 | `AUTH_DEV_BYPASS` | Accepter `X-Player-Id` (+ `X-Player-Name`, `X-Player-Roles`) sans JWT (dev uniquement) |
 | `REPUTATION_*` | Pénalités (blocage, signalement, signalement confirmé), seuils de sanctions automatiques (`WARN_AT`, `MUTE_AT`, `SUSPEND_AT`, `ESCALATE_AT`), durées, réhabilitation (`REHAB_AFTER_DAYS`, `REHAB_STEP`, `REHAB_INTERVAL_MINUTES`) — voir `.env.example` |
+| `VALKEY_URL` | URL du cache Valkey ; **vide = cache désactivé** (la base seule fait foi, comportement historique) |
+| `PRESENCE_TTL_SECONDS` | TTL de présence en cache (défaut `90`) : sans heartbeat pendant ce délai, un joueur repasse `offline` |
+| `PLAYTIME_FLUSH_INTERVAL_MINUTES` | Intervalle de flush du temps de jeu accumulé vers PostgreSQL (défaut `5`, `0` désactive le scheduler) |
+| `PRESENCE_BATCH_MAX` | Joueurs max par heartbeat batch (défaut `5000`) |
+| `DISCORD_BUG_WEBHOOK_URL` | Webhook Discord des rapports de bug en jeu — **secret** (qui l'a peut poster), un par environnement ; **vide = fonction éteinte** (`503 BUG_REPORT_DISABLED`) |
+| `DISCORD_BUG_WEBHOOK_FORUM`, `DISCORD_BUG_WEBHOOK_TAG_IDS` | `true` si le salon du webhook est un forum (chaque rapport ouvre un fil nommé par son titre) ; étiquettes de forum à poser (CSV d'identifiants) |
+| `BUG_REPORT_ENVIRONMENT` | Étiquette de l'environnement dans le titre (`[BUG][PREPROD]…`) |
+| `BUG_REPORT_MIN_INTERVAL_SECONDS`, `BUG_REPORT_DAILY_MAX` | Rythme par joueur (défauts `60` s et `20` par 24 h, en mémoire) |
+
+## Cache Valkey (présence + temps de jeu)
+
+Valkey est **dédié à ce service**, tourne **sans persistance** (`--save "" --appendonly no`) et n'est jamais contacté directement par les autres services : ils passent par l'API interne comme avant.
+
+- **Présence** : les heartbeats (`PUT /players/presence/batch`, ~1 req/min par serveur de jeu, ou la route par joueur pour les transitions) font un `SET presence:{id} … EX 90` — **zéro écriture DB par heartbeat**. La base n'est écrite qu'aux changements de statut (`online`/`mission`/`offline`). Absent du heartbeat → expiration TTL → `offline` automatique (pas besoin d'événement de déconnexion). Une ligne DB plus vieille que le TTL est lue `offline` (règle anti-stale après un redémarrage du cache). `location.position` est en mètres **dans le repère du corps nommé par `scene`** (`scene: "space"` = espace ouvert, repère du système) — même convention que les POI d'Inventory et le player-state de Mission, pour que présence et POI ne divergent jamais.
+- **Temps de jeu** : `POST /players/:id/stats` fait un `INCRBY playtime:{id}` ; toutes les `PLAYTIME_FLUSH_INTERVAL_MINUTES` un job `GETDEL` + UPDATE batchée écrit les deltas en base. Perte maximale en cas de redémarrage de Valkey : un intervalle de flush. Les lectures (`/api/me`, profil interne/admin) combinent la base + le delta en attente.
+- **Dégradation** : si Valkey est injoignable, chaque opération retombe sur la base (écritures DB reprises à l'ancien rythme), sans erreur côté appelant. `GET /api/health?deep=1` affiche `valkey: ok|down|disabled` (un cache down ne fait jamais échouer le probe).
+
+> **Note d'archi (rien n'est fait)** : la position du joueur est aussi stockée dans Persistence (objet joueur, écriture temps réel) — l'idée de ne garder ici que le `status` et de **lire la position depuis Persistence** est étudiée dans [`docs/position-depuis-persistence.md`](docs/position-depuis-persistence.md) (3 blocages : `system`/`scene` absents de Persistence, API sans auth ni endpoint batch, cache frais non exposé en REST).
 
 ## Pagination (rupture de contrat)
 
@@ -112,6 +130,8 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | GET | `/api/me/sanctions` | Mes sanctions actives (accessible même suspendu) |
 | POST | `/api/reports` `{targetType: player\|corporation, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
 | GET | `/api/reports?limit=&offset=` | Mes signalements |
+| GET | `/api/bug-reports/status` | `{enabled}` : cet environnement relaie-t-il les rapports de bug ? |
+| POST | `/api/bug-reports` `{title, severity?, description, steps?, actual?, expected?, context?, screenshot?, log?}` | Rapport de bug en jeu sur le gabarit QA (sévérité `blocker` / `major` / `minor` / `cosmetic` : pastille de couleur et mot dans le titre ; description, étapes, résultat obtenu, résultat attendu), relayé au salon QA de Discord (capture JPEG/PNG en base64, fin du journal du client ; corps jusqu'à 8 Mo). Les sections sont titrées dans la langue de la requête. Rien n'est stocké ; l'auteur est celui du jeton |
 
 Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 
@@ -209,11 +229,14 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | Méthode | Route | Rôle requis | Description |
 |---|---|---|---|
 | PUT | `/api/internal/players/:playerId` `{displayName}` | `social:profile:write` | Créer le profil au login (nom existant conservé) |
-| GET | `/api/internal/players/:playerId` | `social:profile:read` | Profil complet (**réputation** inclus) ou `null` — utilisé par Mission pour les prérequis `min_reputation` |
+| GET | `/api/internal/players/:playerId` | `social:profile:read` | Profil complet (**réputation** + **standing** incluss) ou `null` — utilisé par Mission pour les prérequis `min_reputation` / `min_standing` |
+| GET | `/api/internal/players/:playerId/standing` | `social:profile:read` | **Standing de personnage** par domaine (map `domain → int`, `{}` par défaut) — lu par Mission (prérequis `min_standing`). Inclut le domaine **`general` dérivé** (RMS des 5 catégories : `round(√(Σ valeur² / 5))`) |
+| PATCH | `/api/internal/players/:playerId/standing` `{domain, amount}` | `social:standing:write` | Applique un delta signé non nul sur un domaine (borne `[-100000, 100000]`) — écrit par le jeu pour les récompenses de standing des missions ; **distinct de `reputation`** (modération). Domaine valide = `delivery\|transport\|mining\|exploration\|divers` ; `general` est **réservé** (dérivé, jamais grantie) → `400 STANDING_DOMAIN_RESERVED` |
 | PUT | `/api/internal/players/:playerId/npc` `{displayName, avatarUrl?, faction?, biography?, role?}` | `social:profile:write` | Créer/mettre à jour un profil **PNJ** (nom déjà pris → 409, jamais renommé) |
-| PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` |
-| GET | `/api/internal/players/:playerId/presence` | `social:profile:read` | Statut + localisation (défaut hors ligne / `location: null`) — lu par Mission pour filtrer les missions zonées |
-| POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements) |
+| PUT | `/api/internal/players/:playerId/presence` `{status, location?}` | `social:profile:write` | Transition (login/mission/logout) : `status` ∈ `online\|mission\|offline`, `location{system,scene,position{x,y,z}}` — position en mètres dans le repère du corps nommé par `scene` ; écrit dans le cache (TTL) ; la base ne suit qu'aux changements de statut |
+| GET | `/api/internal/players/:playerId/presence` | `social:profile:read` | Statut + localisation (défaut hors ligne / `location: null`) — lu par Mission pour filtrer les missions zonées ; cache d'abord, base en repli |
+| PUT | `/api/internal/players/presence/batch` `{players:[{playerId, status?, location?}]}` | `social:profile:write` | **Heartbeat groupé** (≤ 5000 joueurs, ~1 req/min par serveur de jeu) : rafraîchit le TTL de tous les joueurs actifs ; absents du appel → expiration automatique en `offline` ; `status` omis = keep du statut live (défaut `online`) ; `location` dans le repère local du corps nommé par `scene` — répond `{refreshed, unknown}` |
+| POST | `/api/internal/players/:playerId/stats` | `social:player:write` | `playtimeSecondsDelta, role, reputationDelta, reputationReason` (la réputation passe par le système d'événements ; le playtime est accumulé dans le cache puis flushé en base périodiquement) |
 | GET | `/api/internal/players/:playerId/sanctions` | `social:sanctions:read` | Sanctions actives (pour appliquer mute/ban côté jeu) |
 | POST | `/api/internal/reputation/rehabilitate` | `social:reputation:write` | Lancer une passe de réhabilitation |
 | POST | `/api/internal/players/:playerId/activity` `{type, details?}` | `social:player:write` | Ajouter une entrée d'activité |
@@ -230,7 +253,12 @@ La **trésorerie**, les **taxes** et l'**émission monétaire** sont gérées pa
 | PATCH | `/api/internal/corporations/:corporationId/members/:playerId` `{rankId}` | `social:corporation:write` | Changer le grade d'un membre (agit comme le CEO) |
 | DELETE | `/api/internal/corporations/:corporationId/members/:playerId` | `social:corporation:write` | Retirer un membre (agit comme le CEO) |
 | GET | `/api/internal/corporations/:corporationId/politics` | `social:corporation:read` | Siège fiscal de la corporation (`politicalEntityId`) — pour le miroir vers economie |
-| POST | `/api/internal/politics` `{headId, type, name, description?, bannerUrl?}` | `social:politics:write` | Créer une entité politique avec un chef explicite (joueur ou **PNJ**) |
+| POST | `/api/internal/politics` `{headId?, type, name, description?, bannerUrl?}` | `social:politics:write` | Créer une entité politique avec un chef explicite (joueur ou **PNJ**), ou **sans chef** (`headId` omis/`null` : entité gouvernée par le système, office de tête vacant ; PATCH/DELETE/transfer internes → `409 NO_HEAD`) |
+| GET | `/api/internal/politics?type=&parentId=&name=&limit=&offset=` | `social:politics:read` | Recherche exacte (niveau, parent direct, **nom exact** pour un amorçage idempotent) — `{items, total, limit, offset}` |
+| GET | `/api/internal/politics/:entityId` | `social:politics:read` | Entité (`id, type, name, description, bannerUrl, parentId, headId, createdAt, updatedAt`) ou `404` |
+| GET | `/api/internal/politics/:entityId/children?limit=&offset=` | `social:politics:read` | Entités directement rattachées (paginé, `memberCount`) |
+| GET | `/api/internal/politics/:entityId/ancestors` | `social:politics:read` | Ancêtres du parent direct jusqu'à la racine (liste ordonnée, vide si indépendante) |
+| PUT | `/api/internal/politics/:entityId/parent` `{parentId: uuid\|null}` | `social:politics:write` | Rattacher/détacher sans permission de membre (mêmes règles : niveau strictement supérieur `400 INVALID_PARENT_LEVEL`, cycles `409 POLITICAL_CYCLE`) ; journalisé avec un acteur `null` |
 | PATCH | `/api/internal/politics/:entityId` | `social:politics:write` | Modifier (agit comme le chef courant) |
 | DELETE | `/api/internal/politics/:entityId` | `social:politics:write` | Dissoudre (agit comme le chef courant) |
 | POST | `/api/internal/politics/:entityId/transfer` `{playerId}` | `social:politics:write` | Transférer la tête (agit comme le chef courant) |
@@ -304,8 +332,9 @@ Social lui-même ne passe pas par l'endpoint : `requireCorporationPermission` /
 
 ```
 src/
-  index.ts          bootstrap Express, migrations, listen
+  index.ts          bootstrap Express, cache, migrations, listen
   config/env.ts     variables d'environnement
+  cache/valkey.ts   client Valkey (optionnel, repli base gracieux)
   db/schema/        tables drizzle (profiles, presence, friendships, blocks, encounters, activity, corporations, groups, politics, moderation)
   db/connection.ts  pool pg + drizzle ; db/migrate.ts applique ./drizzle (migration unique `0000_init`) et refuse de démarrer si le schéma manque
   middleware/       auth (JWT joueur / service-account + rôles de capacité), sanctions, validate (zod), errorHandler

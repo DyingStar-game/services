@@ -134,12 +134,12 @@ console.log('\n# kind catalogue and spec validation');
     'kind catalogue',
     [
       catalog.status,
-      catalog.json.objectiveKinds?.some((k) => k.kind === 'deliver_items' && k.evaluation === 'service'),
+      catalog.json.objectiveKinds?.some((k) => k.kind === 'deliver_material' && k.evaluation === 'service'),
       catalog.json.objectiveKinds?.some((k) => k.kind === 'manual' && k.evaluation === 'issuer'),
-      catalog.json.prerequisiteKinds?.some((k) => k.kind === 'has_credits'),
+      catalog.json.prerequisiteKinds?.some((k) => k.kind === 'min_standing'),
       catalog.json.objectiveKinds?.every((k) => typeof k.name === 'string' && k.name.length > 0),
       catalog.json.prerequisiteKinds?.every((k) => typeof k.name === 'string' && k.name.length > 0),
-      Array.isArray(catalog.json.categories) && catalog.json.categories.length >= 10,
+      Array.isArray(catalog.json.categories) && catalog.json.categories.length >= 5,
     ],
     [200, true, true, true, true, true, true],
   );
@@ -187,7 +187,7 @@ console.log('\n# kind catalogue and spec validation');
       frCatalog.json.objectiveKinds?.find((k) => k.kind === 'deliver_material')?.name,
       frCatalog.json.prerequisiteKinds?.find((k) => k.kind === 'owns_items')?.name,
     ],
-    [true, 'Livraison de matériaux', 'Objets requis'],
+    [true, 'Livraison de matériau', 'Objets requis'],
   );
   const enCatalog = await req('GET', '/api/missions/kinds', undefined, asPlayer(A));
   check(
@@ -199,15 +199,15 @@ console.log('\n# kind catalogue and spec validation');
     [true, 'Material delivery'],
   );
 
-  // Category constraint: combat cannot use deliver_material, manual always fits ('all').
+  // Category constraint: exploration cannot use deliver_material, manual always fits ('all').
   const badCategory = await req(
     'POST',
     '/api/missions/validate',
     {
       mission: {
-        title: 'Combat livraison',
-        category: 'combat',
-        objectives: [{ type: 'deliver_material', title: 'x', params: { itemId: 'ore' } }],
+        title: 'Exploration livraison',
+        category: 'exploration',
+        objectives: [{ type: 'transport_passenger', title: 'x', params: { passengerId: A, zone: { kind: 'poi', poiId: A } } }],
       },
     },
     asPlayer(A),
@@ -216,23 +216,23 @@ console.log('\n# kind catalogue and spec validation');
   const okCategory = await req(
     'POST',
     '/api/missions/validate',
-    { mission: { title: 'Combat ok', category: 'combat', objectives: [{ type: 'manual', title: 'x' }] } },
+    { mission: { title: 'Exploration ok', category: 'exploration', objectives: [{ type: 'manual', title: 'x' }] } },
     asPlayer(A),
   );
   check('category accepts matching kind', [okCategory.status, okCategory.json.valid], [200, true]);
-  const genericBypass = await req(
+  const diversBypass = await req(
     'POST',
     '/api/missions/validate',
     {
       mission: {
-        title: 'Generic libre',
-        category: 'generic',
-        objectives: [{ type: 'deliver_material', title: 'x', params: { itemId: 'ore' } }],
+        title: 'Divers libre',
+        category: 'divers',
+        objectives: [{ type: 'deliver_material', title: 'x', params: { goodType: 'ore.iron', zone: { kind: 'poi', poiId: A } } }],
       },
     },
     asPlayer(A),
   );
-  check('generic category bypasses the constraint', [genericBypass.status, genericBypass.json.valid], [200, true]);
+  check('divers category bypasses the constraint', [diversBypass.status, diversBypass.json.valid], [200, true]);
 }
 
 // ── Mission lifecycle ────────────────────────────────────────────────────────
@@ -252,11 +252,8 @@ let deliveryObjectiveId;
       issuerType: 'system',
       objectives: [
         {
-          type: 'deliver_material',
+          type: 'manual',
           title: 'Minerai livré',
-          targetQuantity: 10,
-          unit: 'units',
-          params: { itemId: 'iron_ore' },
         },
       ],
     },
@@ -265,7 +262,6 @@ let deliveryObjectiveId;
   check('create mission', [created.status, created.json.mission?.status, created.json.objectives?.length], [201, 'available', 1]);
   deliveryMissionId = created.json.mission?.id;
   deliveryObjectiveId = created.json.objectives?.[0]?.id;
-  check('objective kind params stored', created.json.objectives?.[0]?.params, { itemId: 'iron_ore' });
 
   const list = await req('GET', '/api/missions', undefined, asPlayer(A));
   check('available missions listed for a player', list.json.missions?.some((m) => m.id === deliveryMissionId), true);
@@ -280,24 +276,13 @@ let deliveryObjectiveId;
   const duplicate = await req('POST', `/api/missions/${deliveryMissionId}/accept`, undefined, asPlayer(A));
   check('accepting twice', [duplicate.status, duplicate.json.error], [409, 'ALREADY_ASSIGNED']);
 
-  const partial = await req(
+  const confirmed = await req(
     'POST',
-    `/api/missions/${deliveryMissionId}/objectives/${deliveryObjectiveId}/progress`,
-    { quantity: 4 },
+    `/api/missions/${deliveryMissionId}/objectives/${deliveryObjectiveId}/confirm`,
+    undefined,
     asPlayer(A),
   );
-  check('partial progress', [partial.json.objective?.currentProgress, partial.json.objective?.status, partial.json.allComplete], [4, 'in_progress', false]);
-
-  const early = await req('POST', `/api/missions/${deliveryMissionId}/complete`, undefined, asPlayer(A));
-  check('completing an unfinished mission', [early.status, early.json.error], [409, 'OBJECTIVES_INCOMPLETE']);
-
-  const done = await req(
-    'POST',
-    `/api/missions/${deliveryMissionId}/objectives/${deliveryObjectiveId}/progress`,
-    { quantity: 6 },
-    asPlayer(A),
-  );
-  check('progress reaches the target', [done.json.objective?.currentProgress, done.json.objective?.status, done.json.allComplete], [10, 'completed', true]);
+  check('manual confirmation', [confirmed.json.objective?.status, confirmed.json.allComplete, confirmed.json.completed], ['completed', true, true]);
 
   const completed = await req('POST', `/api/missions/${deliveryMissionId}/complete`, undefined, asPlayer(A));
   check('complete mission', [completed.status, completed.json.assignment?.status, completed.json.assignment?.rewardSettled], [200, 'completed', true]);
@@ -320,11 +305,11 @@ console.log('\n# scenario ordering');
     {
       title: 'Reconnaissance scénarisée',
       kind: 'scenario',
-      category: 'generic',
+      category: 'divers',
       scriptId: 'scenario-scout-1',
       objectives: [
-        { type: 'visit', title: 'Étape 1', targetQuantity: 1, order: 0 },
-        { type: 'visit', title: 'Étape 2', targetQuantity: 1, order: 1 },
+        { type: 'manual', title: 'Étape 1', order: 0 },
+        { type: 'manual', title: 'Étape 2', order: 1 },
       ],
     },
     internal,
@@ -335,17 +320,17 @@ console.log('\n# scenario ordering');
   await req('POST', `/api/missions/${missionId}/accept`, undefined, asPlayer(B));
   const locked = await req(
     'POST',
-    `/api/missions/${missionId}/objectives/${second.id}/progress`,
-    { quantity: 1 },
+    `/api/missions/${missionId}/objectives/${second.id}/confirm`,
+    undefined,
     asPlayer(B),
   );
   check('locked scenario objective', [locked.status, locked.json.error], [409, 'OBJECTIVE_LOCKED']);
 
-  await req('POST', `/api/missions/${missionId}/objectives/${first.id}/progress`, { quantity: 1 }, asPlayer(B));
+  await req('POST', `/api/missions/${missionId}/objectives/${first.id}/confirm`, undefined, asPlayer(B));
   const unlocked = await req(
     'POST',
-    `/api/missions/${missionId}/objectives/${second.id}/progress`,
-    { quantity: 1 },
+    `/api/missions/${missionId}/objectives/${second.id}/confirm`,
+    undefined,
     asPlayer(B),
   );
   check('unlocked after the previous step', [unlocked.status, unlocked.json.allComplete], [200, true]);
@@ -353,7 +338,7 @@ console.log('\n# scenario ordering');
   const duplicateScript = await req(
     'POST',
     '/api/internal/missions',
-    { title: 'Doublon', scriptId: 'scenario-scout-1', objectives: [{ type: 'visit', title: 'x' }] },
+    { title: 'Doublon', scriptId: 'scenario-scout-1', objectives: [{ type: 'manual', title: 'x' }] },
     internal,
   );
   check('duplicate scriptId', [duplicateScript.status, duplicateScript.json.error], [409, 'DUPLICATE_SCRIPT_ID']);
@@ -377,14 +362,6 @@ console.log('\n# manual objective (issuer confirmation)');
   check('manual objective target normalized', created.json.objectives?.[0]?.targetQuantity, 1);
 
   await req('POST', `/api/missions/${missionId}/accept`, undefined, asPlayer(A));
-
-  const push = await req(
-    'POST',
-    `/api/missions/${missionId}/objectives/${objectiveId}/progress`,
-    { quantity: 1 },
-    asPlayer(A),
-  );
-  check('push on a non-game kind is rejected', [push.status, push.json.error], [409, 'OBJECTIVE_NOT_PUSHABLE']);
 
   const confirmed = await req(
     'POST',
@@ -420,7 +397,7 @@ let zAreaId;
     const created = await req(
       'POST',
       '/api/internal/missions',
-      { title, zones, objectives: [{ type: 'visit', title: 'Exploration' }] },
+      { title, zones, objectives: [{ type: 'manual', title: 'Exploration' }] },
       internal,
     );
     return created.json.mission?.id;
@@ -455,7 +432,7 @@ let zAreaId;
     const bogus = await req(
       'POST',
       '/api/internal/missions',
-      { title: 'Zone poi fantôme', zones: [{ kind: 'poi', poiId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], objectives: [{ type: 'visit', title: 'x' }] },
+      { title: 'Zone poi fantôme', zones: [{ kind: 'poi', poiId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], objectives: [{ type: 'manual', title: 'x' }] },
       internal,
     );
     check('mission on an unknown POI', [bogus.status, bogus.json.error], [400, 'POI_NOT_FOUND']);
@@ -463,7 +440,7 @@ let zAreaId;
     const legacy = await req(
       'POST',
       '/api/internal/missions',
-      { title: 'Zone legacy', zones: [{ kind: 'scene', system: 'tarsis', scene: 'tarsis_1/new-paris' }], objectives: [{ type: 'visit', title: 'x' }] },
+      { title: 'Zone legacy', zones: [{ kind: 'scene', system: 'tarsis', scene: 'tarsis_1/new-paris' }], objectives: [{ type: 'manual', title: 'x' }] },
       internal,
     );
     check('legacy scene zone rejected', [legacy.status, legacy.json.error], [400, 'VALIDATION_ERROR']);
@@ -540,7 +517,7 @@ console.log('\n# capacity, listing and cancellation');
   const created = await req(
     'POST',
     '/api/internal/missions',
-    { title: 'Mission unique', maxAssignees: 1, objectives: [{ type: 'visit', title: 'Unique' }] },
+    { title: 'Mission unique', maxAssignees: 1, objectives: [{ type: 'manual', title: 'Unique' }] },
     internal,
   );
   const missionId = created.json.mission?.id;
@@ -578,14 +555,6 @@ console.log('\n# validation');
 
   const badId = await req('GET', '/api/missions/not-a-uuid', undefined, asPlayer(A));
   check('non-uuid mission id', [badId.status, badId.json.error], [400, 'VALIDATION_ERROR']);
-
-  const zeroProgress = await req(
-    'POST',
-    `/api/missions/${deliveryMissionId}/objectives/${deliveryObjectiveId}/progress`,
-    { quantity: 0 },
-    asPlayer(A),
-  );
-  check('zero progress', [zeroProgress.status, zeroProgress.json.error], [400, 'VALIDATION_ERROR']);
 
   const issuerNoOrg = await req(
     'POST',
@@ -625,7 +594,7 @@ if (ECONOMY_BASE) {
       title: 'Prime économique',
       category: 'transport',
       rewards: [{ type: 'credits', currency: 'credits', amount: reward }],
-      objectives: [{ type: 'transport', title: 'Livrer la cargaison', params: { itemId: 'iron_ore' } }],
+      objectives: [{ type: 'manual', title: 'Livrer la cargaison' }],
     },
     internal,
   );
@@ -635,7 +604,7 @@ if (ECONOMY_BASE) {
 
   const before = await playerBalance(C);
   await req('POST', `/api/missions/${missionId}/accept`, undefined, asPlayer(C, 'carol'));
-  await req('POST', `/api/missions/${missionId}/objectives/${objectiveId}/progress`, { quantity: 1 }, asPlayer(C, 'carol'));
+  await req('POST', `/api/missions/${missionId}/objectives/${objectiveId}/confirm`, undefined, asPlayer(C, 'carol'));
   const completed = await req('POST', `/api/missions/${missionId}/complete`, undefined, asPlayer(C, 'carol'));
   check('economic reward settled', [completed.status, completed.json.settlement?.reason], [200, 'settled']);
   check('economy wallet credited', (await playerBalance(C)) - before, reward);
@@ -653,7 +622,7 @@ if (ECONOMY_BASE) {
       title: 'Escorte partagée',
       maxAssignees: 2,
       rewards: [{ type: 'credits', currency: 'credits', amount: total }],
-      objectives: [{ type: 'visit', title: 'Escorter le convoi' }],
+      objectives: [{ type: 'manual', title: 'Escorter le convoi' }],
     },
     internal,
   );
@@ -664,7 +633,7 @@ if (ECONOMY_BASE) {
   const dBefore = await playerBalance(D);
   await req('POST', `/api/missions/${multiId}/accept`, undefined, asPlayer(C, 'carol'));
   await req('POST', `/api/missions/${multiId}/accept`, undefined, asPlayer(D, 'dave'));
-  await req('POST', `/api/missions/${multiId}/objectives/${multiObjective}/progress`, { quantity: 1 }, asPlayer(C, 'carol'));
+  await req('POST', `/api/missions/${multiId}/objectives/${multiObjective}/confirm`, undefined, asPlayer(C, 'carol'));
   const multiDone = await req('POST', `/api/missions/${multiId}/complete`, undefined, asPlayer(C, 'carol'));
   check('multiplayer completes every participant', [multiDone.status, multiDone.json.assignments?.length, multiDone.json.settlements?.length], [200, 2, 2]);
   check('split shares sum to the reward', (await playerBalance(C)) - cBefore + ((await playerBalance(D)) - dBefore), total);
@@ -679,7 +648,7 @@ if (ECONOMY_BASE) {
     {
       title: 'Contrat de joueur',
       rewards: [{ type: 'credits', currency: 'credits', amount: escrow }],
-      objectives: [{ type: 'deliver_material', title: 'Apporter la marchandise', targetQuantity: 5, params: { itemId: 'iron_ore' } }],
+      objectives: [{ type: 'manual', title: 'Apporter la marchandise' }],
     },
     asPlayer(C, 'carol'),
   );
@@ -697,21 +666,20 @@ if (ECONOMY_BASE) {
     {
       title: 'Trop cher',
       rewards: [{ type: 'credits', currency: 'credits', amount: 1_000_000 }],
-      objectives: [{ type: 'visit', title: 'Impossible' }],
+      objectives: [{ type: 'manual', title: 'Impossible' }],
     },
     asPlayer(A, 'alice'),
   );
   check('escrow refused without funds', [broke.status, broke.json.error], [409, 'INSUFFICIENT_FUNDS']);
 
-  // ── Prerequisites (has_credits) ─────────────────────────────────────────────
-  const balance = await playerBalance(A);
+  // ── Prerequisites (min_standing) ────────────────────────────────────────────
   const poor = await req(
     'POST',
     '/api/internal/missions',
     {
-      title: 'Prérequis riche',
-      prerequisites: [{ kind: 'has_credits', params: { amount: Math.max(balance + 1_000_000, 2_000_000_000) } }],
-      objectives: [{ type: 'visit', title: 'Réservé aux riches' }],
+      title: 'Prérequis standing élevé',
+      prerequisites: [{ kind: 'min_standing', params: { domain: 'general', min: 100000 } }],
+      objectives: [{ type: 'manual', title: 'Réservé aux vétérans' }],
     },
     internal,
   );
@@ -723,8 +691,8 @@ if (ECONOMY_BASE) {
     '/api/internal/missions',
     {
       title: 'Prérequis ok',
-      prerequisites: [{ kind: 'has_credits', params: { amount: 1 } }],
-      objectives: [{ type: 'visit', title: 'Accessible' }],
+      prerequisites: [{ kind: 'min_standing', params: { domain: 'general', min: -100000 } }],
+      objectives: [{ type: 'manual', title: 'Accessible' }],
     },
     internal,
   );

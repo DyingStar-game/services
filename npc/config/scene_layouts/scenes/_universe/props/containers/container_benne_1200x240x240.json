@@ -1,0 +1,46 @@
+{
+	"doors": [],
+	"footprint": {
+		"center": [
+			0.0,
+			1.25,
+			0.0
+		],
+		"size": [
+			12.0,
+			2.5,
+			2.4
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [
+		{
+			"corners": [
+				[
+					-6.0,
+					-1.2
+				],
+				[
+					6.0,
+					-1.2
+				],
+				[
+					6.0,
+					1.2
+				],
+				[
+					-6.0,
+					1.2
+				]
+			],
+			"path": "CollisionShape3D",
+			"y_max": 2.5,
+			"y_min": 0.0
+		}
+	],
+	"scenename": "scenes/_universe/props/containers/container_benne_1200x240x240.tscn",
+	"schema_version": 1,
+	"seats": []
+}

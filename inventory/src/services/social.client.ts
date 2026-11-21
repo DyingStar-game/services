@@ -190,3 +190,40 @@ export async function authorizeAction(input: {
     body: text,
   });
 }
+
+// ── Player notifications ─────────────────────────────────────────────────────
+
+/** A best-effort push relayed by Social to the player's MQTT channel. */
+export interface PlayerNotification {
+  type: string;
+  title?: string;
+  body?: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Asks Social to notify a player (only while they are online; the message is
+ * ephemeral — no offline storage, so `{ delivered: false }` is not an error).
+ * @param playerId - Target player.
+ * @param notification - Content (`type` drives client-side rendering).
+ * @returns Whether the broker accepted the message.
+ */
+export async function notifyPlayer(
+  playerId: string,
+  notification: PlayerNotification,
+): Promise<{ delivered: boolean; reason?: string }> {
+  if (!env.social.apiUrl) {
+    throw new HttpError(503, 'SOCIAL_NOT_CONFIGURED', 'SOCIAL_API_URL is not configured');
+  }
+  const res = await fetch(`${env.social.apiUrl}/api/internal/players/${playerId}/notifications`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': currentLang(), ...(await authHeaders()) },
+    body: JSON.stringify(notification),
+  });
+  if (res.ok) return (await res.json()) as { delivered: boolean; reason?: string };
+  const text = await res.text().catch(() => '');
+  throw new HttpError(502, 'SOCIAL_LOOKUP_FAILED', `Social lookup failed (${res.status}): ${text}`, {
+    status: res.status,
+    body: text,
+  });
+}

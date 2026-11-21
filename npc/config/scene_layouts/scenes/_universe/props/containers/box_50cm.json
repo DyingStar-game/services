@@ -1,0 +1,46 @@
+{
+	"doors": [],
+	"footprint": {
+		"center": [
+			0.0,
+			0.0,
+			0.0
+		],
+		"size": [
+			0.5,
+			0.5,
+			0.5
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [
+		{
+			"corners": [
+				[
+					-0.25,
+					-0.25
+				],
+				[
+					0.25,
+					-0.25
+				],
+				[
+					0.25,
+					0.25
+				],
+				[
+					-0.25,
+					0.25
+				]
+			],
+			"path": "CollisionShape3D2",
+			"y_max": 0.25,
+			"y_min": -0.25
+		}
+	],
+	"scenename": "scenes/_universe/props/containers/box_50cm.tscn",
+	"schema_version": 1,
+	"seats": []
+}

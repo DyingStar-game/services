@@ -8,9 +8,9 @@ import { env } from '../config/env.js';
 import { currentLang } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 
-/** Inventory holder reference. */
+/** Inventory holder reference (`warehouse` id = persistence POI uuid). */
 export interface Holder {
-  holderType: 'player' | 'npc' | 'corporation' | 'system';
+  holderType: 'player' | 'npc' | 'corporation' | 'system' | 'warehouse';
   holderId: string;
 }
 
@@ -92,6 +92,11 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (res.status === 409 && error?.error === 'INSUFFICIENT_GOODS') {
     throw new HttpError(409, 'INSUFFICIENT_GOODS', error.message ?? 'Insufficient goods');
   }
+  // A missing target (holder, good, instance) is a permanent client error: the mission
+  // layer uses it to fail an assignment instead of retrying forever.
+  if (res.status === 404) {
+    throw new HttpError(404, 'INVENTORY_NOT_FOUND', error?.message ?? `Inventory ${method} ${path}: not found`);
+  }
   throw new HttpError(502, 'INVENTORY_CALL_FAILED', `Inventory ${method} ${path} failed (${res.status}): ${error?.message ?? text}`, {
       method,
       path,
@@ -162,6 +167,9 @@ interface PoiCacheEntry {
 }
 const poiCache = new Map<string, PoiCacheEntry>();
 
+/** Ids Inventory resolves in one call (its `resolvePoisBody`: `ids` at most 100). */
+export const RESOLVE_BATCH = 100;
+
 /**
  * Resolves POI geometries through the Inventory internal API (batched, 60 s cache).
  * Unknown ids are absent from the returned map (a zone on a deleted POI never matches).
@@ -185,12 +193,15 @@ export async function resolvePois(ids: string[]): Promise<Map<string, PoiGeometr
     missing.push(id);
   }
 
-  if (missing.length > 0) {
+  // Inventory takes at most RESOLVE_BATCH ids a call and refuses the whole call past it: asked in one
+  // go, a world with more POIs than that had every zoned mission hidden from everybody.
+  for (let start = 0; start < missing.length; start += RESOLVE_BATCH) {
+    const batch = missing.slice(start, start + RESOLVE_BATCH);
     const body = await call<{ pois: PoiGeometry[] }>('POST', '/api/internal/pois/resolve', {
-      ids: missing,
+      ids: batch,
     });
     const found = new Map(body.pois.map((poi) => [poi.id, poi]));
-    for (const id of missing) {
+    for (const id of batch) {
       const value = found.get(id) ?? null;
       poiCache.set(id, { value, expiresAt: Date.now() + POI_TTL_MS });
       if (value) resolved.set(id, value);
@@ -199,11 +210,13 @@ export async function resolvePois(ids: string[]): Promise<Map<string, PoiGeometr
   return resolved;
 }
 
-/** One fungible stack with its reserved and available quantities. */
+/** One fungible stack with its reserved, carried and available quantities. */
 export interface StackView {
   goodType: string;
   quantity: number;
   held: number;
+  /** Physically carried quantity (e.g. crates in a player's hold). */
+  carried: number;
   available: number;
   [key: string]: unknown;
 }

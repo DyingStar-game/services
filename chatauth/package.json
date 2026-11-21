@@ -6,7 +6,8 @@
   "description": "Auth adapter for the text-chat MQTT broker: validates Keycloak JWTs (JWKS) and answers go-auth user/acl checks.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test 'test/*.test.js'"
   },
   "dependencies": {
     "express": "^4.21.2",

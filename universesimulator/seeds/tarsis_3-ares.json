@@ -1,0 +1,144 @@
+{
+  "economyScale": 25,
+  "federation": {
+    "code": "ARES",
+    "kind": "corporation",
+    "name": "ARES",
+    "planetInternalName": "tarsis_3",
+    "currency": "credits",
+    "managedCategories": [
+      "ore"
+    ],
+    "initialTreasury": 5000000,
+    "treasuryFloor": 200000,
+    "mintBatch": 1000000,
+    "mintCeiling": 1000000000,
+    "elasticity": 0.8,
+    "priceMinFactor": 0.25,
+    "priceMaxFactor": 2.0,
+    "spread": 0.1,
+    "freightRatePerTkm": 25.0,
+    "urgencyMax": 1.0,
+    "minerShare": 0.6,
+    "legBaseReward": 200
+  },
+  "resources": [
+    {
+      "code": "ore.gold",
+      "name": "Crushed gold ore",
+      "nameFr": "Minerai d'or concassé",
+      "category": "ore",
+      "unit": "kg",
+      "inventoryGoodType": "ore.gold",
+      "massPerUnitKg": 1.0,
+      "basePrice": 30.0,
+      "crateKg": 15.0,
+      "mined": "gold",
+      "minedFr": "de l'or"
+    },
+    {
+      "code": "ingot.gold",
+      "name": "Gold ingots",
+      "nameFr": "Lingots d'or",
+      "category": "ore",
+      "unit": "kg",
+      "inventoryGoodType": "ingot.gold",
+      "massPerUnitKg": 1.0,
+      "basePrice": 60.0,
+      "crateKg": 15.0,
+      "refinedFrom": "ore.gold"
+    }
+  ],
+  "villages": {
+    "defaults": {
+      "policies": [],
+      "flows": [],
+      "capacities": [
+        {
+          "resource": "ore.gold",
+          "capacity": 800,
+          "initialStock": 0
+        },
+        {
+          "resource": "ingot.gold",
+          "capacity": 800,
+          "initialStock": 0
+        }
+      ]
+    },
+    "byType": {
+      "factory": {
+        "policies": [
+          {
+            "resource": "ingot.gold",
+            "minThreshold": 40,
+            "targetLevel": 320,
+            "perThousand": true
+          },
+          {
+            "resource": "ore.gold",
+            "minThreshold": 60,
+            "targetLevel": 320,
+            "perThousand": true
+          }
+        ],
+        "flows": [
+          {
+            "resource": "ingot.gold",
+            "ratePerHour": -4,
+            "perThousand": true,
+            "source": "industry",
+            "label": "Foundries"
+          }
+        ],
+        "capacities": [
+          {
+            "resource": "ingot.gold",
+            "capacity": 800,
+            "initialBelowThreshold": 0.9
+          },
+          {
+            "resource": "ore.gold",
+            "capacity": 800,
+            "initialBelowThreshold": 0.9
+          }
+        ],
+        "refines": true
+      },
+      "mining": {
+        "mineralSources": [
+          {
+            "resource": "ore.gold",
+            "remainingUnits": 80000,
+            "maxUnitsPerMission": 400
+          }
+        ],
+        "policies": [
+          {
+            "resource": "ore.gold",
+            "minThreshold": 360,
+            "targetLevel": 720,
+            "perThousand": true
+          }
+        ],
+        "capacities": [
+          {
+            "resource": "ore.gold",
+            "capacity": 800,
+            "initialBelowThreshold": 0.9
+          }
+        ]
+      }
+    },
+    "typeByNamePrefix": {
+      "M": "mining",
+      "F": "factory"
+    },
+    "overrides": {}
+  },
+  "routes": {
+    "nearestNeighbours": 3,
+    "maxDistanceM": 60000,
+    "extra": []
+  }
+}

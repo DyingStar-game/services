@@ -1,0 +1,57 @@
+# Role templates applied to an NPC when it is assigned automatically at its
+# first spawn (ROLES_PATH). The first `storekeeper.slots` NPCs that spawn in a
+# Mining village (Mxxxx) become its storekeepers (magasiniers); the next ones
+# are villagers. An admin can override any of this per NPC afterwards.
+
+storekeeper:
+  slots: 5
+  # Pattern of config/schedules.yaml (imported into the database); `{slot}` is 1..5.
+  schedule: "magasinier_{slot}"
+  action_profile:
+    - detect_player_and_greet
+    - reception_players
+    - going_to_work
+    - depot_store_reception_to_temp_area
+    - depot_store_item
+    - depot_reception_coordinator
+    - go_to_meal
+    - mandatory_activity
+    - go_home
+  action_config:
+    depot_store_reception_to_temp_area: { boxes_type_allowed: ["hauling_box.tscn"] }
+    depot_store_item: { stand_distance_m: 1.0 }
+  # Positions LOCAL to the village's cargo_depot (its uuid is the anchor of
+  # place_where_work / meal_place / mandatory_place), one per slot. Keyed by the
+  # depot scene file (universesimulator `scenename`); `default` for any other.
+  # Taken from the magasiniers of config/npcs.yaml.sample (depot a9340169-…).
+  layouts:
+    default:
+      work:
+        - { x: 1.85, y: 0.479, z: 5.913 }
+        - { x: 1.85, y: 0.479, z: 6.913 }
+        - { x: 1.85, y: 0.479, z: 7.913 }
+        - { x: 1.85, y: 0.479, z: 8.913 }
+        - { x: 1.85, y: 0.479, z: 9.913 }
+      meal:
+        - { x: -2.803, y: 0.0, z: 86.452 }
+        - { x: -3.445, y: 0.0, z: 88.602 }
+        - { x: -1.782, y: 0.0, z: 90.489 }
+        - { x: -2.42, y: 0.0, z: 93.247 }
+        - { x: -4.395, y: 0.0, z: 91.591 }
+      mandatory:
+        - { x: 4.527, y: 0.0, z: 86.985 }
+        - { x: 2.665, y: 0.0, z: 88.493 }
+        - { x: 4.758, y: 0.0, z: 89.905 }
+        - { x: 3.943, y: 0.0, z: 92.663 }
+        - { x: 1.968, y: 0.0, z: 91.007 }
+
+# Everyone else in a village. No schedule: strolling near the spawn point
+# (their habitation) and greeting players. go_home / go_to_meal need a
+# schedule, so they are left out.
+villager:
+  schedule: null
+  action_profile:
+    - detect_player_and_greet
+    - take_a_walk
+  action_config:
+    take_a_walk: { radius_m: 40.0, pause_s: 30, max_distance_m: 150.0 }

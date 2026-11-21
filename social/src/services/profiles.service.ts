@@ -1,7 +1,7 @@
 /**
  * Player profiles: creation on first contact, updates, search and game-server stats.
  */
-import { and, count, eq, ilike, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, ilike, inArray } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
 import { db } from '../db/connection.js';
@@ -9,6 +9,7 @@ import { playerProfiles, type EntityType, type PlayerProfile, type RpSheet } fro
 import { HttpError, conflict, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
+import { addPlaytimeDelta, withLivePlaytime } from './playtime.service.js';
 
 /** Fields a player may edit on their own profile. */
 export interface ProfilePatch {
@@ -247,22 +248,21 @@ export async function getProfilesByIds(playerIds: string[], limit: number, offse
 
 /**
  * Applies game-server reported stats (playtime delta and absolute role).
+ * The playtime delta goes through the cache (`playtime:{id}`) and reaches the database
+ * on the next flush pass; the returned profile carries the live value.
  * @param playerId - Player id.
  * @param stats - Stats update.
  * @returns Updated profile.
  */
 export async function applyStats(playerId: string, stats: StatsUpdate): Promise<PlayerProfile> {
   await requireProfile(playerId);
-  return db
+  if (stats.playtimeSecondsDelta) {
+    await addPlaytimeDelta(playerId, stats.playtimeSecondsDelta);
+  }
+  const [row] = await db
     .update(playerProfiles)
-    .set({
-      playtimeSeconds: stats.playtimeSecondsDelta
-        ? sql`${playerProfiles.playtimeSeconds} + ${stats.playtimeSecondsDelta}`
-        : undefined,
-      role: stats.role,
-      updatedAt: new Date(),
-    })
+    .set({ role: stats.role, updatedAt: new Date() })
     .where(eq(playerProfiles.playerId, playerId))
-    .returning()
-    .then((rows) => rows[0]);
+    .returning();
+  return withLivePlaytime(row);
 }

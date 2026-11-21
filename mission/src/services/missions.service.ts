@@ -19,17 +19,20 @@ import {
   type MissionObjective,
   type MissionStatus,
   type EscrowPayerType,
+  type EscrowStatus,
   type MissionVisibility,
   type MissionZone,
   type PrerequisiteSpec,
   type RewardComponent,
+  type RewardCredits,
   type ZoneLocation,
 } from '../db/schema/index.js';
 import { getObjectiveKind } from '../kinds/index.js';
 import { HttpError, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
-import { creditHolder, debitHolder, type WalletHolderType } from './economy.client.js';
+import { creditHolder, debitHolder } from './economy.client.js';
 import { createHold, releaseHold } from './inventory.client.js';
+import { notifyMissionEvent } from './notifications.service.js';
 import { settledTotal } from './rewards.service.js';
 import { authorizeAction, getGroup, isCorporationMember } from './social.client.js';
 import { validateMissionSpec, type SpecObjectiveInput } from './spec.service.js';
@@ -46,10 +49,15 @@ function isUniqueViolation(err: unknown): boolean {
 export interface CreateMissionInput {
   title: string;
   description?: string;
+  /** The texts per language (`{en, fr}`), served by `Accept-Language`. */
+  titleI18n?: Record<string, string>;
+  descriptionI18n?: Record<string, string>;
   kind?: MissionKind;
   category?: MissionCategory;
   issuerType?: MissionIssuerType;
   issuerId?: string | null;
+  /** In-fiction giver (faction + optional division), shown by the game. */
+  giver?: { faction: string; division?: string | null } | null;
   rewards?: RewardComponent[] | null;
   prerequisites?: PrerequisiteSpec[];
   /** Availability zones (empty = global). */
@@ -57,9 +65,26 @@ export interface CreateMissionInput {
   maxAssignees?: number;
   /** Limited to a single group: the first group to accept claims it. */
   groupClaimable?: boolean;
+  /** Big event mission (open multijoueur). */
+  isEvent?: boolean;
   scriptId?: string | null;
   expiresAt?: Date | null;
+  /** Relative deadline in hours; ignored when `expiresAt` is set. */
+  expiresInHours?: number | null;
+  /** Accepts a partial hand-in, paid proportionally to the weighted progress. */
+  allowPartial?: boolean;
+  /** Complete and settle on its own once every required objective is done. */
+  autoComplete?: boolean;
+  /** Missions that must be fully completed before this one can be accepted. */
+  requiresMissionIds?: string[];
+  /** When set, every assignment expires this many hours after acceptance. */
+  assignmentDeadlineHours?: number | null;
   objectives: SpecObjectiveInput[];
+  /**
+   * Treasury funding the credits reward (trusted service caller, role checked by the
+   * route): debited at creation instead of paying the reward from the faucet.
+   */
+  escrow?: { payerType: 'politics'; payerId: string } | null;
 }
 
 /** Input describing a player-created mission (reward escrowed from the creator). */
@@ -86,6 +111,16 @@ export interface CreatePlayerMissionInput {
   /** Limited to a single group: the first group to accept claims it. */
   groupClaimable?: boolean;
   expiresAt?: Date | null;
+  /** Relative deadline in hours; ignored when `expiresAt` is set. */
+  expiresInHours?: number | null;
+  /** Accepts a partial hand-in, paid proportionally to the weighted progress. */
+  allowPartial?: boolean;
+  /** Complete and settle on its own once every required objective is done. */
+  autoComplete?: boolean;
+  /** Missions that must be fully completed before this one can be accepted. */
+  requiresMissionIds?: string[];
+  /** When set, every assignment expires this many hours after acceptance. */
+  assignmentDeadlineHours?: number | null;
   objectives: SpecObjectiveInput[];
 }
 
@@ -98,6 +133,8 @@ export interface MissionFilters {
   category?: MissionCategory;
   issuerType?: MissionIssuerType;
   issuerId?: string;
+  giverFaction?: string;
+  giverDivision?: string;
   visibility?: MissionVisibility;
   groupId?: string;
   groupClaimable?: boolean;
@@ -130,6 +167,63 @@ export interface MissionWithObjectives {
 /** True when the mission's deadline is in the past. */
 export function isExpired(mission: Mission, now = new Date()): boolean {
   return mission.expiresAt !== null && mission.expiresAt.getTime() <= now.getTime();
+}
+
+/**
+ * Effective deadline of a mission being created: an absolute date wins, then a relative
+ * one, then the service default lifetime (0 = no deadline).
+ * @param expiresAt - Absolute deadline, if any.
+ * @param expiresInHours - Relative deadline in hours, if any.
+ * @param defaultTtlHours - Default lifetime used when neither is set.
+ * @returns The deadline, or null when the mission never expires.
+ */
+function resolveExpiry(
+  expiresAt: Date | null | undefined,
+  expiresInHours: number | null | undefined,
+  defaultTtlHours: number,
+): Date | null {
+  if (expiresAt) return expiresAt;
+  if (expiresInHours && expiresInHours > 0) {
+    return new Date(Date.now() + expiresInHours * 3600 * 1000);
+  }
+  return defaultTtlHours > 0 ? new Date(Date.now() + defaultTtlHours * 3600 * 1000) : null;
+}
+
+/**
+ * Validates a scenario chain at creation: every referenced mission must exist, a mission
+ * cannot require itself and the resulting graph must be free of cycles (otherwise the
+ * missions in the loop could never be unlocked).
+ * @param ids - Referenced mission ids, as sent by the caller.
+ * @param selfId - Id of the mission being created, when it is already known.
+ * @returns The deduplicated ids to persist.
+ * @throws 400 `CHAIN_UNKNOWN` / `CHAIN_SELF` / `CHAIN_CYCLE`.
+ */
+async function resolveMissionChain(ids: string[], selfId?: string): Promise<string[]> {
+  const wanted = [...new Set(ids)];
+  if (wanted.length === 0) return [];
+  if (selfId && wanted.includes(selfId)) {
+    throw new HttpError(400, 'CHAIN_SELF', 'A mission cannot require itself');
+  }
+  const found = await db.select().from(missions).where(inArray(missions.id, wanted));
+  const missing = wanted.filter((id) => !found.some((row) => row.id === id));
+  if (missing.length > 0) {
+    throw new HttpError(400, 'CHAIN_UNKNOWN', `Unknown required mission: ${missing[0]}`, {
+      missing: missing.join(', '),
+    });
+  }
+
+  const graph = new Map(found.map((row) => [row.id, row.requiresMissionIds ?? []]));
+  const walked = new Set<string>();
+  const walk = (id: string, stack: string[]): void => {
+    if (stack.includes(id)) {
+      throw new HttpError(400, 'CHAIN_CYCLE', `Mission chain cycle: ${[...stack, id].join(' -> ')}`);
+    }
+    if (walked.has(id)) return;
+    walked.add(id);
+    for (const next of graph.get(id) ?? []) walk(next, [...stack, id]);
+  };
+  for (const id of wanted) walk(id, []);
+  return wanted;
 }
 
 /**
@@ -208,6 +302,8 @@ export async function listMissions(filters: MissionFilters, limit: number, offse
   if (filters.category) conditions.push(eq(missions.category, filters.category));
   if (filters.issuerType) conditions.push(eq(missions.issuerType, filters.issuerType));
   if (filters.issuerId) conditions.push(eq(missions.issuerId, filters.issuerId));
+  if (filters.giverFaction) conditions.push(eq(missions.giverFaction, filters.giverFaction));
+  if (filters.giverDivision) conditions.push(eq(missions.giverDivision, filters.giverDivision));
   if (filters.visibility) conditions.push(eq(missions.visibility, filters.visibility));
   if (filters.groupId) conditions.push(eq(missions.groupId, filters.groupId));
   if (filters.groupClaimable !== undefined) conditions.push(eq(missions.groupClaimable, filters.groupClaimable));
@@ -235,12 +331,66 @@ export async function listMissions(filters: MissionFilters, limit: number, offse
   return page(items, totalRows[0]?.total ?? 0, limit, offset);
 }
 
+/** Account funding a mission's credits escrow (refunded there on cancel/expire). */
+interface EscrowPayer {
+  type: EscrowPayerType;
+  id: string;
+}
+
+/** Economy idempotency key of a mission's credits escrow debit. */
+function escrowExternalIdOf(missionId: string): string {
+  return `mission-escrow:${missionId}`;
+}
+
+/**
+ * Credits escrow columns of a mission row being inserted: `pending` until the debit
+ * succeeds, `none` when the mission has no credits component.
+ * @param missionId - Id of the mission being inserted.
+ * @param payer - Funding account.
+ * @param economic - Credits component, if any.
+ */
+function creditsEscrowColumns(missionId: string, payer: EscrowPayer, economic: RewardCredits | undefined) {
+  return {
+    escrowStatus: (economic ? 'pending' : 'none') as EscrowStatus,
+    escrowAmount: economic ? economic.amount : null,
+    escrowCurrency: economic ? economic.currency : null,
+    escrowPayerId: payer.id,
+    escrowPayerType: payer.type,
+    escrowExternalId: economic ? escrowExternalIdOf(missionId) : null,
+  };
+}
+
+/**
+ * Debits a mission's credits escrow from its funding account (player wallet or
+ * organization treasury). The key is deterministic per mission, so a retry never debits
+ * twice.
+ * @throws 409 `INSUFFICIENT_FUNDS` when the account cannot fund the escrow.
+ */
+async function debitCreditsEscrow(missionId: string, payer: EscrowPayer, economic: RewardCredits): Promise<void> {
+  await debitHolder(payer.type, payer.id, {
+    amount: economic.amount,
+    currency: economic.currency,
+    reference: 'mission_escrow',
+    externalId: escrowExternalIdOf(missionId),
+  });
+}
+
+/** Credits component of a validated reward list, if any. */
+function creditsComponent(rewards: RewardComponent[]): RewardCredits | undefined {
+  return rewards.find((component): component is RewardCredits => component.type === 'credits');
+}
+
 /**
  * Creates a mission and its objectives atomically (spec validated by the kind registry).
+ *
+ * With `escrow`, the credits component is debited from the given treasury once the
+ * mission is inserted (same escrow lifecycle as player missions: `held`, refunded on
+ * cancel/expire, `claimed` at settlement); a refused debit deletes the mission again.
  * @param input - Mission and objective definitions.
  * @param createdBy - Keycloak client id of the creator service (or player id).
  * @returns The created mission and objectives.
- * @throws 409 when a `scriptId` is already used.
+ * @throws 409 when a `scriptId` is already used, 409 `INSUFFICIENT_FUNDS` when the
+ *   treasury cannot fund the escrow (nothing is persisted).
  */
 export async function createMission(
   input: CreateMissionInput,
@@ -248,40 +398,55 @@ export async function createMission(
 ): Promise<MissionWithObjectives> {
   const spec = validateMissionSpec(
     {
-      category: input.category ?? 'generic',
+      category: input.category ?? 'divers',
       objectives: input.objectives,
       prerequisites: input.prerequisites,
       rewards: input.rewards,
       maxAssignees: input.maxAssignees ?? 1,
     },
-    { escrowed: false },
+    { escrowed: false, treasuryEscrow: Boolean(input.escrow) },
   );
   await assertPoiZonesExist(input.zones);
 
-  const expiresAt =
-    input.expiresAt ??
-    (env.mission.defaultTtlHours > 0
-      ? new Date(Date.now() + env.mission.defaultTtlHours * 3600 * 1000)
-      : null);
+  const missionId = randomUUID();
+  const requiresMissionIds = await resolveMissionChain(input.requiresMissionIds ?? [], missionId);
 
+  const payer: EscrowPayer | null = input.escrow ? { type: input.escrow.payerType, id: input.escrow.payerId } : null;
+  // `treasuryEscrow` guarantees a credits component whenever a payer is set.
+  const economic = payer ? creditsComponent(spec.rewards) : undefined;
+
+  const expiresAt = resolveExpiry(input.expiresAt, input.expiresInHours, env.mission.defaultTtlHours);
+
+  let created: MissionWithObjectives;
   try {
-    return await db.transaction(async (tx) => {
+    created = await db.transaction(async (tx) => {
       const [mission] = await tx
         .insert(missions)
         .values({
+          id: missionId,
           title: input.title,
           description: input.description,
+          titleI18n: input.titleI18n ?? null,
+          descriptionI18n: input.descriptionI18n ?? null,
           kind: input.kind ?? 'dynamic',
-          category: input.category ?? 'generic',
+          category: input.category ?? 'divers',
           issuerType: input.issuerType ?? 'system',
           issuerId: input.issuerId ?? null,
+          giverFaction: input.giver?.faction ?? null,
+          giverDivision: input.giver?.division ?? null,
           rewards: spec.rewards.length > 0 ? spec.rewards : null,
           prerequisites: spec.prerequisites,
           zones: input.zones ?? [],
           maxAssignees: input.maxAssignees ?? 1,
           groupClaimable: input.groupClaimable ?? false,
+          isEvent: input.isEvent ?? false,
+          autoComplete: input.autoComplete ?? true,
+          allowPartial: input.allowPartial ?? false,
+          requiresMissionIds,
+          assignmentDeadlineHours: input.assignmentDeadlineHours ?? null,
           scriptId: input.scriptId ?? null,
           expiresAt,
+          ...(payer ? creditsEscrowColumns(missionId, payer, economic) : {}),
           createdBy,
         })
         .returning();
@@ -299,6 +464,22 @@ export async function createMission(
     }
     throw err;
   }
+  if (!payer || !economic) return created;
+
+  // Inserted first so a duplicate `scriptId` is refused before any money moves.
+  try {
+    await debitCreditsEscrow(missionId, payer, economic);
+  } catch (err) {
+    // Refused (or failed) debit: the mission must not exist (objectives cascade).
+    await db.delete(missions).where(eq(missions.id, missionId));
+    throw err;
+  }
+  const [mission] = await db
+    .update(missions)
+    .set({ escrowStatus: 'held', updatedAt: new Date() })
+    .where(eq(missions.id, missionId))
+    .returning();
+  return { mission, objectives: created.objectives };
 }
 
 /**
@@ -354,7 +535,7 @@ export async function createPlayerMission(
 ): Promise<MissionWithObjectives> {
   const spec = validateMissionSpec(
     {
-      category: input.category ?? 'generic',
+      category: input.category ?? 'divers',
       objectives: input.objectives,
       prerequisites: input.prerequisites,
       rewards: input.rewards,
@@ -393,15 +574,16 @@ export async function createPlayerMission(
     }
     await assertTreasuryAccess(issuerType, issuerId, playerId);
   }
-  const escrowPayerType: EscrowPayerType =
-    escrowSource === 'issuer' ? (issuerType === 'politics' ? 'politics' : 'corporation') : 'player';
-  // `issuerId` is non-null here: the `issuer` branch above throws otherwise.
-  const escrowPayerId: string = escrowSource === 'issuer' ? issuerId! : playerId;
+  const payer: EscrowPayer = {
+    type: escrowSource === 'issuer' ? (issuerType === 'politics' ? 'politics' : 'corporation') : 'player',
+    // `issuerId` is non-null here: the `issuer` branch above throws otherwise.
+    id: escrowSource === 'issuer' ? issuerId! : playerId,
+  };
 
-  const economic = spec.rewards.find((component) => component.type === 'credits');
+  const economic = creditsComponent(spec.rewards);
   const items = spec.rewards.filter((component): component is Extract<RewardComponent, { type: 'item' }> => component.type === 'item');
   const missionId = randomUUID();
-  const escrowExternalId = `mission-escrow:${missionId}`;
+  const requiresMissionIds = await resolveMissionChain(input.requiresMissionIds ?? [], missionId);
 
   const created = await db.transaction(async (tx) => {
     const [mission] = await tx
@@ -411,7 +593,7 @@ export async function createPlayerMission(
         title: input.title,
         description: input.description,
         kind: 'player',
-        category: input.category ?? 'generic',
+        category: input.category ?? 'divers',
         issuerType,
         issuerId,
         visibility,
@@ -420,13 +602,12 @@ export async function createPlayerMission(
         zones: input.zones ?? [],
         maxAssignees: input.maxAssignees ?? 1,
         groupClaimable: input.groupClaimable ?? false,
-        expiresAt: input.expiresAt ?? null,
-        escrowStatus: economic ? 'pending' : 'none',
-        escrowAmount: economic ? economic.amount : null,
-        escrowCurrency: economic ? economic.currency : null,
-        escrowPayerId,
-        escrowPayerType,
-        escrowExternalId: economic ? escrowExternalId : null,
+        autoComplete: input.autoComplete ?? true,
+        allowPartial: input.allowPartial ?? false,
+        requiresMissionIds,
+        assignmentDeadlineHours: input.assignmentDeadlineHours ?? null,
+        expiresAt: resolveExpiry(input.expiresAt, input.expiresInHours, env.mission.playerDefaultTtlHours),
+        ...creditsEscrowColumns(missionId, payer, economic),
         escrowItemStatus: items.length > 0 ? 'held' : 'none',
         createdBy: playerId,
       })
@@ -476,12 +657,7 @@ export async function createPlayerMission(
   // or the issuing organization's treasury).
   if (economic) {
     try {
-      await debitHolder(escrowPayerType, escrowPayerId, {
-        amount: economic.amount,
-        currency: economic.currency,
-        reference: 'mission_escrow',
-        externalId: escrowExternalId,
-      });
+      await debitCreditsEscrow(missionId, payer, economic);
     } catch (err) {
       await Promise.all(holdIds.map((holdId) => releaseHold(holdId).catch(() => undefined)));
       await db
@@ -508,7 +684,7 @@ export async function createPlayerMission(
 }
 
 /**
- * Refunds the unspent escrow of a cancelled/expired player mission to its creator, and
+ * Refunds the unspent escrow of a cancelled/expired mission to its funding account, and
  * releases any held item escrow. Idempotent through the `mission-refund:<missionId>` Economy
  * key and the hold status.
  * @param mission - Mission whose escrow may be refunded.
@@ -580,9 +756,19 @@ export async function updateMission(
 export async function confirmObjective(
   missionId: string,
   objectiveId: string,
-): Promise<{ objective: MissionObjective; objectives: MissionObjective[]; allComplete: boolean }> {
+): Promise<{ objective: MissionObjective; objectives: MissionObjective[]; allComplete: boolean; completed: boolean }> {
   const mission = await requireMission(missionId);
   requireOpenMission(mission);
+
+  // Refuse confirmation when no assignee is actively working on the mission.
+  const [active] = await db
+    .select({ id: missionAssignments.id })
+    .from(missionAssignments)
+    .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, 'active')))
+    .limit(1);
+  if (!active) {
+    throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', 'No active assignment on this mission');
+  }
 
   const objective = await requireObjective(missionId, objectiveId);
   const kindDef = getObjectiveKind(objective.type);
@@ -600,7 +786,27 @@ export async function confirmObjective(
   }
   const refreshed = await listObjectives(missionId);
   const updated = refreshed.find((row) => row.id === objective.id) ?? objective;
-  return { objective: updated, objectives: refreshed, allComplete: allObjectivesCompleted(refreshed) };
+  const allComplete = allRequiredObjectivesCompleted(refreshed);
+  let completed = false;
+  if (allComplete && mission.autoComplete) {
+    // Auto-completion: close and settle on the next active assignee (same as reportProgress).
+    const [active] = await db
+      .select()
+      .from(missionAssignments)
+      .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, 'active')))
+      .limit(1);
+    if (active) {
+      const { completeMission } = await import('./assignments.service.js');
+      await completeMission(missionId, active.playerId);
+      completed = true;
+    }
+  }
+  return {
+    objective: updated,
+    objectives: refreshed,
+    allComplete,
+    completed,
+  };
 }
 
 /**
@@ -791,6 +997,10 @@ export async function cancelMission(missionId: string): Promise<Mission> {
   if (mission.status === 'completed') {
     throw new HttpError(409, 'MISSION_COMPLETED', 'A completed mission cannot be cancelled');
   }
+  const actives = await db
+    .select({ id: missionAssignments.id, playerId: missionAssignments.playerId })
+    .from(missionAssignments)
+    .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, 'active')));
   const updated = await db.transaction(async (tx) => {
     const [row] = await tx
       .update(missions)
@@ -804,12 +1014,63 @@ export async function cancelMission(missionId: string): Promise<Mission> {
     return row;
   });
   await refundEscrow(updated);
+  await Promise.all(
+    actives.map((active) =>
+      notifyMissionEvent(active.playerId, {
+        type: 'mission.cancelled',
+        data: { missionId, assignmentId: active.id },
+      }),
+    ),
+  );
   return updated;
 }
 
-/** True when every objective of the mission is `completed`. */
-export function allObjectivesCompleted(objectives: MissionObjective[]): boolean {
-  return objectives.length > 0 && objectives.every((objective) => objective.status === 'completed');
+/**
+ * Cancels a mission on behalf of its creator (or a member of the issuing corporation):
+ * the mission closes, active assignments are abandoned and every escrow is refunded.
+ * @param missionId - Mission id.
+ * @param playerId - Acting player.
+ * @returns The cancelled mission.
+ * @throws 403 when the player may not manage the mission, 409 when it is completed.
+ */
+export async function cancelPlayerMission(missionId: string, playerId: string): Promise<Mission> {
+  const mission = await requireMission(missionId);
+  await assertCanManageMission(mission, playerId);
+  return cancelMission(missionId);
+}
+
+/**
+ * Objectives that must be completed for the mission itself: bonus objectives are
+ * optional and are left out of every gate (completion, scenario ordering, ratio).
+ * @param objectives - All objectives of the mission.
+ * @returns The required ones, in `order` sequence.
+ */
+export function requiredObjectives(objectives: MissionObjective[]): MissionObjective[] {
+  return objectives.filter((objective) => !objective.isBonus);
+}
+
+/** True when every required objective is completed (bonus objectives never block). */
+export function allRequiredObjectivesCompleted(objectives: MissionObjective[]): boolean {
+  const required = requiredObjectives(objectives);
+  return required.length > 0 && required.every((objective) => objective.status === 'completed');
+}
+
+/**
+ * Weighted progress of the required objectives, in basis points (10000 = every required
+ * objective reached its target). Objectives weigh `weight` each and are only credited
+ * up to `targetQuantity`, so the value is deterministic across retries.
+ * @param objectives - All objectives of the mission.
+ * @returns Integer in [0, 10000].
+ */
+export function requiredProgressBp(objectives: MissionObjective[]): number {
+  const required = requiredObjectives(objectives);
+  const totalWeight = required.reduce((sum, objective) => sum + Math.max(objective.weight, 0), 0);
+  if (totalWeight === 0) return 0;
+  const done = required.reduce((sum, objective) => {
+    const progress = Math.min(Math.max(objective.currentProgress, 0), objective.targetQuantity);
+    return sum + (Math.max(objective.weight, 0) * progress) / objective.targetQuantity;
+  }, 0);
+  return Math.min(10000, Math.max(0, Math.round((done / totalWeight) * 10000)));
 }
 
 /** True when a scenario objective is still locked by an incomplete lower-`order` objective. */
@@ -851,6 +1112,10 @@ export async function expireDueMissions(now = new Date()): Promise<number> {
     .where(and(inArray(missions.status, ['available', 'active']), lte(missions.expiresAt, now)));
 
   for (const mission of due) {
+    const actives = await db
+      .select({ id: missionAssignments.id, playerId: missionAssignments.playerId })
+      .from(missionAssignments)
+      .where(and(eq(missionAssignments.missionId, mission.id), eq(missionAssignments.status, 'active')));
     await db.transaction(async (tx) => {
       await tx
         .update(missions)
@@ -862,6 +1127,12 @@ export async function expireDueMissions(now = new Date()): Promise<number> {
         .where(and(eq(missionAssignments.missionId, mission.id), eq(missionAssignments.status, 'active')));
     });
     await refundEscrow(mission);
+    for (const active of actives) {
+      await notifyMissionEvent(active.playerId, {
+        type: 'mission.expired',
+        data: { missionId: mission.id, assignmentId: active.id },
+      });
+    }
   }
   return due.length;
 }

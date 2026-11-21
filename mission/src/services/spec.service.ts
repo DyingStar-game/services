@@ -16,11 +16,20 @@ export interface SpecObjectiveInput {
   type: string;
   title: string;
   description?: string;
+  /** The texts per language (`{en, fr}`), served by `Accept-Language`. */
+  titleI18n?: Record<string, string>;
+  descriptionI18n?: Record<string, string>;
   targetQuantity?: number;
   unit?: string;
   locationFrom?: Record<string, unknown>;
   locationTo?: Record<string, unknown>;
   order?: number;
+  /** Weight in the partial-completion ratio (1 = equal share). */
+  weight?: number;
+  /** Optional objective: outside the completion gate, the ordering and the ratio. */
+  isBonus?: boolean;
+  /** Extra component granted when this bonus objective is completed. */
+  bonusReward?: RewardComponent;
   params?: Record<string, unknown>;
   payload?: Record<string, unknown>;
 }
@@ -30,11 +39,16 @@ export interface ValidatedObjective {
   type: string;
   title: string;
   description?: string;
+  titleI18n?: Record<string, string>;
+  descriptionI18n?: Record<string, string>;
   targetQuantity: number;
   unit?: string;
   locationFrom?: Record<string, unknown>;
   locationTo?: Record<string, unknown>;
   order: number;
+  weight: number;
+  isBonus: boolean;
+  bonusReward?: RewardComponent;
   params: Record<string, unknown>;
   payload?: Record<string, unknown>;
 }
@@ -61,6 +75,11 @@ export interface ValidateSpecOptions {
   escrowed: boolean;
   /** True for player missions: at least one reward component is required. */
   requireReward?: boolean;
+  /**
+   * True for service missions funded by a treasury (`escrow` on the internal API): only a
+   * credits component can be escrowed there, and it is required.
+   */
+  treasuryEscrow?: boolean;
 }
 
 /** Renders zod issues as `path: message` lines. */
@@ -69,7 +88,7 @@ function formatIssues(issues: { path: PropertyKey[]; message: string }[]): strin
 }
 
 /**
- * Enforces that a kind may be used on the mission's category (the `generic` category
+ * Enforces that a kind may be used on the mission's category (the `divers` category
  * bypasses the constraint; `'all'` kinds are allowed everywhere).
  * @param kindName - Kind name (for the error params).
  * @param allowed - Categories declared by the kind.
@@ -83,7 +102,7 @@ function assertKindCategory(
   category: MissionCategory,
   code: 'OBJECTIVE_NOT_IN_CATEGORY' | 'PREREQ_NOT_IN_CATEGORY',
 ): void {
-  if (category === 'generic' || allowed === 'all' || allowed.includes(category)) return;
+  if (category === 'divers' || allowed === 'all' || allowed.includes(category)) return;
   throw new HttpError(
     400,
     code,
@@ -95,11 +114,31 @@ function assertKindCategory(
 /**
  * Validates a mission spec against the kind registry and reward rules.
  * @param input - Spec fields (objectives, prerequisites, rewards, capacity).
- * @param opts - Creation path options (`escrowed`/`requireReward` for player missions).
+ * @param opts - Creation path options (`escrowed`/`requireReward` for player missions,
+ *   `treasuryEscrow` for treasury-funded service missions).
  * @returns The normalized spec to persist.
  * @throws 400 for unknown kinds, invalid params or reward rule violations, 503 when item
  *   rewards are required but Inventory is not configured.
  */
+/** Enforces the reward rules that apply to any single component (base or bonus). */
+function assertComponentRules(
+  component: RewardComponent,
+  input: MissionSpecInput,
+  opts: ValidateSpecOptions,
+  where: string,
+): void {
+  if (component.type !== 'item') return;
+  if (component.instanceId && input.maxAssignees > 1) {
+    throw new HttpError(400, 'ITEM_REWARD_NOT_SPLITABLE', `A unique-instance ${where} cannot be shared by several assignees`);
+  }
+  if (opts.escrowed && input.maxAssignees > 1) {
+    throw new HttpError(400, 'ITEM_REWARD_NOT_SPLITABLE', `A player-escrowed item ${where} cannot be shared by several assignees`);
+  }
+  if (opts.escrowed && !isInventoryConfigured()) {
+    throw new HttpError(503, 'INVENTORY_NOT_CONFIGURED', `Item rewards require the Inventory service to be configured`);
+  }
+}
+
 export function validateMissionSpec(input: MissionSpecInput, opts: ValidateSpecOptions): ValidatedSpec {
   if (input.objectives.length === 0) {
     throw new HttpError(400, 'MISSING_OBJECTIVES', 'A mission requires at least one objective');
@@ -109,26 +148,22 @@ export function validateMissionSpec(input: MissionSpecInput, opts: ValidateSpecO
   if (opts.requireReward && rewards.length === 0) {
     throw new HttpError(400, 'REWARD_REQUIRED', 'Player-created missions require at least one reward component');
   }
+  if (opts.treasuryEscrow) {
+    // Item escrow holds goods from a player inventory; a treasury only funds credits.
+    if (rewards.some((component) => component.type === 'item')) {
+      throw new HttpError(
+        400,
+        'ESCROW_ITEM_REWARD_UNSUPPORTED',
+        'Item rewards cannot be escrowed from a treasury: only the credits component is funded',
+      );
+    }
+    if (!rewards.some((component) => component.type === 'credits')) {
+      throw new HttpError(400, 'ESCROW_CREDITS_REQUIRED', 'An escrowed mission requires a credits reward component');
+    }
+  }
 
   for (const component of rewards) {
-    if (component.type !== 'item') continue;
-    if (component.instanceId && input.maxAssignees > 1) {
-      throw new HttpError(
-        400,
-        'ITEM_REWARD_NOT_SPLITABLE',
-        'A unique-instance reward cannot be shared by several assignees',
-      );
-    }
-    if (opts.escrowed && input.maxAssignees > 1) {
-      throw new HttpError(
-        400,
-        'ITEM_REWARD_NOT_SPLITABLE',
-        'A player-escrowed item reward cannot be shared by several assignees',
-      );
-    }
-    if (opts.escrowed && !isInventoryConfigured()) {
-      throw new HttpError(503, 'INVENTORY_NOT_CONFIGURED', 'Item rewards require the Inventory service to be configured');
-    }
+    assertComponentRules(component, input, opts, 'reward');
   }
 
   const prerequisites: PrerequisiteSpec[] = [];
@@ -171,19 +206,43 @@ export function validateMissionSpec(input: MissionSpecInput, opts: ValidateSpecO
         { kind: objective.type, issues },
       );
     }
+    const isBonus = objective.isBonus ?? false;
+    if (objective.bonusReward && !isBonus) {
+      throw new HttpError(
+        400,
+        'BONUS_REWARD_WITHOUT_BONUS',
+        'A bonusReward requires the objective to be declared as a bonus objective',
+      );
+    }
+    if (objective.bonusReward) assertComponentRules(objective.bonusReward, input, opts, 'bonus reward');
     return {
       type: objective.type,
       title: objective.title,
       description: objective.description,
+      titleI18n: objective.titleI18n,
+      descriptionI18n: objective.descriptionI18n,
       targetQuantity: kindDef.quantity ? (objective.targetQuantity ?? 1) : 1,
       unit: objective.unit,
       locationFrom: objective.locationFrom,
       locationTo: objective.locationTo,
       order: objective.order ?? index,
+      weight: objective.weight ?? 1,
+      isBonus,
+      bonusReward: objective.bonusReward,
       params: parsed.data as Record<string, unknown>,
       payload: objective.payload,
     };
   });
+
+  // A mission made only of bonus objectives could never be completed: the gate would be
+  // vacuous (and the partial ratio would have no denominator).
+  if (!objectives.some((objective) => !objective.isBonus)) {
+    throw new HttpError(
+      400,
+      'MISSING_REQUIRED_OBJECTIVE',
+      'A mission requires at least one non-bonus objective',
+    );
+  }
 
   return { objectives, prerequisites, rewards };
 }

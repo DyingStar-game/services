@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 
+import { env } from '../config/env.js';
 import {
   CORPORATION_RECRUITMENT_MODES,
   ENTITY_TYPES,
@@ -17,6 +18,7 @@ import {
   SANCTION_TYPES,
 } from '../db/schema/index.js';
 import { pageQuery } from '../lib/pagination.js';
+import { BUG_SEVERITIES } from '../services/bugReports.service.js';
 import { ACTION_MAX_LENGTH, ACTION_RE } from '../services/permissionCatalog.js';
 
 export const uuidSchema = z.string().uuid();
@@ -48,6 +50,8 @@ export const authorizeBody = z.union([
 
 
 export const playerIdParams = z.object({ playerId: uuidSchema });
+
+export const friendshipParams = playerIdParams.extend({ otherPlayerId: uuidSchema });
 
 export const requestIdParams = z.object({ id: z.coerce.number().int().positive() });
 
@@ -104,6 +108,10 @@ export const profilePatchBody = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
+/**
+ * Player location: `position` is metres from the centre of the body named by `scene`
+ * (local frame). `scene: "space"` = open space (frame of the system).
+ */
 export const locationSchema = z.object({
   system: z.string().trim().max(64).optional(),
   scene: z.string().trim().max(128).optional(),
@@ -115,6 +123,18 @@ export const presenceBody = z.object({
   location: locationSchema.nullable().optional(),
 });
 
+/** One player of a batch heartbeat; omitted `status` keeps a live one (default `online`). */
+const presenceBatchEntry = z.object({
+  playerId: uuidSchema,
+  status: z.enum(PRESENCE_STATUSES).optional(),
+  location: locationSchema.nullable().optional(),
+});
+
+/** `PUT /api/internal/players/presence/batch`: the game server's active roster. */
+export const presenceBatchBody = z.object({
+  players: z.array(presenceBatchEntry).min(1).max(env.valkey.presenceBatchMax),
+});
+
 export const statsBody = z
   .object({
     playtimeSecondsDelta: z.number().int().min(0).optional(),
@@ -124,9 +144,27 @@ export const statsBody = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
+/**
+ * Standing delta applied by the game (mission settlement, scenario events). `domain` is
+ * an opaque label (mission categories); `amount` is a signed non-zero delta.
+ */
+export const standingBody = z.object({
+  domain: z.string().trim().min(1).max(32),
+  amount: z.number().int().min(-100_000).max(100_000).refine((v) => v !== 0, {
+    message: 'Standing delta must be non-zero',
+  }),
+});
+
 export const activityBody = z.object({
   type: z.string().trim().min(1).max(64),
   details: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const notificationBody = z.object({
+  type: z.string().trim().min(1).max(64),
+  title: z.string().trim().max(120).optional(),
+  body: z.string().trim().max(500).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const encounterBody = z
@@ -307,8 +345,20 @@ export const politicalOfficePatchBody = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
 
-/** Internal: create a political entity with an explicit head (player or NPC). */
-export const internalCreatePoliticalEntityBody = createPoliticalEntityBody.extend({ headId: uuidSchema });
+/**
+ * Internal: create a political entity with an explicit head (player or NPC), or without one
+ * (system/NPC-governed entity, head office left vacant) when `headId` is omitted or null.
+ */
+export const internalCreatePoliticalEntityBody = createPoliticalEntityBody.extend({
+  headId: uuidSchema.nullable().optional(),
+});
+
+/** Internal: exact-match political entity lookup (level, direct parent, exact name). */
+export const internalPoliticsListQuery = limitQuery.extend({
+  type: z.enum(POLITICAL_ENTITY_TYPES).optional(),
+  parentId: uuidSchema.optional(),
+  name: z.string().trim().min(1).max(64).optional(),
+});
 
 export const npcPoliticalBody = z.object({
   entityId: uuidSchema,
@@ -326,6 +376,25 @@ export const createReportBody = z.object({
   targetId: uuidSchema,
   reason: z.enum(REPORT_REASONS),
   message: z.string().trim().max(1000).optional(),
+});
+
+/**
+ * An in-game bug report, on the QA template: how bad it is, what is wrong, how to get there, what
+ * happened and what should have. The four texts together fit one Discord embed (4096 characters). The capture
+ * is base64 (about 4/3 of its size); the log is a tail.
+ */
+export const createBugReportBody = z.object({
+  title: z.string().trim().min(3).max(80),
+  severity: z.enum(BUG_SEVERITIES).optional(),
+  description: z.string().trim().min(1).max(1000),
+  steps: z.string().trim().max(1500).optional(),
+  actual: z.string().trim().max(700).optional(),
+  expected: z.string().trim().max(700).optional(),
+  context: z
+    .record(z.string().trim().min(1).max(40), z.union([z.string().max(200), z.number(), z.boolean()]))
+    .optional(),
+  screenshot: z.string().max(6_000_000).optional(),
+  log: z.string().max(300_000).optional(),
 });
 
 export const reportIdParams = z.object({ id: z.coerce.number().int().positive() });

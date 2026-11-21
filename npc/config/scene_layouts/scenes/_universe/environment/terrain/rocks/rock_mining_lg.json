@@ -1,0 +1,46 @@
+{
+	"doors": [],
+	"footprint": {
+		"center": [
+			0.0,
+			0.0,
+			0.0
+		],
+		"size": [
+			1.0,
+			1.0,
+			1.0
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [
+		{
+			"corners": [
+				[
+					-0.5,
+					-0.5
+				],
+				[
+					0.5,
+					-0.5
+				],
+				[
+					0.5,
+					0.5
+				],
+				[
+					-0.5,
+					0.5
+				]
+			],
+			"path": "CollisionShape3D",
+			"y_max": 0.5,
+			"y_min": -0.5
+		}
+	],
+	"scenename": "scenes/_universe/environment/terrain/rocks/rock_mining_lg.tscn",
+	"schema_version": 1,
+	"seats": []
+}

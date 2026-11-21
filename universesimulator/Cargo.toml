@@ -1,0 +1,61 @@
+[package]
+name = "universesimulator"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "universesimulator"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# Database (PostgreSQL, embedded migrations)
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "postgres",
+    "uuid",
+    "migrate",
+    "time",
+    "json",
+] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client — calls to social, inventory, mission, economie, persistence, Keycloak
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# JWT verification (Keycloak RS256)
+jsonwebtoken = "9"
+
+# Object-safe async traits for the service clients
+async-trait = "0.1"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Config
+dotenvy = "0.15"
+
+# UUIDs
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Timestamps
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+
+# Request fingerprint for idempotent deliveries
+sha2 = "0.10"
+subtle = "2"

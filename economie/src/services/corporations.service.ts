@@ -74,6 +74,36 @@ export async function requireCorporationMember(
   return member;
 }
 
+/** Action name sent to Social for a plain membership check: only its `not_member` answer matters. */
+export const MEMBERSHIP_ACTION = 'economie:member';
+
+/**
+ * Requires that the player belongs to the corporation, as SOCIAL knows it. Social owns the
+ * membership of players; the local `corporation_members` table is only a mirror for salaries
+ * and NPC staff, and a player who joined through Social is not in it — checking it refused a
+ * real member's donation (playtest 2026-11-12). Any rank passes: Social answers `not_member`
+ * for a stranger and `missing_permission` (or allowed) for a member.
+ * Without Social (local dev) the local mirror decides.
+ * @param corporationId - Corporation id.
+ * @param playerId - Acting player.
+ * @throws 403 `NOT_CORPORATION_MEMBER`.
+ */
+export async function requireMembership(corporationId: string, playerId: string): Promise<void> {
+  if (!isSocialConfigured()) {
+    await requireCorporationMember(corporationId, playerId);
+    return;
+  }
+  const decision = await authorizeAction({
+    holderType: 'corporation',
+    holderId: corporationId,
+    playerId,
+    action: MEMBERSHIP_ACTION,
+  });
+  if (!decision.allowed && decision.reason === 'not_member') {
+    throw new HttpError(403, 'NOT_CORPORATION_MEMBER', 'You are not a member of this corporation');
+  }
+}
+
 /**
  * Requires a membership holding at least `min`.
  * @param corporationId - Corporation id.
@@ -241,7 +271,7 @@ export async function donate(
   amount: number,
   memo?: string,
 ): Promise<MovementResult> {
-  await requireCorporationMember(corporationId, fromPlayerId);
+  await requireMembership(corporationId, fromPlayerId);
   const settings = await getCorporationSettings(corporationId);
   if (!settings.allowDonations) {
     throw new HttpError(403, 'DONATIONS_DISABLED', 'Donations are disabled for this corporation');

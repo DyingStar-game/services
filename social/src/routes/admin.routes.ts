@@ -11,6 +11,7 @@ import { validate } from '../middleware/validate.js';
 import { HttpError } from '../lib/httpError.js';
 import { listActivity } from '../services/activity.service.js';
 import { listModerationLog } from '../services/moderationLog.service.js';
+import { withLivePlaytime } from '../services/playtime.service.js';
 import { requireProfile } from '../services/profiles.service.js';
 import * as reports from '../services/reports.service.js';
 import { adjustReputation, listReputationEvents } from '../services/reputation.service.js';
@@ -112,7 +113,7 @@ adminRoutes.get(
       listActivity(id, 50, 0),
     ]);
     res.json({
-      ...profile,
+      ...(await withLivePlaytime(profile)),
       reputationEvents: reputationEvents.items,
       sanctions: sanctionHistory,
       reports: reportsAgainst.items,

@@ -183,35 +183,3 @@ export function debitPlayer(playerId: string, opts: PlayerMovement): Promise<Eco
 }
 
 /** One wallet account (currency + balance) as returned by the internal read API. */
-export interface WalletAccount {
-  currency: string;
-  balance: number;
-  status?: string;
-  [key: string]: unknown;
-}
-
-/**
- * Reads a holder's wallet accounts (one per currency) through the Economy internal API.
- * Used by mission prerequisite checks (`has_credits`).
- * @param holderType - Player or NPC.
- * @param holderId - Holder id.
- * @returns The holder's accounts (empty when they have none).
- */
-export async function getWalletAccounts(holderType: WalletHolderType, holderId: string): Promise<WalletAccount[]> {
-  if (!env.economy.apiUrl) {
-    throw new HttpError(503, 'ECONOMY_NOT_CONFIGURED', 'ECONOMY_API_URL is not configured');
-  }
-  const segment = walletSegment(holderType);
-  const res = await fetch(`${env.economy.apiUrl}/api/internal/${segment}/${holderId}/wallet`, {
-    headers: { 'Accept-Language': currentLang(), ...(await authHeaders()) },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new HttpError(502, 'ECONOMY_READ_FAILED', `Economy wallet read failed (${res.status}): ${text}`, {
-      status: res.status,
-      body: text,
-    });
-  }
-  const json = (await res.json()) as { accounts?: WalletAccount[] };
-  return json.accounts ?? [];
-}

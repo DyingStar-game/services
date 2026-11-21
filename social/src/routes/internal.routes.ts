@@ -5,6 +5,7 @@
  */
 import { Router, type IRouter } from 'express';
 
+import type { PoliticalEntityType } from '../db/schema/index.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { HttpError } from '../lib/httpError.js';
 import { requireServiceRole, SERVICE_ROLES } from '../middleware/auth.js';
@@ -25,19 +26,26 @@ import {
   transferCorporationCeo,
   updateCorporation,
 } from '../services/corporations.service.js';
+import { findRelation } from '../services/friends.service.js';
 import { getGroupMembership, getGroupSummary, getPlayerGroup } from '../services/groups.service.js';
 import {
   addNpcPoliticalMember,
   createPoliticalEntity,
   disbandPoliticalEntity,
+  findPoliticalEntities,
   getPoliticalMembership,
+  listPoliticalAncestors,
+  listPoliticalChildren,
   listPoliticalMemberships,
   removeNpcPoliticalMember,
   requirePoliticalEntity,
+  setPoliticalEntityParentAsSystem,
   transferPoliticalHead,
   updatePoliticalEntity,
 } from '../services/politics.service.js';
-import { getPresence, setPresence } from '../services/presence.service.js';
+import { getPresence, setPresence, setPresenceBatch } from '../services/presence.service.js';
+import { addStanding, getStanding } from '../services/standing.service.js';
+import { notifyPlayer } from '../services/notifications.service.js';
 import {
   applyStats,
   ensureNpcProfile,
@@ -46,6 +54,7 @@ import {
   getProfilesByIds,
   searchProfiles,
 } from '../services/profiles.service.js';
+import { withLivePlaytime } from '../services/playtime.service.js';
 import { adjustReputation, rehabilitate } from '../services/reputation.service.js';
 import { listActiveSanctions } from '../services/sanctions.service.js';
 import {
@@ -57,22 +66,29 @@ import {
   corporationQueryOptional,
   corporationQueryRequired,
   encounterBody,
+  friendshipParams,
   groupIdParams,
   groupQueryOptional,
   internalCreateCorporationBody,
   internalCreatePoliticalEntityBody,
+  internalPoliticsListQuery,
   internalProfileQuery,
+  limitQuery,
   memberRankBody,
   npcCorporationBody,
   npcPoliticalBody,
   npcProfileBody,
+  notificationBody,
   playerIdParams,
   politicalEntityIdParams,
   politicalEntityPatchBody,
+  politicalParentBody,
   politicalQueryOptional,
   politicalQueryRequired,
+  presenceBatchBody,
   presenceBody,
   statsBody,
+  standingBody,
   targetPlayerBody,
   upsertPlayerBody,
 } from './schemas.js';
@@ -97,7 +113,30 @@ internalRoutes.get(
   requireServiceRole(SERVICE_ROLES.profileRead),
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
-    res.json((await getProfile(req.params.playerId)) ?? null);
+    const profile = await getProfile(req.params.playerId);
+    res.json(profile ? await withLivePlaytime(profile) : null);
+  }),
+);
+
+/** GET /players/:playerId/standing — Character standing per domain (empty map when none). */
+internalRoutes.get(
+  '/players/:playerId/standing',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(playerIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json({ playerId: req.params.playerId, standing: await getStanding(req.params.playerId) });
+  }),
+);
+
+/** PATCH /players/:playerId/standing — Apply a signed standing delta on one domain. */
+internalRoutes.patch(
+  '/players/:playerId/standing',
+  requireServiceRole(SERVICE_ROLES.standingWrite),
+  validate(playerIdParams, 'params'),
+  validate(standingBody),
+  asyncHandler(async (req, res) => {
+    const standing = await addStanding(req.params.playerId, req.body.domain, req.body.amount);
+    res.json({ playerId: req.params.playerId, domain: req.body.domain, standing });
   }),
 );
 
@@ -119,6 +158,34 @@ internalRoutes.get(
   validate(playerIdParams, 'params'),
   asyncHandler(async (req, res) => {
     res.json({ playerId: req.params.playerId, ...(await getPresence(req.params.playerId)) });
+  }),
+);
+
+/**
+ * GET /players/:playerId/friendship/:otherPlayerId — Whether the pair has an accepted
+ * friendship (either direction). Used by the chat auth service for DM topic ACLs.
+ */
+internalRoutes.get(
+  '/players/:playerId/friendship/:otherPlayerId',
+  requireServiceRole(SERVICE_ROLES.profileRead),
+  validate(friendshipParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const relation = await findRelation(req.params.playerId, req.params.otherPlayerId);
+    res.json({ friends: relation?.status === 'accepted' });
+  }),
+);
+
+/**
+ * PUT /players/presence/batch — Batch heartbeat: refresh the TTL of every active player
+ * of a game server (one call per minute instead of one per player). Players absent from
+ * the call expire back to `offline` on TTL. Omitted `status` keeps a live one.
+ */
+internalRoutes.put(
+  '/players/presence/batch',
+  requireServiceRole(SERVICE_ROLES.profileWrite),
+  validate(presenceBatchBody),
+  asyncHandler(async (req, res) => {
+    res.json(await setPresenceBatch(req.body.players));
   }),
 );
 
@@ -256,14 +323,86 @@ internalRoutes.get(
 
 // ── Politics (game server) ──────────────────────────────────────────────────
 
-/** POST /politics — Create a political entity with an explicit head (player or NPC). */
+/**
+ * POST /politics — Create a political entity with an explicit head (player or NPC), or without
+ * one (`headId` omitted/null: system-governed, head office vacant).
+ */
 internalRoutes.post(
   '/politics',
   requireServiceRole(SERVICE_ROLES.politicsWrite),
   validate(internalCreatePoliticalEntityBody),
   asyncHandler(async (req, res) => {
     const { headId, ...data } = req.body;
-    res.status(201).json(await createPoliticalEntity(headId, data));
+    res.status(201).json(await createPoliticalEntity(headId ?? null, data));
+  }),
+);
+
+/**
+ * GET /politics?type=&parentId=&name=&limit=&offset= — Exact-match lookup (`name` is exact,
+ * for idempotent bootstrap), `{ items, total, limit, offset }` ordered by name.
+ */
+internalRoutes.get(
+  '/politics',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(internalPoliticsListQuery, 'query'),
+  asyncHandler(async (req, res) => {
+    res.json(
+      await findPoliticalEntities(
+        {
+          type: req.query.type as PoliticalEntityType | undefined,
+          parentId: req.query.parentId as string | undefined,
+          name: req.query.name as string | undefined,
+        },
+        Number(req.query.limit),
+        Number(req.query.offset),
+      ),
+    );
+  }),
+);
+
+/** GET /politics/:entityId — Political entity (no members/offices), 404 when it does not exist. */
+internalRoutes.get(
+  '/politics/:entityId',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(politicalEntityIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await requirePoliticalEntity(req.params.entityId));
+  }),
+);
+
+/** GET /politics/:entityId/children — Direct lower-level entities (paginated, with member counts). */
+internalRoutes.get(
+  '/politics/:entityId/children',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(politicalEntityIdParams, 'params'),
+  validate(limitQuery, 'query'),
+  asyncHandler(async (req, res) => {
+    await requirePoliticalEntity(req.params.entityId);
+    res.json(await listPoliticalChildren(req.params.entityId, Number(req.query.limit), Number(req.query.offset)));
+  }),
+);
+
+/** GET /politics/:entityId/ancestors — Ancestors from the direct parent up to the root (nearest first). */
+internalRoutes.get(
+  '/politics/:entityId/ancestors',
+  requireServiceRole(SERVICE_ROLES.politicsRead),
+  validate(politicalEntityIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    res.json(await listPoliticalAncestors(req.params.entityId));
+  }),
+);
+
+/**
+ * PUT /politics/:entityId/parent — Attach to a higher-level entity, or detach (`null`). Same
+ * level/cycle rules as the player route, without any member permission (system actor).
+ */
+internalRoutes.put(
+  '/politics/:entityId/parent',
+  requireServiceRole(SERVICE_ROLES.politicsWrite),
+  validate(politicalEntityIdParams, 'params'),
+  validate(politicalParentBody),
+  asyncHandler(async (req, res) => {
+    res.json(await setPoliticalEntityParentAsSystem(req.params.entityId, req.body.parentId ?? null));
   }),
 );
 
@@ -386,6 +525,21 @@ internalRoutes.post(
   asyncHandler(async (req, res) => {
     await recordActivity(req.params.playerId, req.body.type, req.body.details);
     res.status(204).send();
+  }),
+);
+
+/**
+ * POST /players/:playerId/notifications — Ephemeral push to the player's MQTT channel
+ * (`notify/{playerId}`): only when the player is online, best-effort, nothing stored.
+ * Returns `{ delivered, reason? }` — an offline player is not an error.
+ */
+internalRoutes.post(
+  '/players/:playerId/notifications',
+  requireServiceRole(SERVICE_ROLES.notifyWrite),
+  validate(playerIdParams, 'params'),
+  validate(notificationBody),
+  asyncHandler(async (req, res) => {
+    res.json(await notifyPlayer(req.params.playerId, req.body));
   }),
 );
 

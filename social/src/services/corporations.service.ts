@@ -25,6 +25,7 @@ import { HttpError, conflict, forbidden, notFound } from '../lib/httpError.js';
 import { page, type Page } from '../lib/pagination.js';
 import { recordActivity } from './activity.service.js';
 import { recordCorporationActivity } from './corporationActivity.service.js';
+import { notifyPlayer } from './notifications.service.js';
 import { requirePoliticalEntity } from './politics.service.js';
 import { getPresenceMap } from './presence.service.js';
 import { isNpc, requireProfile } from './profiles.service.js';
@@ -567,6 +568,10 @@ export async function addCorporationMember(corporationId: string, playerId: stri
     await recordCorporationActivity(corporationId, actorId, 'member_joined', { playerId }, tx);
   });
   await recordActivity(playerId, 'corporation_joined', { corporationId });
+  void notifyPlayer(playerId, {
+    type: 'corporation_joined',
+    data: { corporationId },
+  }).catch((err: Error) => console.warn(`[corporations] notify failed: ${err.message}`));
 }
 
 /**

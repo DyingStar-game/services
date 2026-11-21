@@ -18,6 +18,7 @@ jobs:
         component:
           - services/monitoring
           - services/persistence
+          - services/universesimulator
           - services/resourcesDynamic
     steps:
       - name: Generate GitHub App token

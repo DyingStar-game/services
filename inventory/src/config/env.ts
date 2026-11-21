@@ -31,7 +31,7 @@ export const env = {
   authDevBypass: process.env.AUTH_DEV_BYPASS === 'true' && nodeEnv !== 'production',
   /** Trusted Keycloak service clients (`azp`) allowed on `/api/internal/*`. */
   internal: {
-    serviceClients: (process.env.INTERNAL_SERVICE_CLIENTS ?? 'svc-game,svc-market,svc-mission')
+    serviceClients: (process.env.INTERNAL_SERVICE_CLIENTS ?? 'svc-game,svc-market,svc-mission,svc-universesimulator')
       .split(',')
       .map((client) => client.trim())
       .filter(Boolean),
@@ -44,5 +44,17 @@ export const env = {
     serviceClientSecret: process.env.SOCIAL_SERVICE_CLIENT_SECRET ?? '',
     /** Dev-only fallback: shared key sent as `X-Internal-Key` when no secret is set. */
     internalApiKey: process.env.SOCIAL_INTERNAL_API_KEY ?? '',
+  },
+  /**
+   * Mission integration: the POI in-use lock checked before a player may move a POI.
+   * An empty `MISSION_API_URL` disables the lock (nothing can be known to be in use).
+   */
+  mission: {
+    apiUrl: (process.env.MISSION_API_URL ?? '').replace(/\/$/, ''),
+    /** Service account used for `client_credentials` (needs the `mission:read` role). */
+    serviceClientId: process.env.MISSION_SERVICE_CLIENT_ID ?? 'svc-inventory',
+    serviceClientSecret: process.env.MISSION_SERVICE_CLIENT_SECRET ?? '',
+    /** Dev-only fallback: shared key sent as `X-Internal-Key` when no secret is set. */
+    internalApiKey: process.env.MISSION_INTERNAL_API_KEY ?? '',
   },
 };

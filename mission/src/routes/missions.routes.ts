@@ -1,6 +1,6 @@
 /**
  * Player-facing mission routes (`/api/missions`): browse available missions, accept one,
- * report objective progress, complete (reward) or abandon.
+ * verify service objectives, complete (reward) or abandon.
  */
 import { Router, type IRouter } from 'express';
 import { t } from '../i18n/index.js';
@@ -14,10 +14,11 @@ import {
   acceptMission,
   completeMission,
   getAssignment,
-  reportProgress,
+  listAssignmentsForMission,
   verifyPlayerObjectives,
 } from '../services/assignments.service.js';
 import {
+  cancelPlayerMission,
   confirmObjective,
   createPlayerMission,
   getMissionWithObjectives,
@@ -29,15 +30,20 @@ import {
 } from '../services/missions.service.js';
 import { isGroupMember, getPlayerGroup, getPlayerPresence } from '../services/social.client.js';
 import { validateMissionSpec } from '../services/spec.service.js';
+import { declineInvitation, inviteToMission, joinMission } from '../services/invitations.service.js';
+import { resolvePlayerNames } from '../services/detail.service.js';
 import { missionKindsCatalog } from '../kinds/index.js';
+import { withPoiNames } from '../services/zones.service.js';
 import {
+  completeBody,
   createPlayerMissionBody,
   eventBody,
   missionIdParams,
   missionListQuery,
   objectiveParams,
-  progressBody,
   shareBody,
+  inviteBody,
+  invitationIdParams,
   validateMissionBody,
 } from './schemas.js';
 
@@ -73,7 +79,11 @@ missionsRoutes.post(
         rewards: mission.rewards,
         maxAssignees: mission.maxAssignees,
       },
-      { escrowed: mode === 'player', requireReward: mode === 'player' },
+      {
+        escrowed: mode === 'player',
+        requireReward: mode === 'player',
+        treasuryEscrow: mode === 'internal' && Boolean(mission.escrow),
+      },
     );
     res.json({ valid: true, spec });
   }),
@@ -95,6 +105,8 @@ missionsRoutes.get(
       category: req.query.category as never,
       issuerType: req.query.issuerType as never,
       issuerId: req.query.issuerId as string | undefined,
+      giverFaction: req.query.giverFaction as string | undefined,
+      giverDivision: req.query.giverDivision as string | undefined,
       visibility: req.query.visibility as never,
       groupId: req.query.groupId as string | undefined,
       groupClaimable: req.query.groupClaimable as never,
@@ -118,7 +130,7 @@ missionsRoutes.get(
       Number(req.query.limit),
       Number(req.query.offset),
     );
-    res.json({ missions: found.items, total: found.total, limit: found.limit, offset: found.offset });
+    res.json({ missions: await withPoiNames(found.items), total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
 
@@ -135,7 +147,15 @@ missionsRoutes.get(
       throw new HttpError(404, 'NOT_FOUND', t('not_found.mission_bare'));
     }
     const assignment = await getAssignment(req.params.missionId, player.id);
-    res.json({ ...result, assignment });
+    // A participant sees who else takes part (a shared mission): their names, best-effort.
+    let participants: { playerId: string; name: string | null }[] = [];
+    if (assignment?.status === 'active') {
+      const active = (await listAssignmentsForMission(req.params.missionId)).filter((a) => a.status === 'active');
+      const names = await resolvePlayerNames(active.map((a) => a.playerId));
+      participants = active.map((a) => ({ playerId: a.playerId, name: names[a.playerId] ?? null }));
+    }
+    const [mission] = await withPoiNames([result.mission]);
+    res.json({ ...result, mission, assignment, participants });
   }),
 );
 
@@ -146,6 +166,44 @@ missionsRoutes.post(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     res.status(201).json(await acceptMission(req.params.missionId, player.id));
+  }),
+);
+
+/**
+ * POST /invitations/:invitationId/join — Join the mission of an invitation (to me, or to my group).
+ * POST /invitations/:invitationId/decline — Decline it (a group's stays open to the others).
+ */
+missionsRoutes.post(
+  '/invitations/:invitationId/join',
+  validate(invitationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.status(201).json(await joinMission(req.params.invitationId, player.id));
+  }),
+);
+
+missionsRoutes.post(
+  '/invitations/:invitationId/decline',
+  validate(invitationIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    await declineInvitation(req.params.invitationId, player.id);
+    res.status(204).end();
+  }),
+);
+
+/**
+ * POST /:missionId/invite — A participant shares the mission they took with one player
+ * ({playerId}) or with their own group ({groupId}): the invitees may join it (shared progress,
+ * reward split equally).
+ */
+missionsRoutes.post(
+  '/:missionId/invite',
+  validate(missionIdParams, 'params'),
+  validate(inviteBody),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.status(201).json(await inviteToMission(req.params.missionId, player.id, req.body));
   }),
 );
 
@@ -192,30 +250,20 @@ missionsRoutes.post(
   }),
 );
 
-/** POST /:missionId/objectives/:objectiveId/progress — Report objective progress. */
-missionsRoutes.post(
-  '/:missionId/objectives/:objectiveId/progress',
-  validate(objectiveParams, 'params'),
-  validate(progressBody),
-  asyncHandler(async (req, res) => {
-    const player = requirePlayer(req);
-    const result = await reportProgress(
-      req.params.missionId,
-      player.id,
-      req.params.objectiveId,
-      req.body.quantity,
-    );
-    res.json(result);
-  }),
-);
-
 /** POST /:missionId/complete — Complete the mission and settle its reward. */
 missionsRoutes.post(
   '/:missionId/complete',
   validate(missionIdParams, 'params'),
+  validate(completeBody),
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
-    res.json(await completeMission(req.params.missionId, player.id));
+    // A mission that does not complete on its own is turned in at a town hall kiosk: the game
+    // server validates it there (internal complete), never the player from anywhere.
+    const mission = await requireMission(req.params.missionId);
+    if (!mission.autoComplete) {
+      throw new HttpError(403, 'TURN_IN_AT_KIOSK', 'This mission is turned in at a town hall kiosk');
+    }
+    res.json(await completeMission(req.params.missionId, player.id, { partial: req.body.partial }));
   }),
 );
 
@@ -226,6 +274,16 @@ missionsRoutes.post(
   asyncHandler(async (req, res) => {
     const player = requirePlayer(req);
     res.json(await verifyPlayerObjectives(req.params.missionId, player.id));
+  }),
+);
+
+/** DELETE /:missionId — Cancel a mission you manage (escrow refunded, assignees dropped). */
+missionsRoutes.delete(
+  '/:missionId',
+  validate(missionIdParams, 'params'),
+  asyncHandler(async (req, res) => {
+    const player = requirePlayer(req);
+    res.json(await cancelPlayerMission(req.params.missionId, player.id));
   }),
 );
 

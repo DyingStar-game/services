@@ -129,6 +129,15 @@ export const en = {
   "sanction.banned": "Account banned: {reason}",
   "sanction.suspended_until": "Account suspended until {until}: {reason}",
   "sanction.suspended": "Account suspended: {reason}",
+  "bug_report.severity": "Severity",
+  "bug_report.severity.blocker": "Blocker",
+  "bug_report.severity.major": "Major",
+  "bug_report.severity.minor": "Minor",
+  "bug_report.severity.cosmetic": "Cosmetic",
+  "bug_report.description": "Description",
+  "bug_report.steps": "Steps",
+  "bug_report.actual": "Actual result",
+  "bug_report.expected": "Expected result",
 } as const;
 
 /** Keys of the construction-time catalog (typed from the English source). */
@@ -248,6 +257,15 @@ export const fr: Record<MessageKey, string> = {
   "sanction.banned": "Compte banni : {reason}",
   "sanction.suspended_until": "Compte suspendu jusqu'à {until} : {reason}",
   "sanction.suspended": "Compte suspendu : {reason}",
+  "bug_report.severity": "Sévérité",
+  "bug_report.severity.blocker": "Bloquant",
+  "bug_report.severity.major": "Majeur",
+  "bug_report.severity.minor": "Mineur",
+  "bug_report.severity.cosmetic": "Cosmétique",
+  "bug_report.description": "Description",
+  "bug_report.steps": "Étapes",
+  "bug_report.actual": "Résultat obtenu",
+  "bug_report.expected": "Résultat attendu",
 };
 
 /** French overrides keyed by error code (English remains the thrown message). */
@@ -259,6 +277,10 @@ export const frCodeMessages: Record<string, string> = {
   "POLITICAL_CYCLE": "Ce lien créerait un cycle dans la hiérarchie",
   "CORPORATION_CYCLE": "Ce lien créerait un cycle dans la hiérarchie",
   "NPC_NOT_APPLICABLE": "Cette action ne s'applique pas aux profils PNJ",
+  "BUG_REPORT_DISABLED": "Les rapports de bug ne sont pas relayés sur cet environnement",
+  "BUG_REPORT_RATE_LIMITED": "Trop de rapports de bug : réessayez plus tard",
+  "BUG_REPORT_BAD_SCREENSHOT": "La capture doit être une image JPEG ou PNG de moins de 4 Mo",
+  "BUG_REPORT_UPSTREAM": "Le rapport de bug n'a pas pu être transmis",
   "INVALID_JSON": "Corps JSON malformé",
   "INTERNAL_ERROR": "Erreur interne du serveur",
 };

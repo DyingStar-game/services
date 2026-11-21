@@ -11,6 +11,7 @@ import { HttpError } from '../lib/httpError.js';
 import { requirePlayer } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { ensurePlayerAccount } from '../services/accounts.service.js';
+import { notifyPlayer } from '../services/social.client.js';
 import { transfer } from '../services/transactions.service.js';
 import { transferBody } from './schemas.js';
 
@@ -48,6 +49,19 @@ transfersRoutes.post(
       reference: 'player_transfer',
       details: memo ? { memo } : undefined,
     });
+
+    // Ephemeral push to the receiver (best-effort: a notification failure never
+    // fails the transfer — the ledger is the source of truth anyway).
+    void notifyPlayer(toPlayerId, {
+      type: 'transfer_received',
+      data: {
+        amount,
+        currency: result.transaction.currency,
+        fromPlayerId: player.id,
+        ...(memo ? { memo } : {}),
+      },
+    }).catch((err: Error) => console.warn(`[transfers] notify failed: ${err.message}`));
+
     res.status(201).json(result);
   }),
 );

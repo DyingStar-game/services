@@ -68,7 +68,10 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 | `social:politics:read` | Political membership reads |
 | `social:politics:write` | NPC political membership + internal political entity management |
 | `social:sanctions:read` | Active sanctions (mute/ban enforcement) |
+| `social:notify:write` | Ephemeral push to a player's MQTT channel (`POST /internal/players/:playerId/notifications`) |
 | `social:reputation:write` | Reputation adjustments and rehabilitation passes |
+| `social:standing:write` | Character standing deltas (mission standing rewards: `PATCH /internal/players/:playerId/standing`) |
+| `social:authorize` | Policy decision point: `POST /internal/authorize` (single or batched) and `GET /internal/permissions/catalog` |
 
 ### economie (`economie-api`)
 | Role | Grants |
@@ -87,15 +90,18 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 | `inventory:credit` | Credit/debit stacks and instances |
 | `inventory:transfer` | Transfers (stacks, instances, hold consumption) |
 | `inventory:hold` | Reserve (hold) and release items |
+| `inventory:carried:write` | Carried-quantity delta (`POST /holders/:holderType/:holderId/stacks/:goodType/carried`) — mining deposit / delivery drop-off |
 | `inventory:corporation:manage` | *(declared, not yet wired to a route)* |
+| `inventory:poi:manage` | POI lifecycle on behalf of any holder (create / patch / delete `/internal/pois`) |
 
 ### mission (`mission-api`)
 | Role | Grants |
 |---|---|
 | `mission:read` | List missions / player missions |
-| `mission:write` | Create, update, expire, cancel, assign missions |
-| `mission:progress` | Objective progress |
+| `mission:write` | Create, update, expire, cancel, assign missions + batch player-states (`PUT /missions/player-states`) |
+| `mission:progress` | Objective progress, objective confirm, verify |
 | `mission:complete` | Complete and settle missions |
+| `mission:escrow:politics` | Fund an internal mission's reward from a political treasury (`escrow` on creation) |
 
 ### market (`market-api`)
 | Role | Grants |
@@ -106,15 +112,24 @@ sync with each service's `src/middleware/auth.ts` `SERVICE_ROLES`.
 
 > When adding a capability, create the client role on the target `*-api` client and assign it to
 > the calling `svc-*` service account. The game server (`svc-game`) typically needs the write
-> roles: `social:corporation:write`, `social:politics:write`, `economie:wallet:*`,
-> `economie:politics:*`, `inventory:*`, `mission:*` and `market:*`.
+> roles: `social:corporation:write`, `social:politics:write`, `social:standing:write`,
+> `economie:wallet:*`, `economie:politics:*`, `inventory:*` (incl. `inventory:carried:write`),
+> `mission:*` (incl. `mission:write` for player-states) and `market:*`.
 > The mission service (`svc-mission`) needs, on top of the write roles it already uses:
-> `social:corporation:read`, `social:group:read`, `social:profile:read` (prereq `min_reputation`)
-> on `social-api` (plus `social:politics:read` for `escrowSource: issuer` on political
-> entities), `economie:wallet:read` and `economie:politics:manage` on `economie-api`
-> (prereq `has_credits` + political treasury escrow), and `inventory:read` on
-> `inventory-api` (objectives `owns_items` / `deliver_items`). The corporation treasury
-> escrow only needs the wallet roles it already has.
+> `social:corporation:read`, `social:group:read`, `social:profile:read` (prereq `min_reputation`,
+> prereq `min_standing`) on `social-api` (plus `social:politics:read` for `escrowSource: issuer` on political
+> entities), `social:standing:write` (mission standing reward settlement) on `social-api`,
+> and `inventory:read` on
+> `inventory-api` (objectives `owns_items` / `deliver_material` / `transport` / `transport_passenger`,
+> zone POI resolution).
+> The inventory service (`svc-inventory`) needs `mission:read` on
+> `mission-api` (`POST /api/internal/poi-usage`): before it may move a POI's geometry it asks
+> Mission which POIs are the destination of a mission someone has accepted.
+> The chat auth adapter (`svc-chat`, chart `textchat`) is read-only on `social-api` and needs
+> exactly four roles: `social:profile:read` (friendship probe for DM topics),
+> `social:group:read`, `social:corporation:read` and `social:sanctions:read` (mutes/bans).
+> Add `social:notify:write` only if a future service starts publishing to `notify/#`
+> instead of going through `service-social`.
 
 ## Required GitHub Secrets
 

@@ -35,6 +35,7 @@ export const SERVICE_ROLES = {
   hold: 'inventory:hold',
   transfer: 'inventory:transfer',
   credit: 'inventory:credit',
+  carriedWrite: 'inventory:carried:write',
   corporationManage: 'inventory:corporation:manage',
   poiManage: 'inventory:poi:manage',
 } as const;

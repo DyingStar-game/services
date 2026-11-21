@@ -29,7 +29,7 @@ export const ownsItemsPrerequisite: PrerequisiteKind = {
   },
   name: { en: 'Required items', fr: 'Objets requis' },
   summary: { en: 'Player inventory holds at least {quantity} of {itemId}', fr: "L'inventaire du joueur détient au moins {quantity} de {itemId}" },
-  categories: ['mining', 'farming', 'crafting', 'construction', 'trading', 'salvage', 'delivery'],
+  categories: ['mining', 'delivery', 'transport'],
   async check({ playerId, params }) {
     const { itemId, quantity, scope } = paramsSchema.parse(params);
     const stack = await getStack({ holderType: 'player', holderId: playerId }, itemId);

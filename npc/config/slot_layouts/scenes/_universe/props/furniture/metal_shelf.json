@@ -1,0 +1,33 @@
+{
+  "_comment": "PLACEHOLDER slot positions (6 columns x 4 levels) — re-export the real marker positions from Godot. Positions are local to the scene root node, metres, index-matched with the replicated shelf_slots_occupied, ordered bottom row first, left-to-right facing the front (+Z).",
+  "schema_version": 1,
+  "scenename": "scenes/_universe/props/furniture/metal_shelf.tscn",
+  "object_type": "shelf",
+  "front": [2.5, 0.0, 0.0],
+  "slots": [
+    [0.0, 0.542, -0.736],
+    [0.0, 0.542, -0.267],
+    [0.0, 0.542, 0.253],
+    [0.0, 0.542, 0.746],
+    [0.0, 1.048, -0.736],
+    [0.0, 1.048, -0.267],
+    [0.0, 1.048, 0.253],
+    [0.0, 1.048, 0.746],
+    [0.0, 1.545, -0.736],
+    [0.0, 1.545, -0.267],
+    [0.0, 1.545, 0.253],
+    [0.0, 1.545, 0.746],
+    [0.0, 2.042, -0.736],
+    [0.0, 2.042, -0.267],
+    [0.0, 2.042, 0.253],
+    [0.0, 2.042, 0.746],
+    [0.0, 2.549, -0.736],
+    [0.0, 2.549, -0.267],
+    [0.0, 2.549, 0.253],
+    [0.0, 2.549, 0.746],
+    [0.0, 3.049, -0.736],
+    [0.0, 3.049, -0.267],
+    [0.0, 3.049, 0.253],
+    [0.0, 3.049, 0.746]
+  ]
+}

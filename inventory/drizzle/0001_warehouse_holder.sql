@@ -1,0 +1,2 @@
+ALTER TABLE "inventory_stacks" DROP CONSTRAINT "inventory_stacks_holder_type_valid";--> statement-breakpoint
+ALTER TABLE "inventory_stacks" ADD CONSTRAINT "inventory_stacks_holder_type_valid" CHECK ("inventory_stacks"."holder_type" in ('player','npc','corporation','system','warehouse'));

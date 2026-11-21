@@ -1,0 +1,22 @@
+{
+	"doors": [],
+	"footprint": {
+		"center": [
+			0.0,
+			-5.0,
+			-61.0
+		],
+		"size": [
+			50.0,
+			10.0,
+			182.0
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [],
+	"scenename": "scenes/_universe/props/containers/storagewarehouse.tscn",
+	"schema_version": 1,
+	"seats": []
+}

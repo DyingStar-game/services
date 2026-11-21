@@ -9,7 +9,10 @@ import { playerProfiles } from './profiles.js';
 export const PRESENCE_STATUSES = ['online', 'mission', 'offline'] as const;
 export type PresenceStatus = (typeof PRESENCE_STATUSES)[number];
 
-/** Where a player currently is in the persistent universe. */
+/**
+ * Where a player currently is. `position` is metres from the centre of the body named
+ * by `scene` (local frame); `scene: "space"` = open space (frame of the system).
+ */
 export interface PlayerLocation {
   system?: string;
   scene?: string;

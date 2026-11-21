@@ -1,0 +1,165 @@
+{
+	"doors": [
+		{
+			"approach": [
+				-1.777,
+				0.0,
+				-0.6
+			],
+			"door_id": "front_l_door",
+			"indoor": [
+				-0.808,
+				0.953,
+				-0.941
+			],
+			"outdoor": [
+				-0.877,
+				0.953,
+				-0.6
+			]
+		},
+		{
+			"approach": [
+				1.774,
+				0.0,
+				-0.6
+			],
+			"door_id": "front_r_door",
+			"indoor": [
+				0.812,
+				0.953,
+				-0.936
+			],
+			"outdoor": [
+				0.874,
+				0.953,
+				-0.6
+			]
+		},
+		{
+			"approach": [
+				-1.79,
+				0.0,
+				0.04
+			],
+			"door_id": "hatch_fl",
+			"indoor": [
+				-0.89,
+				0.34,
+				0.04
+			],
+			"outdoor": [
+				-0.89,
+				0.34,
+				0.04
+			]
+		},
+		{
+			"approach": [
+				1.79,
+				0.0,
+				0.04
+			],
+			"door_id": "hatch_fr",
+			"indoor": [
+				0.89,
+				0.34,
+				0.04
+			],
+			"outdoor": [
+				0.89,
+				0.34,
+				0.04
+			]
+		},
+		{
+			"approach": [
+				-1.79,
+				0.0,
+				0.74
+			],
+			"door_id": "hatch_rl",
+			"indoor": [
+				-0.89,
+				0.34,
+				0.74
+			],
+			"outdoor": [
+				-0.89,
+				0.34,
+				0.74
+			]
+		},
+		{
+			"approach": [
+				1.79,
+				0.0,
+				0.74
+			],
+			"door_id": "hatch_rr",
+			"indoor": [
+				0.89,
+				0.34,
+				0.74
+			],
+			"outdoor": [
+				0.89,
+				0.34,
+				0.74
+			]
+		}
+	],
+	"footprint": {
+		"center": [
+			0.009,
+			0.817,
+			0.444
+		],
+		"size": [
+			2.185,
+			1.787,
+			3.645
+		]
+	},
+	"garages": [],
+	"kiosks": [],
+	"markers": {},
+	"obstacles": [],
+	"scenename": "scenes/_universe/vehicles/ground/trucks/truck.tscn",
+	"schema_version": 1,
+	"seats": [
+		{
+			"door_id": "front_l_door",
+			"driver": true,
+			"key": "seat_driver",
+			"position": [
+				-1.5,
+				1.0,
+				-1.105
+			]
+		},
+		{
+			"door_id": "front_r_door",
+			"driver": false,
+			"key": "seat_passenger",
+			"position": [
+				1.5,
+				1.0,
+				-1.105
+			]
+		}
+	],
+	"vehicle": {
+		"forward": [
+			0.0,
+			0.0,
+			-1.0
+		],
+		"max_steer_deg": 30.0,
+		"steer_min_ratio": 0.35,
+		"steer_return_speed": 1.0,
+		"steer_speed": 0.2,
+		"steer_speed_falloff_kmh": 80.0,
+		"wheelbase_m": 2.0
+	}
+}
