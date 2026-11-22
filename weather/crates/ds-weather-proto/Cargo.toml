@@ -1,0 +1,11 @@
+[package]
+name = "ds-weather-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wire contract of the DyingStar weather service: ds_bridge envelope, weather_system object, channel definition"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { version = "1", features = ["v5"] }

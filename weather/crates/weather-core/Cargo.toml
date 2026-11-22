@@ -1,0 +1,10 @@
+[package]
+name = "weather-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Planetary climate and weather model of DyingStar: pure functions, replayable from (seed, time)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
