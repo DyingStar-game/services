@@ -116,7 +116,11 @@ in-memory stand-in (state is lost on restart). Use `EXTERNAL_MODE=live` with the
 `SERVICE_CLIENT_SECRET` (or `OUTBOUND_INTERNAL_API_KEY` with the services' dev bypass) to run
 against the real services.
 
-`seeds/tarsis_3-ares.json` imports every village of SandBox (`planetPoiUuid`) that has a
+The planet is found in the world by its name (`planetInternalName`, the scene `tarsis_3`): each
+environment gives it its own uuid, so the seed names none. A `planetPoiUuid` in a world file is only
+tried when the world holds no such planet.
+
+`seeds/tarsis_3-ares.json` imports every village of SandBox that has a
 cargo_depot attached through `poi_uuid`, with profiles per village type (`mining`, `factory`)
 scaled by population (profile chosen by the village `type`, else by its name prefix: `M` →
 mining, `F` → factory). The import report lists the depots without `poi_uuid`. The import is
@@ -164,9 +168,7 @@ holds. Do not leave them at their old size either: a warehouse buys no more than
 capacity, so one already fuller than an old, smaller capacity buys nothing.
 
 The import report must count villages (`villages > 0`): with none, the profiles cleared above are not
-created again. The planet is looked up by `planetPoiUuid`, and by `planetInternalName` (the scene
-file, `tarsis_3` for `scenes/systems/tarsis/tarsis_3.tscn`) when persistence no longer knows that
-uuid: a regenerated world gives the planet a new uuid, and the federation follows it.
+created again (and the tick reports `WORLD_EMPTY`).
 
 Check first that no supply order is open (`GET /api/admin/dashboard`, `openOrders`), and after the
 tick that the villages are linked (`GET /api/admin/network`, `routes`): without routes the planner

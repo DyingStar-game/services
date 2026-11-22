@@ -238,8 +238,18 @@ pub trait PersistenceClient: Send + Sync {
     async fn get_item(&self, uuid: Uuid) -> Result<Option<PoiSnapshot>>;
     /// Every object of a type under a parent (all pages).
     async fn list_items(&self, object_type: &str, parent_id: Uuid) -> Result<Vec<PoiItem>>;
-    /// Every object of a type, whatever its parent (all pages).
-    async fn list_by_type(&self, object_type: &str) -> Result<Vec<PoiItem>>;
+    /// The planet whose scene is [internal_name] (`tarsis_3`), None when the world holds none: each
+    /// environment gives its planets its own uuids, their scenes are the same everywhere.
+    async fn find_planet(&self, internal_name: &str) -> Result<Option<Uuid>>;
+}
+
+/// The persistence type of a planet (and of a moon).
+pub const PLANET_TYPE: &str = "planet";
+
+/// The name of a scene as the world files say it: `scenes/systems/tarsis/tarsis_3.tscn` is `tarsis_3`.
+pub fn scene_name(scenename: &str) -> &str {
+    let file = scenename.rsplit(['/', '\\']).next().unwrap_or(scenename);
+    file.strip_suffix(".tscn").unwrap_or(file)
 }
 
 // ── Bundle ───────────────────────────────────────────────────────────────────

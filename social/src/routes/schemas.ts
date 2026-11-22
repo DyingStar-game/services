@@ -18,7 +18,7 @@ import {
   SANCTION_TYPES,
 } from '../db/schema/index.js';
 import { pageQuery } from '../lib/pagination.js';
-import { BUG_SEVERITIES } from '../services/bugReports.service.js';
+import { BUG_SEVERITIES, EXTRA_SCREENSHOTS_MAX } from '../services/bugReports.service.js';
 import { ACTION_MAX_LENGTH, ACTION_RE } from '../services/permissionCatalog.js';
 
 export const uuidSchema = z.string().uuid();
@@ -394,6 +394,8 @@ export const createBugReportBody = z.object({
     .record(z.string().trim().min(1).max(40), z.union([z.string().max(200), z.number(), z.boolean()]))
     .optional(),
   screenshot: z.string().max(6_000_000).optional(),
+  extra_screenshots: z.array(z.string().max(6_000_000)).max(EXTRA_SCREENSHOTS_MAX).optional(),
+  thread_id: z.string().regex(/^\d{15,22}$/).optional(),
   log: z.string().max(300_000).optional(),
 });
 

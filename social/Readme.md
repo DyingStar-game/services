@@ -46,6 +46,7 @@ Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en 
 | `PRESENCE_BATCH_MAX` | Joueurs max par heartbeat batch (défaut `5000`) |
 | `DISCORD_BUG_WEBHOOK_URL` | Webhook Discord des rapports de bug en jeu — **secret** (qui l'a peut poster), un par environnement ; **vide = fonction éteinte** (`503 BUG_REPORT_DISABLED`) |
 | `DISCORD_BUG_WEBHOOK_FORUM`, `DISCORD_BUG_WEBHOOK_TAG_IDS` | `true` si le salon du webhook est un forum (chaque rapport ouvre un fil nommé par son titre) ; étiquettes de forum à poser (CSV d'identifiants) |
+| `DISCORD_BUG_BOT_TOKEN` | Jeton du bot Discord qui **lit** le forum des bugs — **secret**. Droits : « Voir le salon » et « Voir les anciens messages » sur le forum. Sert `GET /api/bug-reports/open` (bugs non fermés, avec leur état lu sur la réaction carrée du post : 🟥 ouvert, 🟧 pris en charge, 🟪 à tester dans le build, 🟩 fermé) et le rattachement d'un rapport à un post (`thread_id`). **Vide = pas de liste** |
 | `BUG_REPORT_ENVIRONMENT` | Étiquette de l'environnement dans le titre (`[BUG][PREPROD]…`) |
 | `BUG_REPORT_MIN_INTERVAL_SECONDS`, `BUG_REPORT_DAILY_MAX` | Rythme par joueur (défauts `60` s et `20` par 24 h, en mémoire) |
 
@@ -131,7 +132,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/reports` `{targetType: player\|corporation, targetId, reason, message?}` | Signaler (motifs : `harassment, cheating, griefing, offensive_name, scam, other`) |
 | GET | `/api/reports?limit=&offset=` | Mes signalements |
 | GET | `/api/bug-reports/status` | `{enabled}` : cet environnement relaie-t-il les rapports de bug ? |
-| POST | `/api/bug-reports` `{title, severity?, description, steps?, actual?, expected?, context?, screenshot?, log?}` | Rapport de bug en jeu sur le gabarit QA (sévérité `blocker` / `major` / `minor` / `cosmetic` : pastille de couleur et mot dans le titre ; description, étapes, résultat obtenu, résultat attendu), relayé au salon QA de Discord (capture JPEG/PNG en base64, fin du journal du client ; corps jusqu'à 8 Mo). Les sections sont titrées dans la langue de la requête. Rien n'est stocké ; l'auteur est celui du jeton |
+| POST | `/api/bug-reports` `{title, severity?, description, steps?, actual?, expected?, context?, screenshot?, extra_screenshots?, log?}` | Rapport de bug en jeu sur le gabarit QA (sévérité `blocker` / `major` / `minor` / `cosmetic` : pastille de couleur en tête du titre, `🔴 [PREPROD] titre` ; description, étapes, résultat obtenu, résultat attendu), relayé au salon QA de Discord (capture JPEG/PNG en base64, fin du journal du client ; corps jusqu'à 8 Mo). Les sections sont titrées dans la langue de la requête. Rien n'est stocké ; l'auteur est celui du jeton |
 
 Un joueur sous **suspension** ou **ban** actif reçoit `403 SANCTIONED` sur toute l'API joueur sauf `/api/me/reputation` et `/api/me/sanctions`. Un `mute` n'est pas appliqué ici (c'est au chat/serveur de jeu de le lire via l'API interne).
 

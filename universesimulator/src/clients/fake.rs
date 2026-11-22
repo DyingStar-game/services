@@ -403,11 +403,13 @@ impl PersistenceClient for FakeWorld {
         }))
     }
 
-    async fn list_by_type(&self, object_type: &str) -> Result<Vec<PoiItem>> {
+    async fn find_planet(&self, internal_name: &str) -> Result<Option<Uuid>> {
         Ok(self.with(|s| {
-            let mut items: Vec<PoiItem> = s.items.values().filter(|i| i.object_type == object_type).cloned().collect();
-            items.sort_by_key(|i| i.uuid);
-            items
+            s.items
+                .values()
+                .filter(|i| i.object_type == super::PLANET_TYPE)
+                .find(|i| i.data["scenename"].as_str().is_some_and(|scene| super::scene_name(scene) == internal_name))
+                .map(|i| i.uuid)
         }))
     }
 }
