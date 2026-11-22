@@ -1,0 +1,39 @@
+name: "Build Production Image: weather"
+
+on:
+  push:
+    tags:
+      - "weather-v*"
+
+jobs:
+  extract-version:
+    name: Extract version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Extract version
+        id: tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#weather-}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build weather (prod)
+    needs: extract-version
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: weather
+      # Context = services/ root: the image embeds resourcesDynamic/data/system/
+      # (weather/docker/Dockerfile.dockerignore trims the rest).
+      context_path: .
+      dockerfile_path: weather/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/weather
+      image_tag: ${{ needs.extract-version.outputs.version }}
+      additional_tags: latest
+      chart_name: service-weather
+      trigger_preprod_deploy: false
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}

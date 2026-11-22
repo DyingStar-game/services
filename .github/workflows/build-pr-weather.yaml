@@ -1,0 +1,21 @@
+name: "PR Build Check: weather"
+
+on:
+  pull_request:
+    paths:
+      - "weather/**"
+      - "resourcesDynamic/data/system/**"
+
+jobs:
+  build:
+    name: Build weather (PR check)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: weather
+      # Context = services/ root: the image embeds resourcesDynamic/data/system/
+      # (weather/docker/Dockerfile.dockerignore trims the rest).
+      context_path: .
+      dockerfile_path: weather/docker/Dockerfile
+      image_name: local/weather
+      image_tag: pr-check
+      push: false
