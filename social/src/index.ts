@@ -28,7 +28,7 @@ app.use(cors({ origin: env.corsOrigin, credentials: true }));
 // limit — so it gets its own parser first (body-parser skips already-parsed bodies).
 app.use('/api/internal/players/presence/batch', express.json({ limit: '5mb' }));
 // A bug report carries its capture (base64) and a log tail: same reason, its own parser.
-app.use('/api/bug-reports', express.json({ limit: '8mb' }));
+app.use('/api/bug-reports', express.json({ limit: '12mb' }));
 app.use(express.json({ limit: '1mb' }));
 
 /** Root discovery endpoint. */
