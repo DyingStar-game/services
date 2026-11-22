@@ -1,0 +1,30 @@
+name: "Build & Deploy to Preprod: weather"
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "weather/**"
+      - "resourcesDynamic/data/system/**"
+      - ".github/workflows/build-preprod-weather.yaml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build weather (preprod)
+    uses: ./.github/workflows/_build-push.yaml
+    with:
+      service_name: weather
+      # Context = services/ root: the image embeds resourcesDynamic/data/system/
+      # (weather/docker/Dockerfile.dockerignore trims the rest).
+      context_path: .
+      dockerfile_path: weather/docker/Dockerfile
+      image_name: harbor.dyingstar-game.space/dyingstar/weather
+      image_tag: develop
+      chart_name: service-weather
+      trigger_preprod_deploy: true
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      KUBERNETES_REPO_TOKEN: ${{ secrets.KUBERNETES_REPO_TOKEN }}
