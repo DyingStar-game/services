@@ -149,19 +149,26 @@ seed (the economy scale, a threshold, a mission's size) keeps its old values, an
 the size it was. Seen in preprod on 2026-11-18: profiles from before `economyScale: 25`, a factory
 aiming at 120 kg of ingots where the seed says 8 000, mining missions of 60 kg.
 
-To bring it to the seed, clear the profiles of the resources concerned, then import and tick:
+To bring it to the seed, clear the profiles of the resources concerned and bring their capacities to
+the seed's scale (`capacity × economyScale`), then import and tick:
 
 ```sql
 -- The profiles of the gold chain. Stocks are left alone: the crates in the world are the truth.
 DELETE FROM village_policies     WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
 DELETE FROM village_flows        WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
 DELETE FROM mineral_sources      WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
-DELETE FROM warehouse_capacities WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
+-- The capacities are kept but rescaled (800 × 25 here).
+UPDATE warehouse_capacities SET capacity = 20000, updated_at = now()
+  WHERE resource_id IN (SELECT id FROM resources WHERE code IN ('ore.gold', 'ingot.gold'));
 ```
 
-A capacity inserted again applies its initial stock again (`initialBelowThreshold`: just under the
-village's threshold), on top of what the warehouse holds: keep the `warehouse_capacities` rows to add
-nothing.
+Do not delete the `warehouse_capacities` rows: a capacity inserted again applies its initial stock
+again (`initialBelowThreshold`: just under the village's threshold), on top of what the warehouse
+holds. Do not leave them at their old size either: a warehouse buys no more than what fits under its
+capacity, so one already fuller than an old, smaller capacity buys nothing.
+
+The import report must count villages (`villages > 0`): with none, the profiles cleared above are not
+created again (and the tick reports `WORLD_EMPTY`).
 
 Check first that no supply order is open (`GET /api/admin/dashboard`, `openOrders`), and after the
 tick that the villages are linked (`GET /api/admin/network`, `routes`): without routes the planner
