@@ -8,8 +8,9 @@
  * webhook, so nothing else is configured. Without the token the list is empty and off.
  *
  * Where a bug stands is the square the QA team puts as a reaction under its post: red (open),
- * orange (a developer took it), purple (fixed, to be tested in the build), green (closed). A post
- * with no square is new. Closed and archived posts are left out of the list.
+ * orange (a developer took it), blue (fixed, to be tested in the next build: reports can still
+ * add to it), purple (to be tested in the build out now), green (closed). A post with no square
+ * is new. Closed and archived posts are left out of the list.
  *
  * Nothing is stored: the list is read from Discord and kept a couple of minutes in memory.
  */
@@ -23,7 +24,7 @@ const THREADS_MAX = 150;
 const READS_AT_ONCE = 5;
 
 /** Where a bug stands, in the order it goes through them. */
-export const BUG_STATUSES = ['new', 'open', 'in_progress', 'to_test', 'closed'] as const;
+export const BUG_STATUSES = ['new', 'open', 'in_progress', 'next_build', 'to_test', 'closed'] as const;
 export type BugStatus = (typeof BUG_STATUSES)[number];
 /**
  * The square of each status, the furthest first: a post that kept its red square under a green
@@ -32,6 +33,7 @@ export type BugStatus = (typeof BUG_STATUSES)[number];
 const STATUS_MARKS: [string, BugStatus][] = [
   ['🟩', 'closed'],
   ['🟪', 'to_test'],
+  ['🟦', 'next_build'],
   ['🟧', 'in_progress'],
   ['🟥', 'open'],
 ];
