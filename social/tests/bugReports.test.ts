@@ -225,6 +225,8 @@ describe('POST /api/bug-reports', () => {
     expect(statusOf([square('👍')])).toBe('new');
     expect(statusOf([square('🟥')])).toBe('open');
     expect(statusOf([square('🟥'), square('🟧')])).toBe('in_progress');
+    expect(statusOf([square('🟧'), square('🟦')])).toBe('next_build');
+    expect(statusOf([square('🟦'), square('🟪')])).toBe('to_test');
     expect(statusOf([square('🟪'), square('🟧')])).toBe('to_test');
     expect(statusOf([square('🟥'), square('🟩')])).toBe('closed');
     expect(statusOf([square('🟩', 0), square('🟥')])).toBe('open');
