@@ -1364,8 +1364,8 @@ paths:
       summary: The bugs of the QA forum that are not closed
       description: >-
         Read from Discord by a bot (`DISCORD_BUG_BOT_TOKEN`) and kept two minutes. Where a bug stands is
-        the square the QA team puts under its post (red open, orange taken by a developer, purple to
-        test in the build, green closed and left out). `enabled: false` without the bot.
+        the square the QA team puts under its post (red open, orange taken by a developer, blue fixed
+        and to test in the next build, purple to test in the build, green closed and left out). `enabled: false` without the bot.
       responses:
         '200':
           description: The open bugs, newest first
@@ -1384,7 +1384,7 @@ paths:
                       properties:
                         id: { type: string }
                         title: { type: string }
-                        status: { type: string, enum: [new, open, in_progress, to_test] }
+                        status: { type: string, enum: [new, open, in_progress, next_build, to_test] }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Sanctioned' }
 

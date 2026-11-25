@@ -46,7 +46,7 @@ Pour l'API interne sans Keycloak, mettre `INTERNAL_DEV_BYPASS=true` (ignoré en 
 | `PRESENCE_BATCH_MAX` | Joueurs max par heartbeat batch (défaut `5000`) |
 | `DISCORD_BUG_WEBHOOK_URL` | Webhook Discord des rapports de bug en jeu — **secret** (qui l'a peut poster), un par environnement ; **vide = fonction éteinte** (`503 BUG_REPORT_DISABLED`) |
 | `DISCORD_BUG_WEBHOOK_FORUM`, `DISCORD_BUG_WEBHOOK_TAG_IDS` | `true` si le salon du webhook est un forum (chaque rapport ouvre un fil nommé par son titre) ; étiquettes de forum à poser (CSV d'identifiants) |
-| `DISCORD_BUG_BOT_TOKEN` | Jeton du bot Discord qui **lit** le forum des bugs — **secret**. Droits : « Voir le salon » et « Voir les anciens messages » sur le forum. Sert `GET /api/bug-reports/open` (bugs non fermés, avec leur état lu sur la réaction carrée du post : 🟥 ouvert, 🟧 pris en charge, 🟪 à tester dans le build, 🟩 fermé) et le rattachement d'un rapport à un post (`thread_id`). **Vide = pas de liste** |
+| `DISCORD_BUG_BOT_TOKEN` | Jeton du bot Discord qui **lit** le forum des bugs — **secret**. Droits : « Voir le salon » et « Voir les anciens messages » sur le forum. Sert `GET /api/bug-reports/open` (bugs non fermés, avec leur état lu sur la réaction carrée du post : 🟥 ouvert, 🟧 pris en charge, 🟦 corrigé, à tester au prochain build, 🟪 à tester dans le build, 🟩 fermé) et le rattachement d'un rapport à un post (`thread_id`). **Vide = pas de liste** |
 | `BUG_REPORT_ENVIRONMENT` | Étiquette de l'environnement dans le titre (`[BUG][PREPROD]…`) |
 | `BUG_REPORT_MIN_INTERVAL_SECONDS`, `BUG_REPORT_DAILY_MAX` | Rythme par joueur (défauts `60` s et `20` par 24 h, en mémoire) |
 
