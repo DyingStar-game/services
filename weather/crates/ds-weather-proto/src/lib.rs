@@ -309,21 +309,21 @@ pub fn field_delete_envelope(uuid: Uuid) -> BridgeEnvelope {
 
 /// `weather_field_def.json`: the channels Horizon replicates the fields through (identical in
 /// horizonserver `ds_genericprops/props/` and the game's `items_def/`). Zone 0: the frame (grid
-/// size, quantities, scales); zone 1, low rate: the time and the data; zone 6: the scene (mandatory,
-/// delete channel). The object sits at the planet's centre: 20 000 km covers the whole planet.
+/// size, quantities); zone 1, low rate: the time, the scales and the data, which must arrive in the
+/// same message; zone 6: the scene (mandatory, delete channel). The object sits at the planet's centre: 20 000 km covers the whole planet.
 pub const FIELD_DEF_JSON: &str = r#"{
     "channels": [
         {
             "zone": 0,
             "distance": 20000000.0,
             "frequency": 1.0,
-            "properties": ["name", "parent_id", "position", "rotation", "grid_w", "grid_h", "quantities", "scales"]
+            "properties": ["name", "parent_id", "position", "rotation", "grid_w", "grid_h", "quantities"]
         },
         {
             "zone": 1,
             "distance": 20000000.0,
             "frequency": 0.2,
-            "properties": ["valid_at", "model_day", "fields"]
+            "properties": ["valid_at", "model_day", "scales", "fields"]
         },
         {
             "zone": 6,
@@ -372,6 +372,11 @@ mod tests {
             assert!(listed.contains(key), "field `{key}` is not in any channel: Horizon would drop it silently");
         }
         assert!(!listed.iter().any(|p| p == "type" || p == "uuid"), "envelope keys must not be properties");
+        // `scales` decodes `fields`: they must travel in the same channel (the same message).
+        let def: Value = serde_json::from_str(FIELD_DEF_JSON).unwrap();
+        let zone_of = |prop: &str| def["channels"].as_array().unwrap().iter().find(|c| c["properties"].as_array().unwrap().iter().any(|p| p == prop)).map(|c| c["zone"].clone());
+        assert_eq!(zone_of("scales"), zone_of("fields"));
+        assert_eq!(zone_of("fields"), Some(Value::from(1)));
     }
 
     /// 5 x 128 x 64 u16 = 81 920 bytes = 109 228 base64 characters; values come back within half
