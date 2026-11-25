@@ -1,7 +1,7 @@
 //! What a long-running service needs around the model: one body's model kept in memory and
 //! advanced one chunk at a time under the roll-back guard, the latest tables rendered in memory,
-//! and two rolling checkpoints written in turn into a `StateStore` (files for now; a database
-//! later, see the TODO on the trait).
+//! and two rolling checkpoints written in turn into a `StateStore` (files here; PostgreSQL in the
+//! weather service).
 //!
 //! The pacing (how fast model time follows the wall clock) is the caller's business: this module
 //! never looks at the clock, so it stays testable.
@@ -116,10 +116,9 @@ pub struct StoredState {
 /// Where checkpoints are kept. Each body has a few slots (two rolling ones are used) so that a
 /// failure while saving one never loses the other.
 ///
-/// Implementations: `FileStateStore` (one folder per body, `ATMOSPHERE_STATE_DIR`).
-/// TODO(state-db): a PostgreSQL (CNPG) implementation, like the other services' databases: one row
-/// per (body, slot) with the bytes (~1 to 10 MB per body), the model time and the healthy flag,
-/// written in one transaction. Nothing else changes: the service only talks to this trait.
+/// Implementations: `FileStateStore` here (one folder per body), and the PostgreSQL store of the
+/// weather service (`weather-service/src/pg_store.rs`, one row per body and slot), kept out of this
+/// crate so that the model needs no database driver. The service only talks to this trait.
 pub trait StateStore: Send {
     /// Saves a checkpoint of `body` in `slot` (replacing what the slot held), atomically: either
     /// the old or the new checkpoint is readable afterwards, never a mix. Returns its location.

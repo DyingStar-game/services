@@ -11,6 +11,7 @@
 mod atmosphere;
 mod config;
 mod http;
+mod pg_store;
 mod sim;
 mod state;
 mod ws;
@@ -39,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(sim::run(state.clone()));
     if config.atmosphere.enabled() {
         info!(bodies = ?state.atmosphere.keys().collect::<Vec<_>>(), "atmosphere model on");
-        atmosphere::spawn_all(&state);
+        tokio::spawn(atmosphere::start(state.clone()));
     }
 
     let app = Router::new()

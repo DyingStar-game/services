@@ -36,9 +36,11 @@ pub struct AtmosphereConfig {
     pub bodies: Vec<String>,
     /// Settings files and rasters (`defaut.toml`, `<body>.toml`, `*.f32`).
     pub data_dir: PathBuf,
-    /// Checkpoints, one folder per body. Must be a persistent volume in a cluster, or every restart
-    /// is a cold start with a full spin-up.
-    pub state_dir: PathBuf,
+    /// Where checkpoints go: PostgreSQL when `DATABASE_URL` is set, else files under
+    /// `ATMOSPHERE_STATE_DIR` (one folder per body; a persistent volume in a cluster). With
+    /// neither, the atmosphere mode refuses to start (the rest of the service runs).
+    pub database_url: Option<Secret>,
+    pub state_dir: Option<PathBuf>,
     /// Threads of each body's model (1 to 4).
     pub threads: usize,
     /// A checkpoint at most every this many wall-clock seconds (and only after a healthy chunk).
@@ -50,6 +52,17 @@ pub struct AtmosphereConfig {
     pub max_catchup_days: f64,
     /// Extra settings overrides, `ATMOSPHERE_SET` = "grid.level=4;lid.enabled=false".
     pub sets: Vec<(String, String)>,
+}
+
+/// A value that must never reach the logs (the database URL carries a password): the config is
+/// logged whole at start.
+#[derive(Clone)]
+pub struct Secret(pub String);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<set>")
+    }
 }
 
 impl AtmosphereConfig {
@@ -64,7 +77,8 @@ impl Config {
         let atmosphere = AtmosphereConfig {
             bodies: get("ATMOSPHERE_BODIES", "").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
             data_dir: PathBuf::from(get("ATMOSPHERE_DATA_DIR", "data/atmosphere")),
-            state_dir: PathBuf::from(get("ATMOSPHERE_STATE_DIR", "state/atmosphere")),
+            database_url: env::var("DATABASE_URL").ok().filter(|s| !s.trim().is_empty()).map(Secret),
+            state_dir: env::var("ATMOSPHERE_STATE_DIR").ok().filter(|s| !s.trim().is_empty()).map(PathBuf::from),
             threads: get("ATMOSPHERE_THREADS", "2").parse().unwrap_or(2usize).clamp(1, 4),
             checkpoint_every_s: get("ATMOSPHERE_CHECKPOINT_S", "300").parse().unwrap_or(300.0f64).max(10.0),
             spinup_days: env::var("ATMOSPHERE_SPINUP_DAYS").ok().and_then(|v| v.parse().ok()),

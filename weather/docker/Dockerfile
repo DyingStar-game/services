@@ -38,10 +38,9 @@ COPY --from=builder /app/target/release/weather ./weather
 COPY resourcesDynamic/data/system ./data/system
 COPY weather/data/climate ./data/climate
 # The atmosphere model's settings and rasters (used only when ATMOSPHERE_BODIES is set). Its
-# checkpoints go to ATMOSPHERE_STATE_DIR: mount a persistent volume there, or every restart of the
-# pod is a cold start with a full spin-up.
+# checkpoints go to PostgreSQL (DATABASE_URL, the table is created at start) or, without it, to
+# ATMOSPHERE_STATE_DIR (then a persistent volume); neither = the atmosphere mode does not start.
 COPY weather/data/atmosphere ./data/atmosphere
-RUN mkdir -p /app/state/atmosphere
 
 RUN chown -R appuser:appgroup /app
 USER appuser
@@ -52,7 +51,6 @@ ENV PORT=9400 \
     CELESTIAL_HTTP=http://service-resourcesdynamic:3001 \
     ATMOSPHERE_BODIES="" \
     ATMOSPHERE_DATA_DIR=data/atmosphere \
-    ATMOSPHERE_STATE_DIR=state/atmosphere \
     RUST_LOG=weather=info
 
 EXPOSE 9400

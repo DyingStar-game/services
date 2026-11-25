@@ -52,7 +52,8 @@ Docker (context = `services/`): `docker build -f weather/docker/Dockerfile -t we
 | `KEYFRAME_DT_S`, `KEYFRAMES` | 600, 6 | the future positions each system carries |
 | `ATMOSPHERE_BODIES` | *(empty = off)* | bodies that run the atmosphere model, e.g. `Sandbox` or `Sandbox,Gaea` |
 | `ATMOSPHERE_DATA_DIR` | `data/atmosphere` | its settings files and rasters |
-| `ATMOSPHERE_STATE_DIR` | `state/atmosphere` | its checkpoints (one folder per body) — **persistent volume** |
+| `DATABASE_URL` | *(unset)* | PostgreSQL for its checkpoints (`postgres://user:pass@host:5432/db`); wins over the folder |
+| `ATMOSPHERE_STATE_DIR` | *(unset)* | without `DATABASE_URL`: checkpoints as files, one folder per body (persistent volume) |
 | `ATMOSPHERE_THREADS` | 2 | threads per body (1 to 4) |
 | `ATMOSPHERE_CHECKPOINT_S` | 300 | a checkpoint at most every N wall-clock seconds |
 | `ATMOSPHERE_MAX_CATCHUP_DAYS` | 30 | after a stop, catch up at most N model days (older time is skipped) |
@@ -91,11 +92,33 @@ Endpoints:
 - `/metrics`: `weather_atmosphere_model_day`, `weather_atmosphere_max_wind_m_s`,
   `weather_atmosphere_lag_s`, `weather_atmosphere_rollbacks_total` (label `body`).
 
-**State storage.** Checkpoints go through a `StateStore` trait (`weather-atmosphere/src/live.rs`);
-the only implementation today writes files under `ATMOSPHERE_STATE_DIR` (each state 1 to 10 MB).
-In a cluster that folder must be a **persistent volume**, otherwise every pod restart is a cold
-start with a full spin-up. TODO: a PostgreSQL (CNPG) implementation, like the other services'
-databases (one row per body and slot) — then no volume is needed.
+**State storage.** Checkpoints go through a `StateStore` trait (`weather-atmosphere/src/live.rs`),
+two rolling slots per body, each state 1 to 10 MB. The store is chosen at start:
+
+1. `DATABASE_URL` set → **PostgreSQL** (CNPG in the cluster, like the other services; sqlx with
+   rustls). The embedded migration (`crates/weather-service/migrations/`) creates the table at
+   start; the connection is retried for 2.5 minutes while the database comes up.
+2. else `ATMOSPHERE_STATE_DIR` set → **files**, `<dir>/<body>/checkpoint_<a|b>.bin` + `.toml`
+   (a persistent volume in a cluster).
+3. neither, with `ATMOSPHERE_BODIES` set → the atmosphere mode **does not start** (status
+   `failed` with the reason on `/api/v1/{body}/atmosphere`); the rest of the service runs.
+
+```sql
+CREATE TABLE atmosphere_checkpoint (
+    body        TEXT             NOT NULL,          -- body name in lower case
+    slot        SMALLINT         NOT NULL,          -- rolling slot, 0 or 1
+    model_time  DOUBLE PRECISION NOT NULL,          -- model time of the state (s)
+    healthy     BOOLEAN          NOT NULL,          -- accepted by the guard (only these are loaded)
+    saved_at    TIMESTAMPTZ      NOT NULL DEFAULT now(),
+    meta        JSONB            NOT NULL,          -- chunk, spin-up done, pacing anchor
+    state       BYTEA            NOT NULL,          -- the full state, bit-exact
+    PRIMARY KEY (body, slot)
+);
+```
+
+**A lost state is not serious**: without a checkpoint (empty table, database reset, files lost),
+the model simply makes a cold start and spins up again (about an hour for Sandbox), while the rest
+of the service keeps serving. Players would only see the atmosphere start over from a new state.
 
 **Known limits.** The model's seasons and sun start at its own t = 0 (northern spring equinox), not
 at the body's real orbital position (TODO in `crates/weather-service/src/atmosphere.rs`). Restart
@@ -113,5 +136,7 @@ curl -o t_bas.png localhost:9400/api/v1/Sandbox/atmosphere/tables/t_bas.png
 
 Tests: `cargo test --workspace` runs the fast ones (Williamson cases, conservation, restarts bit for
 bit, guard, resting atmosphere over the relief, settings, checkpoints). Slow ones are `#[ignore]`d:
-`cargo test -p weather-atmosphere -- --ignored`. The bit-for-bit regression against the prototype
+`cargo test -p weather-atmosphere -- --ignored`. The PostgreSQL store's test needs a database:
+`docker run --rm -d -p 55432:5432 -e POSTGRES_PASSWORD=x postgres:16`, then
+`TEST_DATABASE_URL=postgres://postgres:x@localhost:55432/postgres cargo test -p weather-service -- --ignored`. The bit-for-bit regression against the prototype
 runs only with the MSVC toolchain on Windows (its fingerprints come from that math library).

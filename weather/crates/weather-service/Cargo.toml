@@ -26,3 +26,5 @@ dotenvy = "0.15"
 ureq = { version = "2", default-features = false, features = ["json"] }
 futures = "0.3"
 uuid = { version = "1", features = ["v5"] }
+# Checkpoints of the atmosphere model in PostgreSQL (CNPG), embedded migrations (as services/npc).
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros"] }

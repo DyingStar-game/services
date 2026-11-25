@@ -3,6 +3,8 @@
 //! For each body listed in `ATMOSPHERE_BODIES`, a dedicated thread (the model is CPU-bound and
 //! never awaits) keeps the body's model in memory:
 //!
+//! 0. the state store is PostgreSQL when `DATABASE_URL` is set (`pg_store.rs`), else files under
+//!    `ATMOSPHERE_STATE_DIR`; with neither, the atmosphere mode does not start (status `failed`);
 //! 1. it loads the newest healthy checkpoint from the state store, or makes a cold start and runs
 //!    the spin-up as fast as it can (status `warming`);
 //! 2. then it follows the wall clock: one second of real time = one second of model time, so one
@@ -35,7 +37,9 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 use weather_atmosphere::body::{Body, BodyOverrides};
-use weather_atmosphere::live::{CheckpointMeta, FileStateStore, LiveModel, RollingCheckpoints};
+use crate::pg_store::PgStateStore;
+use std::path::PathBuf;
+use weather_atmosphere::live::{CheckpointMeta, FileStateStore, LiveModel, RollingCheckpoints, StateStore};
 use weather_atmosphere::pe::ChunkOutcome;
 use weather_atmosphere::settings::Settings;
 use weather_atmosphere::setup::Scenario;
@@ -117,12 +121,64 @@ pub fn plan(cfg: &AtmosphereConfig, bodies: &[ServiceBody]) -> HashMap<String, A
     out
 }
 
-/// Starts one thread per planned body.
-pub fn spawn_all(state: &Shared) {
+/// Where the checkpoints go.
+#[derive(Clone)]
+pub enum StoreChoice {
+    Postgres(PgStateStore),
+    Files(PathBuf),
+}
+
+impl StoreChoice {
+    fn make(&self) -> Box<dyn StateStore> {
+        match self {
+            StoreChoice::Postgres(s) => Box::new(s.clone()),
+            StoreChoice::Files(d) => Box::new(FileStateStore::new(d)),
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            StoreChoice::Postgres(_) => "PostgreSQL (table atmosphere_checkpoint)".into(),
+            StoreChoice::Files(d) => format!("files under {}", d.display()),
+        }
+    }
+}
+
+fn fail_all(state: &Shared, msg: String) {
+    error!("atmosphere mode not started: {msg}");
     for run in state.atmosphere.values() {
-        let (st, r) = (state.clone(), run.clone());
+        set_status(run, |s| {
+            s.status = "failed".into();
+            s.error = Some(msg.clone());
+        });
+    }
+}
+
+/// Picks the state store (`DATABASE_URL` → PostgreSQL, else `ATMOSPHERE_STATE_DIR` → files,
+/// else refuse), then starts one thread per planned body. Runs on the tokio runtime; the rest of
+/// the service is already up and does not wait for it.
+pub async fn start(state: Shared) {
+    let cfg = &state.config.atmosphere;
+    let choice = match (&cfg.database_url, &cfg.state_dir) {
+        (Some(url), _) => match PgStateStore::connect(&url.0).await {
+            Ok(s) => StoreChoice::Postgres(s),
+            Err(e) => return fail_all(&state, format!("PostgreSQL (DATABASE_URL) unusable: {e}")),
+        },
+        (None, Some(dir)) => StoreChoice::Files(dir.clone()),
+        (None, None) => {
+            return fail_all(&state, "no place for the checkpoints: set DATABASE_URL (PostgreSQL) or ATMOSPHERE_STATE_DIR (files)".into());
+        }
+    };
+    info!(store = %choice.describe(), "atmosphere state store");
+    spawn_all(&state, choice);
+}
+
+/// Starts one thread per planned body.
+fn spawn_all(state: &Shared, choice: StoreChoice) {
+    for run in state.atmosphere.values() {
+        let (st, r, store) = (state.clone(), run.clone(), choice.make());
         let spawned = std::thread::Builder::new().name(format!("atmosphere-{}", r.name)).spawn(move || {
-            if let Err(e) = run_body(&st, &r) {
+            if let Err(e) = run_body(&st, &r, store) {
                 error!(body = %r.name, error = %e, "atmosphere model stopped");
                 if let Ok(mut s) = r.status.write() {
                     s.status = "failed".into();
@@ -136,7 +192,7 @@ pub fn spawn_all(state: &Shared) {
     }
 }
 
-fn run_body(state: &Shared, run: &AtmosphereRun) -> Result<(), String> {
+fn run_body(state: &Shared, run: &AtmosphereRun, store: Box<dyn StateStore>) -> Result<(), String> {
     let cfg = &state.config.atmosphere;
     let b = &state.bodies[run.body_index];
     // A moon's seasons and solar day follow its planet's year.
@@ -149,7 +205,7 @@ fn run_body(state: &Shared, run: &AtmosphereRun) -> Result<(), String> {
     }
     let settings_file = Settings::file_for_body(&cfg.data_dir, &run.name).display().to_string();
     info!(body = %run.name, settings = %settings_file, threads = cfg.threads, "atmosphere model: building");
-    weather_atmosphere::with_threads(cfg.threads, || drive(state, run, sc, settings_file))
+    weather_atmosphere::with_threads(cfg.threads, || drive(state, run, sc, settings_file, store))
 }
 
 fn set_status(run: &AtmosphereRun, f: impl FnOnce(&mut RunStatus)) {
@@ -158,11 +214,11 @@ fn set_status(run: &AtmosphereRun, f: impl FnOnce(&mut RunStatus)) {
     }
 }
 
-fn drive(state: &Shared, run: &AtmosphereRun, sc: Scenario, settings_file: String) -> Result<(), String> {
+fn drive(state: &Shared, run: &AtmosphereRun, sc: Scenario, settings_file: String, store: Box<dyn StateStore>) -> Result<(), String> {
     let cfg = &state.config.atmosphere;
     let label = [run.name.as_str()];
     let mut m = LiveModel::cold_start(sc)?;
-    let mut ck = RollingCheckpoints::new(Box::new(FileStateStore::new(&cfg.state_dir)), &run.name);
+    let mut ck = RollingCheckpoints::new(store, &run.name);
     let (found, skipped) = ck.latest_healthy(&m.model);
     for s in skipped {
         warn!(body = %run.name, "checkpoint skipped: {s}");
