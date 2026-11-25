@@ -18,6 +18,7 @@
 
 pub mod body;
 pub mod cases;
+pub mod ephemeris;
 pub mod grid;
 pub mod io;
 pub mod levels;

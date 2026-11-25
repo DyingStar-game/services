@@ -150,8 +150,25 @@ pub struct Sun {
     /// Subsolar longitude at t = 0 (degrees).
     pub lon0_deg: f64,
     pub seasons: Seasons,
+    /// The real orbit and spin: when given, declination, sub-stellar longitude and distance come
+    /// from it (and `solar_day_s`, `lon0_deg`, `seasons` are not used).
+    pub ephemeris: Option<std::sync::Arc<crate::ephemeris::Ephemeris>>,
     /// Test hook: a steady sun of this flux (W/m^2, top of the atmosphere) overhead everywhere.
     pub uniform: Option<f64>,
+}
+
+impl Sun {
+    /// Declination (radians), sub-stellar longitude (radians) and overhead flux (W/m^2) at model
+    /// time `t`.
+    pub fn position(&self, t: f64) -> (f64, f64, f64) {
+        match &self.ephemeris {
+            Some(e) => {
+                let p = e.at(t);
+                (p.decl_rad, p.sub_lon_rad, self.s0 * p.flux_factor)
+            }
+            None => (self.seasons.subsolar_lat(t), self.lon0_deg.to_radians() - 2.0 * std::f64::consts::PI * t / self.solar_day_s, self.s0),
+        }
+    }
 }
 
 /// Surface-layer parameters (shared by the ground and the dust).
@@ -268,9 +285,8 @@ impl PhysicsSuite {
 
         // Sun: declination from the seasons, subsolar longitude from the solar day.
         let sp = &self.sun;
-        let decl = sp.seasons.subsolar_lat(t_mid);
+        let (decl, lon_s, s0) = sp.position(t_mid);
         let sin0 = decl.sin();
-        let lon_s = sp.lon0_deg.to_radians() - 2.0 * std::f64::consts::PI * t_mid / sp.solar_day_s;
         let sun = [decl.cos() * lon_s.cos(), decl.cos() * lon_s.sin(), decl.sin()];
         let sl = &self.surface;
         let lnz = |z1: f64| (z1.max(2.0 * sl.z0) / sl.z0).ln();
@@ -344,7 +360,7 @@ impl PhysicsSuite {
 
                 // Sunlight at the top and the dust optical depth.
                 let cosz = if sp.uniform.is_some() { 1.0 } else { dot(x, sun) };
-                let toa = sp.uniform.unwrap_or(sp.s0 * cosz.max(0.0));
+                let toa = sp.uniform.unwrap_or(s0 * cosz.max(0.0));
                 let mut tau_k = [0.0f64; 16];
                 let mut tau_c = 0.0;
                 for k in 0..l {

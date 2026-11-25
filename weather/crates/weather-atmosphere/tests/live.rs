@@ -26,8 +26,7 @@ fn meta(m: &LiveModel, healthy: bool) -> CheckpointMeta {
         written_unix: 0.0,
         healthy,
         spun_up: false,
-        anchor_model_s: 0.0,
-        anchor_unix: 0.0,
+        unix_offset_s: 1.7e9,
     }
 }
 

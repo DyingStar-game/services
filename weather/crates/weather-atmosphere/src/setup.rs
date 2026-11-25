@@ -27,6 +27,10 @@ use std::path::Path;
 pub struct Scenario {
     pub body: Body,
     pub s: Settings,
+    /// The body's real orbit and spin, tied to Unix time (the service sets it): the sun and the
+    /// seasons then follow the real sky. None = the idealised calendar (t = 0 = northern spring
+    /// equinox, sun over `ground.sun_lon0_deg`), as in the offline runs and the regression tests.
+    pub ephemeris: Option<std::sync::Arc<crate::ephemeris::Ephemeris>>,
 }
 
 /// Initial condition.
@@ -69,7 +73,7 @@ impl Scenario {
             (None, None) => return Err(format!("{}: no [data] section and no data files given: cannot load the body", path.display())),
         };
         let body = Body::load(&files, &name, &s.body_overrides)?;
-        Ok(Scenario { body, s })
+        Ok(Scenario { body, s, ephemeris: None })
     }
 
     /// Loads the settings of a body by name: `<dir>/<name>.toml`, or `<dir>/defaut.toml`.
@@ -82,7 +86,7 @@ impl Scenario {
     /// The body's `[body_overrides]` are not applied here: they only serve offline regressions.
     pub fn from_body(body: Body, dir: &Path, sets: &[(String, String)]) -> Result<Scenario, String> {
         let s = Settings::load(&Settings::file_for_body(dir, &body.name), sets)?;
-        Ok(Scenario { body, s })
+        Ok(Scenario { body, s, ephemeris: None })
     }
 
     /// Length of a chunk (s): the model day / chunks per day.
@@ -126,6 +130,7 @@ impl Scenario {
             k_f: 1.0 / r.friction_time_s,
             sigma_b: r.sigma_b,
             seasons: self.seasons(),
+            ephemeris: if self.s.relaxation.seasons { self.ephemeris.clone() } else { None },
             p0: b.p_surface,
             kappa: b.air.kappa,
             slow_lowest_layer,
@@ -275,7 +280,7 @@ impl Scenario {
         let nu_ps = if nm.tau_ps_hours > 0.0 { hyper_nu(&grid, nm.tau_ps_hours * 3600.0, o) } else { 0.0 };
         let ground_on = s.ground.enabled;
         let hs = self.held_suarez(ground_on);
-        let relax: Option<Box<dyn Relaxation>> = if s.relaxation.enabled { Some(Box::new(hs)) } else { None };
+        let relax: Option<Box<dyn Relaxation>> = if s.relaxation.enabled { Some(Box::new(hs.clone())) } else { None };
         let eta = self.eta_half()?;
         let eta_t = self.eta_t(&eta);
         let tref = self.tref();
@@ -388,7 +393,7 @@ impl Scenario {
             None
         };
         Ok(Some(PhysicsSuite {
-            sun: Sun { s0: b.irradiance, solar_day_s: b.solar_day_s, lon0_deg: s.ground.sun_lon0_deg, seasons: self.seasons(), uniform: s.ground.uniform_sun_w_m2 },
+            sun: Sun { s0: b.irradiance, solar_day_s: b.solar_day_s, lon0_deg: s.ground.sun_lon0_deg, seasons: self.seasons(), ephemeris: self.ephemeris.clone(), uniform: s.ground.uniform_sun_w_m2 },
             surface: SurfaceLayer { z0: s.ground.roughness_m.unwrap_or(b.roughness_length_m), v_floor: s.ground.v_floor_m_s, stable_floor: s.ground.stable_floor },
             kext,
             lid_probe_z,

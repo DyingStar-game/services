@@ -48,8 +48,10 @@ pub struct AtmosphereConfig {
     /// Overrides the settings' spin-up length (model days) of a cold start: a short value is for
     /// smoke tests only.
     pub spinup_days: Option<f64>,
-    /// After a long stop, catch up at most this many model days; older time is skipped.
-    pub max_catchup_days: f64,
+    /// After a stop, catch up at most this many model days of lag; beyond, a cold start (a fresh
+    /// spin-up ending at the real instant) is made instead. Default: the spin-up length, since a
+    /// longer catch-up would cost more than a spin-up.
+    pub max_catchup_days: Option<f64>,
     /// Extra settings overrides, `ATMOSPHERE_SET` = "grid.level=4;lid.enabled=false".
     pub sets: Vec<(String, String)>,
 }
@@ -82,7 +84,7 @@ impl Config {
             threads: get("ATMOSPHERE_THREADS", "2").parse().unwrap_or(2usize).clamp(1, 4),
             checkpoint_every_s: get("ATMOSPHERE_CHECKPOINT_S", "300").parse().unwrap_or(300.0f64).max(10.0),
             spinup_days: env::var("ATMOSPHERE_SPINUP_DAYS").ok().and_then(|v| v.parse().ok()),
-            max_catchup_days: get("ATMOSPHERE_MAX_CATCHUP_DAYS", "30").parse().unwrap_or(30.0),
+            max_catchup_days: env::var("ATMOSPHERE_MAX_CATCHUP_DAYS").ok().and_then(|v| v.parse().ok()),
             sets: get("ATMOSPHERE_SET", "")
                 .split(';')
                 .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))

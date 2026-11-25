@@ -3,6 +3,8 @@
 //! Held-Suarez recipe can be replaced (e.g. by a grey radiation scheme) without touching the core.
 
 use crate::body::Seasons;
+use crate::ephemeris::Ephemeris;
+use std::sync::Arc;
 
 /// What the core asks a relaxation scheme, per cell and layer.
 pub trait Relaxation: Send + Sync + std::fmt::Debug {
@@ -18,7 +20,7 @@ pub trait Relaxation: Send + Sync + std::fmt::Debug {
 }
 
 /// Held & Suarez (1994) with a seasonal subsolar latitude (the forcing of steps 3 and 4).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct HeldSuarez {
     /// Equilibrium temperature at the ground under the sun (K).
     pub t_max: f64,
@@ -37,6 +39,9 @@ pub struct HeldSuarez {
     /// Top of the frictional boundary layer (sigma = p / ps).
     pub sigma_b: f64,
     pub seasons: Seasons,
+    /// The real orbit: when given, the subsolar latitude is the star's real declination at that
+    /// instant instead of the idealised `seasons`.
+    pub ephemeris: Option<Arc<Ephemeris>>,
     /// Reference pressure (Pa) and kappa = R / cp of the air.
     pub p0: f64,
     pub kappa: f64,
@@ -61,7 +66,10 @@ impl Relaxation for HeldSuarez {
     }
 
     fn subsolar_lat(&self, t: f64) -> f64 {
-        self.seasons.subsolar_lat(t)
+        match &self.ephemeris {
+            Some(e) => e.at(t).decl_rad,
+            None => self.seasons.subsolar_lat(t),
+        }
     }
 
     fn initial_temperature(&self, sl: f64, cl: f64, p: f64) -> f64 {

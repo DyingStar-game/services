@@ -99,8 +99,7 @@ mod tests {
             written_unix: 1.0,
             healthy,
             spun_up: true,
-            anchor_model_s: 2.0,
-            anchor_unix: 3.0,
+            unix_offset_s: 1.7e9,
         }
     }
 

@@ -98,9 +98,9 @@ pub struct CheckpointMeta {
     pub healthy: bool,
     /// True once the spin-up is over (the model then follows the wall clock).
     pub spun_up: bool,
-    /// Pacing anchor: the model time that corresponds to the wall-clock time `anchor_unix`.
-    pub anchor_model_s: f64,
-    pub anchor_unix: f64,
+    /// Unix time = model time + this offset (chosen at the cold start, never changed): it ties the
+    /// model's sun and seasons to the real orbit (`ephemeris`) and paces the model on the clock.
+    pub unix_offset_s: f64,
 }
 
 /// A saved checkpoint: the model state as bytes (`PeModel::restart_bytes`) and what it holds.

@@ -18,10 +18,12 @@
 //! The synoptic generator, its ds_bridge publication and every other endpoint are untouched: the
 //! model runs beside them and is only visible through `/api/v1/{body}/atmosphere` and the metrics.
 //!
-//! TODO(orbit): the model's seasons and sun start at its own t = 0 (northern spring equinox, sun
-//! over longitude `sun_lon0_deg`), not at the body's real position on its orbit
-//! (`weather_core::orbit`, `weather_core::spin::substellar_point`) at the matching Unix time. Hooking
-//! it needs a time offset in the model's `Seasons` and `Sun`, saved in the checkpoint.
+//! The sky is the real one: model time and Unix time are tied by an offset fixed at the cold start
+//! (`unix = model time + offset`, saved in every checkpoint), and the model's declination,
+//! sub-stellar longitude and distance to the star come from the body's orbit and spin at that Unix
+//! time (`weather_atmosphere::ephemeris`, built on `weather_core::orbit` and `spin` like the rest of
+//! the service). A cold start spins up over the period that ends at the real instant; a resume
+//! catches up to the real instant, or makes a cold start when the lag is longer than a spin-up.
 
 use crate::config::AtmosphereConfig;
 use crate::sim::now_unix;
@@ -37,6 +39,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 use weather_atmosphere::body::{Body, BodyOverrides};
+use weather_atmosphere::ephemeris::Ephemeris;
 use crate::pg_store::PgStateStore;
 use std::path::PathBuf;
 use weather_atmosphere::live::{CheckpointMeta, FileStateStore, LiveModel, RollingCheckpoints, StateStore};
@@ -204,8 +207,31 @@ fn run_body(state: &Shared, run: &AtmosphereRun, store: Box<dyn StateStore>) -> 
         sc.s.run.spinup_days = d;
     }
     let settings_file = Settings::file_for_body(&cfg.data_dir, &run.name).display().to_string();
+    // The real sky: the body's tilt and spin, the orbit around the star (its planet's for a moon),
+    // exactly what `state.to_star` and the synoptic generator use.
+    let (tilt_rad, rotation_period_s) = (b.inputs.tilt_deg.to_radians(), b.inputs.rotation_period_s);
+    let star_orbit = planet.inputs.orbit.solver(planet.inputs.mass_kg);
+    let ephemeris = move |unix_offset_s: f64| Arc::new(Ephemeris { unix_offset_s, tilt_rad, rotation_period_s, star_orbit: star_orbit.clone() });
     info!(body = %run.name, settings = %settings_file, threads = cfg.threads, "atmosphere model: building");
-    weather_atmosphere::with_threads(cfg.threads, || drive(state, run, sc, settings_file, store))
+    weather_atmosphere::with_threads(cfg.threads, || drive(state, run, sc, &ephemeris, settings_file, store))
+}
+
+/// Unix-time offset of a cold start at Unix time `now`: the spin-up covers the `spinup_s` seconds
+/// BEFORE now, with the real seasons and days of that period, so that the warm model lands on
+/// the real instant (plus the wall-clock time the spin-up itself took, caught up afterwards).
+pub fn cold_start_offset(now_unix: f64, spinup_s: f64) -> f64 {
+    now_unix - spinup_s
+}
+
+/// How far behind the wall clock a checkpoint is once resumed (model seconds), not counting the
+/// spin-up it still has to run: what a catch-up would have to compute beyond the spin-up.
+pub fn catchup_needed_s(meta: &CheckpointMeta, now_unix: f64, spinup_s: f64) -> f64 {
+    (now_unix - meta.unix_offset_s) - meta.model_time_s.max(spinup_s)
+}
+
+/// The model time the model should have reached at Unix time `now`.
+pub fn pacing_target(now_unix: f64, unix_offset_s: f64) -> f64 {
+    now_unix - unix_offset_s
 }
 
 fn set_status(run: &AtmosphereRun, f: impl FnOnce(&mut RunStatus)) {
@@ -214,33 +240,45 @@ fn set_status(run: &AtmosphereRun, f: impl FnOnce(&mut RunStatus)) {
     }
 }
 
-fn drive(state: &Shared, run: &AtmosphereRun, sc: Scenario, settings_file: String, store: Box<dyn StateStore>) -> Result<(), String> {
+fn drive(state: &Shared, run: &AtmosphereRun, mut sc: Scenario, ephemeris: &dyn Fn(f64) -> Arc<Ephemeris>, settings_file: String, store: Box<dyn StateStore>) -> Result<(), String> {
     let cfg = &state.config.atmosphere;
     let label = [run.name.as_str()];
-    let mut m = LiveModel::cold_start(sc)?;
+    let day_s = sc.body.day_s;
+    let chunk_s = sc.chunk_s();
+    let cpd = sc.chunks_per_day();
+    let spinup_days = sc.s.run.spinup_days;
+    let spinup_chunks = sc.s.chunks(spinup_days);
+    let spinup_s = spinup_chunks as f64 * chunk_s;
+    let max_lag = cfg.max_catchup_days.unwrap_or(spinup_days) * day_s;
+    // Built for a cold start now; the restart files do not depend on the offset, so this model
+    // also reads the checkpoints back.
+    let now = now_unix();
+    let cold_offset = cold_start_offset(now, spinup_s);
+    sc.ephemeris = Some(ephemeris(cold_offset));
+    let cold = LiveModel::cold_start(sc.clone())?;
     let mut ck = RollingCheckpoints::new(store, &run.name);
-    let (found, skipped) = ck.latest_healthy(&m.model);
+    let (found, skipped) = ck.latest_healthy(&cold.model);
     for s in skipped {
         warn!(body = %run.name, "checkpoint skipped: {s}");
     }
-    let (mut meta, started_from) = match found {
-        Some((st, meta)) => {
+    let cold_meta = CheckpointMeta { body: run.name.clone(), chunk: 0, model_time_s: 0.0, written_unix: 0.0, healthy: true, spun_up: false, unix_offset_s: cold_offset };
+    let (mut m, mut meta, started_from) = match found {
+        Some((st, meta)) if catchup_needed_s(&meta, now, spinup_s) <= max_lag => {
+            // Same sky as when it was saved: rebuild with the checkpoint's own offset.
+            sc.ephemeris = Some(ephemeris(meta.unix_offset_s));
+            let mut m = LiveModel::cold_start(sc.clone())?;
             m.resume_from(st)?;
-            let from = format!("checkpoint of model day {:.3} (written at Unix {:.0})", meta.model_time_s / m.day_s(), meta.written_unix);
-            (meta, from)
+            let from = format!("checkpoint of model day {:.3} (written at Unix {:.0})", meta.model_time_s / day_s, meta.written_unix);
+            (m, meta, from)
         }
-        None => (
-            CheckpointMeta { body: run.name.clone(), chunk: 0, model_time_s: 0.0, written_unix: 0.0, healthy: true, spun_up: false, anchor_model_s: 0.0, anchor_unix: 0.0 },
-            "cold start".to_string(),
-        ),
+        Some((_, meta)) => {
+            let behind = catchup_needed_s(&meta, now, spinup_s) / day_s;
+            warn!(body = %run.name, behind_days = behind, "atmosphere checkpoint too far behind the real time: cold start instead of catching up");
+            (cold, cold_meta, format!("cold start (the checkpoint was {behind:.1} model days behind)"))
+        }
+        None => (cold, cold_meta, "cold start".to_string()),
     };
-    info!(body = %run.name, from = %started_from, "atmosphere model: ready");
-    let day_s = m.day_s();
-    let chunk_s = m.chunk_s();
-    let cpd = m.sc.chunks_per_day();
-    let spinup_days = m.sc.s.run.spinup_days;
-    let spinup_chunks = m.sc.s.chunks(spinup_days);
-    let max_lag = cfg.max_catchup_days * day_s;
+    info!(body = %run.name, from = %started_from, unix_offset_s = meta.unix_offset_s, "atmosphere model: ready");
     set_status(run, |s| {
         s.started_from = Some(started_from);
         s.settings_file = settings_file;
@@ -273,11 +311,8 @@ fn drive(state: &Shared, run: &AtmosphereRun, sc: Scenario, settings_file: Strin
         let now = now_unix();
         if !meta.spun_up && m.st.chunk >= spinup_chunks {
             meta.spun_up = true;
-            meta.anchor_model_s = m.st.time;
-            meta.anchor_unix = now;
             info!(body = %run.name, model_day = m.model_day(), "atmosphere model: spin-up done, now following the wall clock");
-            // The warm state and its pacing anchor are worth keeping at once; the tables of this
-            // instant too (the next chunk is up to a model hour of wall-clock time away).
+            // The warm state is worth keeping at once; the tables of this instant too.
             if m.st.chunk > 0 {
                 publish_tables(run, &m);
                 save_checkpoint(run, &mut ck, &m, &mut meta);
@@ -286,13 +321,9 @@ fn drive(state: &Shared, run: &AtmosphereRun, sc: Scenario, settings_file: Strin
         }
         let mut lag = 0.0;
         if meta.spun_up {
-            let mut target = meta.anchor_model_s + (now - meta.anchor_unix);
-            if target - m.st.time > max_lag {
-                warn!(body = %run.name, behind_days = (target - m.st.time) / day_s, "atmosphere model too far behind: older time skipped");
-                meta.anchor_model_s = m.st.time + max_lag;
-                meta.anchor_unix = now;
-                target = meta.anchor_model_s;
-            }
+            // Never skipped: the offset ties model time to the real sky, so the model always
+            // catches up to the real instant (a too long lag was turned into a cold start above).
+            let target = pacing_target(now, meta.unix_offset_s);
             lag = (target - m.st.time).max(0.0);
             let next_end = (m.st.chunk + 1) as f64 * chunk_s;
             if next_end > target {
@@ -393,6 +424,40 @@ fn save_checkpoint(run: &AtmosphereRun, ck: &mut RollingCheckpoints, m: &LiveMod
             });
         }
         Err(e) => warn!(body = %run.name, error = %e, "atmosphere checkpoint not saved"),
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::*;
+
+    fn meta(model_time_s: f64, unix_offset_s: f64, spun_up: bool) -> CheckpointMeta {
+        CheckpointMeta { body: "Sandbox".into(), chunk: 0, model_time_s, written_unix: 0.0, healthy: true, spun_up, unix_offset_s }
+    }
+
+    /// A cold start at `now` lands, at the end of its spin-up, exactly on the real instant `now`;
+    /// afterwards model time follows the clock one for one.
+    #[test]
+    fn cold_start_lands_on_the_real_instant() {
+        let (now, spinup) = (1_795_600_000.0, 250.0 * 90_551.5);
+        let off = cold_start_offset(now, spinup);
+        assert_eq!(pacing_target(now, off), spinup);
+        assert_eq!(pacing_target(now + 3600.0, off), spinup + 3600.0);
+        // Unix time of a model instant = model time + offset (what the ephemeris uses).
+        assert_eq!(spinup + off, now);
+    }
+
+    /// The catch-up needed by a checkpoint: what lies beyond its remaining spin-up.
+    #[test]
+    fn catchup_needed_by_a_checkpoint() {
+        let (now, spinup) = (1_000_000.0, 50_000.0);
+        // Spun up, saved 1 000 s of model time before the clock: 1 000 s to catch up.
+        let m = meta(100_000.0, now - 101_000.0, true);
+        assert_eq!(catchup_needed_s(&m, now, spinup), 1_000.0);
+        // Still warming, the service stopped right after: only the rest of the spin-up, no lag.
+        let off = cold_start_offset(now - 60.0, spinup);
+        let m = meta(10_000.0, off, false);
+        assert_eq!(catchup_needed_s(&m, now, spinup), 60.0);
     }
 }
 

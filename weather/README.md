@@ -56,7 +56,7 @@ Docker (context = `services/`): `docker build -f weather/docker/Dockerfile -t we
 | `ATMOSPHERE_STATE_DIR` | *(unset)* | without `DATABASE_URL`: checkpoints as files, one folder per body (persistent volume) |
 | `ATMOSPHERE_THREADS` | 2 | threads per body (1 to 4) |
 | `ATMOSPHERE_CHECKPOINT_S` | 300 | a checkpoint at most every N wall-clock seconds |
-| `ATMOSPHERE_MAX_CATCHUP_DAYS` | 30 | after a stop, catch up at most N model days (older time is skipped) |
+| `ATMOSPHERE_MAX_CATCHUP_DAYS` | *(the spin-up length)* | after a stop, catch up at most N model days of lag; beyond, a cold start |
 | `ATMOSPHERE_SPINUP_DAYS` | *(settings: 250)* | spin-up of a cold start, model days; short values for smoke tests only |
 | `ATMOSPHERE_SET` | *(empty)* | settings overrides, `key=value;key=value` (e.g. `grid.level=4`) |
 
@@ -70,9 +70,12 @@ above are unchanged (the model is not published to the game yet).
 
 1. At start: the newest healthy checkpoint is loaded; without one, a **cold start** runs the spin-up
    (250 model days by default, about an hour for Sandbox on 2 threads) as fast as it can — status
-   `warming`.
+   `warming`. The spin-up covers the period that ENDS at the real instant, with that period's
+   real seasons and days.
 2. Then the model follows the wall clock: one model day = the body's solar day (Sandbox: 90 551.5 s).
-   After a stop it catches up in accelerated time (status `catching_up`). It advances by chunks of
+   After a stop it catches up in accelerated time (status `catching_up`); a lag longer than
+   `ATMOSPHERE_MAX_CATCHUP_DAYS` (default: the spin-up length, which would cost less) gives a cold
+   start instead. Time is never skipped, so the sky stays the real one. It advances by chunks of
    1/24 model day (~1 h for Sandbox), so the tables change once per chunk.
 3. After each chunk the guard accepted (finite values, pressure and wind bounds), the tables are
    rendered into memory; at most every `ATMOSPHERE_CHECKPOINT_S` a checkpoint is saved into one of
@@ -110,7 +113,7 @@ CREATE TABLE atmosphere_checkpoint (
     model_time  DOUBLE PRECISION NOT NULL,          -- model time of the state (s)
     healthy     BOOLEAN          NOT NULL,          -- accepted by the guard (only these are loaded)
     saved_at    TIMESTAMPTZ      NOT NULL DEFAULT now(),
-    meta        JSONB            NOT NULL,          -- chunk, spin-up done, pacing anchor
+    meta        JSONB            NOT NULL,          -- chunk, spin-up done, Unix-time offset
     state       BYTEA            NOT NULL,          -- the full state, bit-exact
     PRIMARY KEY (body, slot)
 );
@@ -120,9 +123,17 @@ CREATE TABLE atmosphere_checkpoint (
 the model simply makes a cold start and spins up again (about an hour for Sandbox), while the rest
 of the service keeps serving. Players would only see the atmosphere start over from a new state.
 
-**Known limits.** The model's seasons and sun start at its own t = 0 (northern spring equinox), not
-at the body's real orbital position (TODO in `crates/weather-service/src/atmosphere.rs`). Restart
-files are bit-exact on one platform; the math library (sin, exp, pow…) differs between platforms,
+**The real sky.** Model time and Unix time are tied by an offset fixed at the cold start (`unix =
+model time + offset`, saved in every checkpoint). The model's declination, sub-stellar longitude
+and distance to the star come from the body's orbit and spin at that Unix time, with the same
+functions and conventions as the rest of the service (`weather_core::orbit` and `spin`; a moon uses
+its planet's direction to the star), in `weather-atmosphere/src/ephemeris.rs`. The overhead flux is
+the data's annual mean times `a² √(1 − e²) / r²`, which averages to 1 over an orbit: the annual
+mean is kept and the eccentricity now shows (Sandbox, e = 0.03: about ±6 % between perihelion and
+aphelion; before, the flux was the constant annual mean). Offline runs and the regression tests
+keep the idealised calendar (no offset: t = 0 = northern spring equinox).
+
+**Known limits.** Restart files are bit-exact on one platform; the math library (sin, exp, pow…) differs between platforms,
 so a checkpoint resumed on another OS continues a slightly different (equally valid) weather.
 
 Quick try (from `services/weather`, a short spin-up only for a test):
