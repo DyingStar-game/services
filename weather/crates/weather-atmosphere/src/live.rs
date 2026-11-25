@@ -23,6 +23,8 @@ pub struct LiveModel {
     /// Model relief per cell (m), for the sea-level pressure of the tables.
     pub relief: Vec<f64>,
     smp: Sampler,
+    /// Sampler of the near-ground grid published to the game (built on first use).
+    near_smp: Option<Sampler>,
     /// False until the first chunk since the start or the last resume: the physics has not yet
     /// left its diagnostics (the "ingredients") in the work buffers.
     stepped: bool,
@@ -36,7 +38,7 @@ impl LiveModel {
         let smp = Sampler::new(&setup.model.grid, sc.s.run.img_w, sc.s.run.img_h);
         let work = setup.model.new_work();
         let guard = Guard::new(&setup.state);
-        Ok(LiveModel { sc, model: setup.model, st: setup.state, work, guard, relief: setup.relief, smp, stepped: false })
+        Ok(LiveModel { sc, model: setup.model, st: setup.state, work, guard, relief: setup.relief, smp, near_smp: None, stepped: false })
     }
 
     /// Replaces the state (from a checkpoint); the guard's last good state becomes this one.
@@ -82,6 +84,19 @@ impl LiveModel {
     pub fn tables(&self) -> std::io::Result<Vec<(&'static str, EncodedTable)>> {
         let work = if self.stepped { Some(&self.work) } else { None };
         outputs::render_tables(&self.model, &self.st, &self.relief, &self.smp, work, self.day_s())
+    }
+}
+
+impl LiveModel {
+    /// The five near-ground quantities of `outputs::near_ground` on a `w` × `h` equirectangular
+    /// grid (column i: longitude -180 + (i + 0.5) 360 / w, row j: latitude 90 - (j + 0.5) 180 / h),
+    /// quantity-major then row-major. The sampler is built on first use.
+    pub fn near_ground(&mut self, w: usize, h: usize) -> [Vec<f32>; 5] {
+        if self.near_smp.as_ref().is_none_or(|s| s.w != w || s.h != h) {
+            self.near_smp = Some(Sampler::new(&self.model.grid, w, h));
+        }
+        let z0 = self.model.phys.as_ref().map_or(self.sc.body.roughness_length_m, |p| p.surface.z0);
+        outputs::near_ground(&self.model, &self.st, &self.relief, self.near_smp.as_ref().unwrap(), z0)
     }
 }
 

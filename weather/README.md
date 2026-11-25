@@ -65,8 +65,31 @@ Docker (context = `services/`): `docker build -f weather/docker/Dockerfile -t we
 With `ATMOSPHERE_BODIES` empty, the service is exactly the pure (data, seed, time) service above.
 When a body is listed, the service also keeps that body's atmosphere **in memory** (a dedicated
 thread per body). The atmosphere is chaotic, so this part is no longer a pure function of time: it
-is a state plus checkpoints. The synoptic systems, their ds_bridge publication and every endpoint
-above are unchanged (the model is not published to the game yet).
+is a state plus checkpoints. Every endpoint above is unchanged.
+
+**Published to the game through Horizon (`weather_field`).** While a body's model is `running`, the
+service publishes ONE `weather_field` object for it (uuid `field_uuid(body)`, parented to the
+planet at its centre, scene `scenes/_universe/environment/weather/weather_field.tscn`, channels in
+`FIELD_DEF_JSON` of `ds-weather-proto`, the same file as Horizon's and the game's
+`weather_field_def.json`) and NO `weather_system` for that body (the model makes its own
+depressions and storms). While it is not `running` (warming, catching up, failed, off), it publishes
+no field (deletes it if it existed) and the seed-based systems as before.
+
+- Grid 128 × 64 equirectangular: column i at longitude −180 + (i + 0.5) · 360 / 128, increasing
+  eastward (the convention of `/point` and `weather_core::spin::dir_of`), row j at latitude
+  90 − (j + 0.5) · 180 / 64 (row 0 = north).
+- Quantities, in order: `wind_east`, `wind_north` (10 m above the ground, log law from the lowest
+  layer with the body's roughness), `dust_tau` (column optical depth), `t_air` (lowest layer
+  brought to 2 m with the reference lapse rate, K), `p_sea` (pressure reduced to the reference
+  sphere, Pa).
+- `fields`: one base64 string (standard, padded) of u16 little-endian values, index
+  `((q · h) + j) · w + i`; `scales[q] = [offset, scale]`, value = offset + scale · u16, chosen per
+  frame to cover min..max. 81 920 bytes, 109 228 base64 characters; one `update_object` of the
+  field is about **110 KB** of JSON (110 023 bytes measured).
+- The model runs ONE CHUNK (1/24 model day, ~1 h for Sandbox) AHEAD of real time; each new chunk's
+  end state is published with `valid_at` = the Unix time it is valid at (~now + one chunk), and the
+  game interpolates from the previous frame to it. Create once, then one `update_object` per chunk;
+  the whole set is replayed when the bridge reconnects, as for the systems.
 
 1. At start: the newest healthy checkpoint is loaded; without one, a **cold start** runs the spin-up
    (250 model days by default, about an hour for Sandbox on 2 threads) as fast as it can — status

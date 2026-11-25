@@ -124,6 +124,36 @@ pub fn table_fields(model: &PeModel, st: &PeState, relief: &[f64], smp: &Sampler
     out
 }
 
+/// Height (m) of the near-ground wind and temperature published to the game.
+pub const WIND_HEIGHT_M: f64 = 10.0;
+pub const T_AIR_HEIGHT_M: f64 = 2.0;
+
+/// The five near-ground quantities published to the game (`weather_field`), in this order, on the
+/// image grid of `smp`: wind 10 m above the ground (east, north; log law from the lowest layer with
+/// the roughness `z0`), dust optical depth of the column, air temperature 2 m above the ground
+/// (lowest layer, extrapolated with the reference lapse rate), pressure reduced to the reference
+/// sphere (Pa). Computed from the state alone (no physics diagnostics needed).
+pub fn near_ground(model: &PeModel, st: &PeState, relief: &[f64], smp: &Sampler, z0: f64) -> [Vec<f32>; 5] {
+    let l = model.nl;
+    let kb = l - 1;
+    let n = model.grid.n_cells();
+    let z0 = z0.max(1e-5);
+    let kext = model.phys.as_ref().map_or([0.0, 0.0], |p| p.kext);
+    let mut wind: Vec<V3> = Vec::with_capacity(n);
+    let mut tau = Vec::with_capacity(n);
+    let mut t2 = Vec::with_capacity(n);
+    for i in 0..n {
+        let (zh, zf) = model.column_heights(st, i);
+        let z1 = (zf[kb] - zh[l]).max(2.0 * z0);
+        let f = ((WIND_HEIGHT_M / z0).ln() / (z1 / z0).ln()).max(0.0);
+        wind.push(scale(st.v[i * l + kb], f));
+        t2.push(model.temperature(st, i, kb) + model.tref.lapse * (z1 - T_AIR_HEIGHT_M));
+        tau.push(if st.dust_active && model.ntr > 1 { (0..l).map(|k| kext[0] * st.m[i * l + k] + kext[1] * st.m2[i * l + k]).sum::<f64>() / model.c.g } else { 0.0 });
+    }
+    let (ue, vn) = smp.east_north(&wind);
+    [ue, vn, smp.scalar(&tau), smp.scalar(&t2), smp.scalar(&sea_level_pressure(model, st, relief))]
+}
+
 /// The metadata of a table of this instant (JSON sidecar).
 fn table_meta<'a>(model: &PeModel, st: &PeState, day_s: f64, f: &'a TableField) -> TableMeta<'a> {
     TableMeta {

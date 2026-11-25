@@ -3,8 +3,11 @@
 //! evaluation itself is pure (weather-core); the loop only keeps the list of what was sent, so a
 //! bridge that reconnects can be given the whole picture again.
 
-use crate::state::{Body, Shared};
-use ds_weather_proto::{create_envelope, delete_envelope, system_uuid, update_envelope, SystemKind, SystemParams, Vec3f, WeatherSystemData, SCENENAME};
+use crate::state::{Body, Published, Shared};
+use ds_weather_proto::{
+    delete_envelope, field_delete_envelope, field_uuid, system_uuid, SystemKind, SystemParams, Vec3f, WeatherFieldData, WeatherSystemData, FIELD_GRID_H, FIELD_GRID_W, FIELD_OBJECT_TYPE,
+    FIELD_QUANTITIES, FIELD_SCENENAME, SCENENAME,
+};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
@@ -102,55 +105,100 @@ pub fn snapshot(state: &Shared, body: &Body, t: f64) -> HashMap<Uuid, WeatherSys
     out
 }
 
-/// One tick: publish the difference between what Horizon holds and what the model says now.
-pub fn tick(state: &Shared, t: f64) -> (usize, usize, usize) {
-    let mut wanted: HashMap<Uuid, WeatherSystemData> = HashMap::new();
+/// The near-ground fields of a body whose atmosphere model is `running` (else None).
+pub fn field_object(state: &Shared, body: &Body) -> Option<(Uuid, WeatherFieldData)> {
+    let run = state.atmosphere.get(&body.inputs.name.to_lowercase())?;
+    let frame = run.running_frame()?;
+    let parent = state.planet_uuid(&body.inputs.name)?;
+    Some((
+        field_uuid(&body.inputs.name),
+        WeatherFieldData {
+            name: format!("{}-weather_field", body.inputs.name),
+            parent_id: parent,
+            scenename: FIELD_SCENENAME.to_string(),
+            position: Vec3f::default(),
+            rotation: Vec3f::default(),
+            grid_w: FIELD_GRID_W as u32,
+            grid_h: FIELD_GRID_H as u32,
+            quantities: FIELD_QUANTITIES.iter().map(|s| s.to_string()).collect(),
+            scales: frame.scales,
+            valid_at: frame.valid_at,
+            model_day: frame.model_day,
+            fields: frame.fields,
+        },
+    ))
+}
+
+/// Everything that should be in Horizon at `t`: per body with an air, either the atmosphere
+/// model's `weather_field` (model `running`) or the seed-based `weather_system`s, never both.
+pub fn wanted_objects(state: &Shared, t: f64) -> HashMap<Uuid, Published> {
+    let mut wanted = HashMap::new();
     for body in state.bodies.iter().filter(|b| b.climate.has_atmosphere) {
-        wanted.extend(snapshot(state, body, t));
+        match field_object(state, body) {
+            Some((uuid, f)) => {
+                wanted.insert(uuid, Published::Field(f));
+            }
+            None => wanted.extend(snapshot(state, body, t).into_iter().map(|(u, d)| (u, Published::System(d)))),
+        }
     }
+    wanted
+}
+
+/// One tick: publish the difference between what Horizon holds and what the models say now.
+pub fn tick(state: &Shared, t: f64) -> (usize, usize, usize) {
+    let wanted = wanted_objects(state, t);
     let mut published = state.published.lock().unwrap();
     let (mut created, mut updated, mut deleted) = (0, 0, 0);
-    let mut next: HashMap<Uuid, (WeatherSystemData, f64)> = HashMap::with_capacity(wanted.len());
+    let mut next: HashMap<Uuid, (Published, f64)> = HashMap::with_capacity(wanted.len());
     for (uuid, data) in wanted {
         match published.get(&uuid) {
-            None => {
-                created += 1;
-                send(state, &create_envelope(uuid, &data));
-                next.insert(uuid, (data, t));
-            }
-            Some((old, sent_at)) => {
+            Some((old, sent_at)) if old.object_type() == data.object_type() => {
                 let due = t - sent_at >= state.config.update_every_s;
-                let moved = (old.intensity - data.intensity).abs() > 0.05 || old.kind != data.kind;
-                if due || moved {
+                let changed = match (old, &data) {
+                    (Published::System(o), Published::System(d)) => (o.intensity - d.intensity).abs() > 0.05 || o.kind != d.kind,
+                    // A field changes once per model chunk: send each new frame, nothing in between.
+                    (Published::Field(o), Published::Field(d)) => o.valid_at != d.valid_at || o.parent_id != d.parent_id,
+                    _ => true,
+                };
+                let send_it = match &data {
+                    Published::System(_) => due || changed,
+                    Published::Field(_) => changed || *sent_at == f64::NEG_INFINITY,
+                };
+                if send_it {
                     updated += 1;
-                    send(state, &update_envelope(uuid, &data));
+                    send(state, &data.update_envelope(uuid));
                     next.insert(uuid, (data, t));
                 } else {
                     next.insert(uuid, (old.clone(), *sent_at));
                 }
             }
+            _ => {
+                created += 1;
+                send(state, &data.create_envelope(uuid));
+                next.insert(uuid, (data, t));
+            }
         }
     }
-    let gone: Vec<Uuid> = published.keys().filter(|u| !next.contains_key(u)).copied().collect();
-    for uuid in gone {
+    let gone: Vec<(Uuid, &'static str)> = published.iter().filter(|(u, _)| !next.contains_key(u)).map(|(u, (p, _))| (*u, p.object_type())).collect();
+    for (uuid, object_type) in gone {
         deleted += 1;
-        send(state, &delete_envelope(uuid));
+        send(state, &if object_type == FIELD_OBJECT_TYPE { field_delete_envelope(uuid) } else { delete_envelope(uuid) });
     }
     *published = next;
     state.metrics.ticks.inc();
-    state.metrics.systems_alive.set(published.len() as i64);
+    state.metrics.systems_alive.set(published.values().filter(|(p, _)| matches!(p, Published::System(_))).count() as i64);
     (created, updated, deleted)
 }
 
-/// Re-send everything to a bridge that (re)connected: creates only (idempotent in Horizon: a system
-/// it already knows is kept, one it lost is made), and every system is marked due for an update at
-/// the next tick. An update sent right behind the create was too early: a freshly booted Horizon
-/// queues the create until the parent planet exists, and answered "Unknown props uuid" (231 times
-/// on 2026-10-06).
+/// Re-send everything to a bridge that (re)connected: creates only (idempotent in Horizon: an
+/// object it already knows is kept, one it lost is made), and every object is marked due for an
+/// update at the next tick. An update sent right behind the create was too early: a freshly booted
+/// Horizon queues the create until the parent planet exists, and answered "Unknown props uuid"
+/// (231 times on 2026-10-06).
 pub fn replay(state: &Shared) -> usize {
     let mut published = state.published.lock().unwrap();
     for (uuid, (data, sent_at)) in published.iter_mut() {
-        send(state, &create_envelope(*uuid, data));
+        send(state, &data.create_envelope(*uuid));
         *sent_at = f64::NEG_INFINITY;
     }
     published.len()

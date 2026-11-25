@@ -41,6 +41,7 @@ use tracing::{error, info, warn};
 use weather_atmosphere::body::{Body, BodyOverrides};
 use weather_atmosphere::ephemeris::Ephemeris;
 use crate::pg_store::PgStateStore;
+use ds_weather_proto::{encode_fields, FIELD_GRID_H, FIELD_GRID_W, FIELD_QUANTITIES};
 use std::path::PathBuf;
 use weather_atmosphere::live::{CheckpointMeta, FileStateStore, LiveModel, RollingCheckpoints, StateStore};
 use weather_atmosphere::pe::ChunkOutcome;
@@ -97,12 +98,43 @@ pub struct TableSet {
     pub tables: BTreeMap<String, TableEntry>,
 }
 
+/// The near-ground fields of the latest chunk, ready for the `weather_field` object (the
+/// simulation loop adds the planet's uuid and publishes it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldFrame {
+    /// Unix time at which the fields are valid (end of the chunk; ~ one chunk ahead of now).
+    pub valid_at: f64,
+    pub model_day: f64,
+    pub scales: Vec<[f64; 2]>,
+    pub fields: String,
+}
+
 /// One body's run of the model.
 pub struct AtmosphereRun {
     pub body_index: usize,
     pub name: String,
     pub status: RwLock<RunStatus>,
     pub tables: RwLock<TableSet>,
+    pub field: RwLock<Option<FieldFrame>>,
+}
+
+impl AtmosphereRun {
+    /// The frame to publish, if the model is `running` and has one.
+    pub fn running_frame(&self) -> Option<FieldFrame> {
+        let running = self.status.read().map(|s| s.status == "running").unwrap_or(false);
+        publish_mode(running, self.field.read().ok().and_then(|f| f.clone()))
+    }
+}
+
+/// Coexistence with the seed-based systems: a body whose model is `running` and has a frame
+/// publishes its `weather_field` and NO `weather_system`; any other body (warming, catching up,
+/// failed, off, no frame yet) publishes its systems and NO field. Returns the frame to publish.
+pub fn publish_mode(running: bool, frame: Option<FieldFrame>) -> Option<FieldFrame> {
+    if running {
+        frame
+    } else {
+        None
+    }
 }
 
 /// The runs to start, from the configuration: bodies that exist, have an air and a weather.
@@ -119,7 +151,7 @@ pub fn plan(cfg: &AtmosphereConfig, bodies: &[ServiceBody]) -> HashMap<String, A
             continue;
         }
         let status = RunStatus { status: "starting".into(), ..Default::default() };
-        out.insert(b.inputs.name.to_lowercase(), Arc::new(AtmosphereRun { body_index: i, name: b.inputs.name.clone(), status: RwLock::new(status), tables: RwLock::new(TableSet::default()) }));
+        out.insert(b.inputs.name.to_lowercase(), Arc::new(AtmosphereRun { body_index: i, name: b.inputs.name.clone(), status: RwLock::new(status), tables: RwLock::new(TableSet::default()), field: RwLock::new(None) }));
     }
     out
 }
@@ -294,6 +326,9 @@ fn drive(state: &Shared, run: &AtmosphereRun, mut sc: Scenario, ephemeris: &dyn 
     if m.st.chunk > 0 {
         // Resumed: show the saved instant at once (state tables only until the next chunk).
         have_tables = publish_tables(run, &m);
+        if meta.spun_up {
+            publish_field(run, &mut m, meta.unix_offset_s);
+        }
         let d = m.diag();
         set_status(run, |s| {
             s.status = if meta.spun_up { "running" } else { "warming" }.into();
@@ -315,6 +350,7 @@ fn drive(state: &Shared, run: &AtmosphereRun, mut sc: Scenario, ephemeris: &dyn 
             // The warm state is worth keeping at once; the tables of this instant too.
             if m.st.chunk > 0 {
                 publish_tables(run, &m);
+                publish_field(run, &mut m, meta.unix_offset_s);
                 save_checkpoint(run, &mut ck, &m, &mut meta);
                 last_ckpt = Instant::now();
             }
@@ -323,7 +359,9 @@ fn drive(state: &Shared, run: &AtmosphereRun, mut sc: Scenario, ephemeris: &dyn 
         if meta.spun_up {
             // Never skipped: the offset ties model time to the real sky, so the model always
             // catches up to the real instant (a too long lag was turned into a cold start above).
-            let target = pacing_target(now, meta.unix_offset_s);
+            // One chunk AHEAD of the clock: the game interpolates from the previous frame to this
+            // one, which is valid at the end of the chunk (`valid_at` ~ now + one chunk).
+            let target = pacing_target(now, meta.unix_offset_s) + chunk_s;
             lag = (target - m.st.time).max(0.0);
             let next_end = (m.st.chunk + 1) as f64 * chunk_s;
             if next_end > target {
@@ -343,6 +381,9 @@ fn drive(state: &Shared, run: &AtmosphereRun, mut sc: Scenario, ephemeris: &dyn 
                 // While warming, tables once per model day (rendering costs about a chunk).
                 if meta.spun_up || m.st.chunk % cpd == 0 || !have_tables {
                     have_tables |= publish_tables(run, &m);
+                }
+                if meta.spun_up {
+                    publish_field(run, &mut m, meta.unix_offset_s);
                 }
                 if last_ckpt.elapsed().as_secs_f64() >= cfg.checkpoint_every_s {
                     save_checkpoint(run, &mut ck, &m, &mut meta);
@@ -409,6 +450,18 @@ fn publish_tables(run: &AtmosphereRun, m: &LiveModel) -> bool {
     }
 }
 
+/// Samples the five near-ground quantities of the current state on the contract's grid, encodes
+/// them, and keeps the frame for the simulation loop to publish (`weather_field`).
+fn publish_field(run: &AtmosphereRun, m: &mut LiveModel, unix_offset_s: f64) {
+    let q = m.near_ground(FIELD_GRID_W, FIELD_GRID_H);
+    let flat: Vec<f32> = q.iter().flat_map(|v| v.iter().copied()).collect();
+    let (scales, fields) = encode_fields(&flat, FIELD_QUANTITIES.len());
+    let frame = FieldFrame { valid_at: m.st.time + unix_offset_s, model_day: m.model_day(), scales, fields };
+    if let Ok(mut f) = run.field.write() {
+        *f = Some(frame);
+    }
+}
+
 /// Saves the current state (which the guard has just accepted) into the next rolling slot.
 fn save_checkpoint(run: &AtmosphereRun, ck: &mut RollingCheckpoints, m: &LiveModel, meta: &mut CheckpointMeta) {
     meta.chunk = m.st.chunk;
@@ -430,6 +483,39 @@ fn save_checkpoint(run: &AtmosphereRun, ck: &mut RollingCheckpoints, m: &LiveMod
 #[cfg(test)]
 mod pacing_tests {
     use super::*;
+
+    /// Coexistence: the field only while `running` with a frame; otherwise the systems.
+    #[test]
+    fn field_or_systems() {
+        let frame = FieldFrame { valid_at: 1.0, model_day: 2.0, scales: vec![[0.0, 1.0]; 5], fields: String::new() };
+        assert_eq!(publish_mode(true, Some(frame.clone())), Some(frame.clone()));
+        assert_eq!(publish_mode(false, Some(frame)), None, "warming / catching up / failed: no field");
+        assert_eq!(publish_mode(true, None), None, "running without a frame yet: systems go on");
+    }
+
+    /// The size of one `update_object` of a real-sized field, as sent to the bridge.
+    #[test]
+    fn field_message_size() {
+        let values: Vec<f32> = (0..5 * FIELD_GRID_W * FIELD_GRID_H).map(|k| ((k as f32) * 0.37).sin()).collect();
+        let (scales, fields) = encode_fields(&values, 5);
+        let data = ds_weather_proto::WeatherFieldData {
+            name: "Sandbox-weather_field".into(),
+            parent_id: "0b6c5b7e-1d1f-4f3a-9a52-6f0e2a1c9d33".into(),
+            scenename: ds_weather_proto::FIELD_SCENENAME.into(),
+            position: Default::default(),
+            rotation: Default::default(),
+            grid_w: 128,
+            grid_h: 64,
+            quantities: FIELD_QUANTITIES.iter().map(|s| s.to_string()).collect(),
+            scales,
+            valid_at: 1_795_600_000.0,
+            model_day: 250.041_666,
+            fields,
+        };
+        let text = serde_json::to_string(&ds_weather_proto::field_update_envelope(ds_weather_proto::field_uuid("Sandbox"), &data)).unwrap();
+        println!("update_object of a weather_field: {} bytes", text.len());
+        assert!(text.len() > 109_228 && text.len() < 112_000);
+    }
 
     fn meta(model_time_s: f64, unix_offset_s: f64, spun_up: bool) -> CheckpointMeta {
         CheckpointMeta { body: "Sandbox".into(), chunk: 0, model_time_s, written_unix: 0.0, healthy: true, spun_up, unix_offset_s }

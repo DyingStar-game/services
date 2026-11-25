@@ -3,7 +3,7 @@
 //! has been published, and the channel every connected bridge listens to.
 
 use crate::config::Config;
-use ds_weather_proto::WeatherSystemData;
+use ds_weather_proto::{WeatherFieldData, WeatherSystemData};
 use crate::atmosphere::AtmosphereRun;
 use prometheus::{GaugeVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry};
 use std::collections::HashMap;
@@ -20,6 +20,37 @@ pub struct Body {
     pub climate: Climate,
     /// Index of the planet this moon orbits (its own index for a planet).
     pub star_orbit_of: usize,
+}
+
+/// One object the service holds in Horizon: a seed-based weather system, or the atmosphere
+/// model's near-ground fields of a body.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Published {
+    System(WeatherSystemData),
+    Field(WeatherFieldData),
+}
+
+impl Published {
+    pub fn object_type(&self) -> &'static str {
+        match self {
+            Published::System(_) => ds_weather_proto::OBJECT_TYPE,
+            Published::Field(_) => ds_weather_proto::FIELD_OBJECT_TYPE,
+        }
+    }
+
+    pub fn create_envelope(&self, uuid: Uuid) -> ds_weather_proto::BridgeEnvelope {
+        match self {
+            Published::System(d) => ds_weather_proto::create_envelope(uuid, d),
+            Published::Field(d) => ds_weather_proto::field_create_envelope(uuid, d),
+        }
+    }
+
+    pub fn update_envelope(&self, uuid: Uuid) -> ds_weather_proto::BridgeEnvelope {
+        match self {
+            Published::System(d) => ds_weather_proto::update_envelope(uuid, d),
+            Published::Field(d) => ds_weather_proto::field_update_envelope(uuid, d),
+        }
+    }
 }
 
 pub struct Metrics {
@@ -68,7 +99,7 @@ pub struct AppState {
     /// Horizon uuid by body name (lower-case), from the celestial service.
     pub planet_uuids: RwLock<HashMap<String, String>>,
     /// What Horizon currently holds, by object uuid, with the time it was last sent.
-    pub published: Mutex<HashMap<Uuid, (WeatherSystemData, f64)>>,
+    pub published: Mutex<HashMap<Uuid, (Published, f64)>>,
     /// Serialised envelopes to every connected bridge.
     pub tx: broadcast::Sender<String>,
     pub metrics: Metrics,
