@@ -230,7 +230,10 @@ pub mod di {
     pub const COL_COARSE: usize = 15;
     /// Sunlight absorbed by the dust in the air (W/m^2).
     pub const SW_AIR: usize = 16;
-    pub const N: usize = 17;
+    /// Sunlight reaching the ground, direct and diffuse (W/m^2; with the Mie optics, multiple
+    /// reflections between the ground and the dust layer included).
+    pub const SW_DOWN: usize = 17;
+    pub const N: usize = 18;
 }
 
 /// Scratch and diagnostics of the physics.
@@ -489,6 +492,7 @@ impl PhysicsSuite {
                 dg[di::COL_FINE] = cx.m.iter().sum::<f64>() / g;
                 dg[di::COL_COARSE] = cx.m2.iter().sum::<f64>() / g;
                 dg[di::SW_AIR] = cx.sw_air;
+                dg[di::SW_DOWN] = cx.sw_down;
             });
 
         // Planet-wide budget (sequential sum: deterministic).

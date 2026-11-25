@@ -256,6 +256,9 @@ pub struct PhysRecorder {
     /// Planet-wide sums (area-weighted, hourly) of the sunlight at the top, absorbed by the
     /// ground and absorbed by the dust: the planetary albedo.
     sw_sums: [f64; 3],
+    /// Per-cell sums (hourly) of the sunlight at the top and of the sunlight reaching the ground.
+    sum_toa: Vec<f64>,
+    sum_sw_down: Vec<f64>,
     sum_tg_day: Vec<f64>,
     n_day: Vec<f64>,
     sum_tg_night: Vec<f64>,
@@ -348,6 +351,8 @@ impl PhysRecorder {
             sum_ta: z(),
             sum_h: z(),
             sw_sums: [0.0; 3],
+            sum_toa: z(),
+            sum_sw_down: z(),
             sum_tg_day: z(),
             n_day: z(),
             sum_tg_night: z(),
@@ -415,6 +420,8 @@ impl PhysRecorder {
             self.sw_sums[0] += a * s0 * r[di::COSZ].max(0.0);
             self.sw_sums[1] += a * r[di::SWG];
             self.sw_sums[2] += a * r[di::SW_AIR];
+            self.sum_toa[i] += s0 * r[di::COSZ].max(0.0);
+            self.sum_sw_down[i] += r[di::SW_DOWN];
             if r[di::COSZ] > 0.0 {
                 self.sum_tg_day[i] += r[di::TG];
                 self.n_day[i] += 1.0;
@@ -711,6 +718,21 @@ impl PhysRecorder {
             mean(&div(&(0..n).map(|i| self.sum_tg_day[i] + self.sum_tg_night[i]).collect::<Vec<_>>(), &ones)),
             mean(&tday),
             mean(&tnight)
+        );
+        let tg_all = div(&(0..n).map(|i| self.sum_tg_day[i] + self.sum_tg_night[i]).collect::<Vec<_>>(), &ones);
+        let _ = writeln!(j, "  \"t_sol_K\": {}, \"t_sol_jour_K_classes\": {}, \"t_sol_nuit_K_classes\": {},", classes(&tg_all, 2), classes(&tday, 2), classes(&tnight, 2));
+        // Sunlight reaching the ground: mean flux and share of the sunlight at the top, per class.
+        let swd = div(&self.sum_sw_down, &ones);
+        let toa = div(&self.sum_toa, &ones);
+        let share = |f: &dyn Fn(usize) -> bool| mean_if(&swd, f) / mean_if(&toa, f).max(1e-30);
+        let _ = writeln!(
+            j,
+            "  \"soleil_au_sol_Wm2\": {}, \"part_soleil_au_sol\": {{\"planete\": {:.4}, \"{k_low}\": {:.4}, \"{k_mid}\": {:.4}, \"{k_high}\": {:.4}}},",
+            classes(&swd, 1),
+            share(&|_| true),
+            share(&low),
+            share(&mid),
+            share(&high)
         );
         let _ = writeln!(j, "  \"amplitude_t_sol_K\": {},", classes(&rg, 2));
         let _ = writeln!(j, "  \"amplitude_t_air_K\": {},", classes(&ra, 2));
