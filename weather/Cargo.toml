@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/weather-core", "crates/ds-weather-proto", "crates/weather-service"]
+members = ["crates/weather-core", "crates/ds-weather-proto", "crates/weather-atmosphere", "crates/weather-service"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,3 +10,13 @@ license = "MIT"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# The atmosphere model is number crunching: unoptimised, it runs 10 to 30 times slower, which makes
+# its tests (and `cargo run` of the service with the model on) far too slow. Optimise it, and its
+# parallel loops, even in dev and test builds; everything else keeps the fast-compiling defaults.
+[profile.dev.package.weather-atmosphere]
+opt-level = 3
+[profile.dev.package.rayon]
+opt-level = 3
+[profile.dev.package.rayon-core]
+opt-level = 3

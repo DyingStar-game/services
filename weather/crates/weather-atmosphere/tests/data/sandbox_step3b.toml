@@ -1,0 +1,31 @@
+# =====================================================================================================
+# SANDBOX, EXACT settings of the prototype's step 3b: 8 hybrid layers, del^8, seasonal Held-Suarez
+# relaxation, WITHOUT column physics (no ground, no active dust, no sea, no lid). Used by
+# `tests/pe.rs` and by the step-3b regression test.
+# =====================================================================================================
+
+inherit = "sandbox_step4.toml"
+
+[grid]
+# The 8 layers chosen for Sandbox at step 3b: the tropopause (12 to 20 km) fits in three layers.
+layers = 8
+eta_half = [0.0, 0.06, 0.13, 0.21, 0.31, 0.46, 0.66, 0.87, 1.0]
+
+[ground]
+enabled = false
+
+[convection]
+enabled = false
+
+[dust]
+# A single passive dust, released at the start of the recorded period.
+enabled = false
+
+[sea]
+enabled = false
+
+[lid]
+enabled = false
+
+[events]
+enabled = false

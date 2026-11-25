@@ -1,0 +1,79 @@
+# =====================================================================================================
+# SANDBOX: what the shared data does not give.
+#
+# Everything else (radius 6 356 km, gravity, rotation, year, 15 deg tilt, air, 1 020 hPa, 283 K,
+# Bond albedo, thermal inertia 120, corundum grains...) comes from the system file and the weather
+# service's climate extras.
+#
+# Worldbuilding decision 2026-11-25 ("piste 3"), merged in below:
+#   - a planetary albedo lower than 0.66 is ACCEPTED: no more tuning toward 0.66 or 283 K. The ground
+#     takes the real colour of the rock (the game's map), so does the dust, and the emissivity of the
+#     air follows the data's rule (1 - exp(-tau_ir)) instead of a hand-tuned 0.93;
+#   - the dust sea stays STRICTLY between 500 and 3 500 m: what overflows above the top is removed
+#     within hours (instead of 10 days).
+# =====================================================================================================
+
+inherit = "defaut.toml"
+body = "Sandbox"
+
+[grid]
+# 11 "dust sea" layers: chosen by hand so that layer boundaries fall near 500 m, 1 km, 2.6 km,
+# 3.5 km and 5 km above a ground at level 0 (base and top of the sea, lid), the top keeping 4 layers
+# around the tropopause. (The general rule gives nearby levels, not aligned on the sea.)
+layers = 11
+eta_half = [0.0, 0.06, 0.13, 0.21, 0.31, 0.46, 0.60, 0.705, 0.80, 0.90, 0.953, 1.0]
+
+[relief]
+# The game's relief, averaged to 512 x 256 (float32, metres). See README.md.
+file = "sandbox_relief_512x256.f32"
+
+[ground]
+# Worldbuilding decision 2026-11-25: the real colour of the ground (corundum rock), the same map as
+# the dust's. It replaces the albedo cell by cell. eps_air follows the data's rule (key left out).
+albedo_map = "sandbox_ground_albedo_512x256.f32"
+
+[dust]
+# Lifting efficiency chosen for the wanted haze (the brake against runaway lifting).
+alpha_per_m = 5.0e-8
+# The game's map of the dust colour (albedo, 512 x 256 float32): absorption = 1 - albedo.
+absorption_albedo_map = "sandbox_ground_albedo_512x256.f32"
+
+[sea]
+# The permanent dust sea: fine dust relaxed between 500 and 3 500 m of absolute altitude, target
+# optical depth 0.4, filled in 1 day, emptied in 30 days if it overflows (model days).
+enabled = true
+z_base_m = 500.0
+z_top_m = 3500.0
+optical_depth = 0.4
+fill_days = 1.0
+excess_days = 30.0
+# Worldbuilding decision 2026-11-25: strict top, the air above 3 500 m loses its fine dust in 6 hours.
+clear_days = 0.25
+# Outputs: "above the sea" wind measured up to 6 000 m; profiles from -2 000 to 10 000 m by 250 m.
+above_band_top_m = 6000.0
+profile_bottom_m = -2000.0
+profile_step_m = 250.0
+profile_bins = 48
+
+[lid]
+# The lid: a 10 K step of the equilibrium temperature at 3 500 m, 1 000 m thick, fast relaxation in
+# 1 day near the step.
+enabled = true
+z_m = 3500.0
+depth_m = 1000.0
+step_k = 10.0
+fast_days = 1.0
+
+[outputs]
+# The players' starting area, recorded hourly in offline runs, besides the equator and 45 N.
+tracked_points = [
+    { name = "zone_depart", lon = -39.0, lat = 22.0 },
+    { name = "equateur_lon0", lon = 0.0, lat = 0.0 },
+    { name = "lat45N_lon0", lon = 0.0, lat = 45.0 },
+]
+# Passive dust release over the starting area (lon -52 to -26, lat 12 to 32).
+dust_release = [-52.0, -26.0, 12.0, 32.0]
+
+[shallow_water]
+# Layer depth of the single-layer model (test cases).
+mean_depth_m = 8000.0

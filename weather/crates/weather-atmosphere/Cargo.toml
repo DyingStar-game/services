@@ -1,0 +1,18 @@
+[package]
+name = "weather-atmosphere"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DyingStar atmosphere model: dry hybrid sigma-pressure primitive equations on an icosahedral hexagonal grid, column physics as components (ground, day-night, dust, dust sea, lid, events), bit-exact restarts and a roll-back guard"
+
+[dependencies]
+# All MIT OR Apache-2.0.
+weather-core = { path = "../weather-core" }
+rayon = "1.10"
+png = "0.17"
+serde = { workspace = true }
+toml = "0.8"
+
+[[example]]
+name = "offline_run"
+path = "examples/offline_run.rs"
