@@ -37,6 +37,9 @@ albedo_map = "sandbox_ground_albedo_512x256.f32"
 alpha_per_m = 5.0e-8
 # The game's map of the dust colour (albedo, 512 x 256 float32): absorption = 1 - albedo.
 absorption_albedo_map = "sandbox_ground_albedo_512x256.f32"
+# Worldbuilding decision 2026-11-25: Mie first. The dust's optics follow from its grains (Mie, corundum
+# whose absorption is read from the colour map) instead of being as dark as the bulk rock.
+optics = "mie"
 
 [sea]
 # The permanent dust sea: fine dust relaxed between 500 and 3 500 m of absolute altitude, target

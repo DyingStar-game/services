@@ -6,7 +6,8 @@ Data of the `weather-atmosphere` model (see `../../README.md`, section "The atmo
 - `sandbox.toml` — what the shared data does not give for Sandbox: 11 layers aligned on the dust
   sea, the relief, the ground/dust colour map, the dust sea (500–3 500 m) and the lid, with the
   worldbuilding decision of 2026-11-25 merged in (lower planetary albedo accepted, real rock colour,
-  air emissivity by the data's rule, strict dust-sea top).
+  air emissivity by the data's rule, strict dust-sea top), and the dust's Mie optics (decision of
+  2026-11-25, "Mie first": `dust.optics = "mie"`, see `defaut.toml`).
 - A body without its own file runs on `defaut.toml` alone: everything else is derived from the
   system data and `../climate/tarsis.json`.
 
