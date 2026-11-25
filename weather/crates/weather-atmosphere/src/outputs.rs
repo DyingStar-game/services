@@ -751,6 +751,39 @@ impl PhysRecorder {
     }
 }
 
+/// Summary of the dust's Mie optics (`optique_poussiere.json`): extinction of each class, and the
+/// area-weighted mean, 10th, 50th and 90th percentiles (by area) of the imaginary index and of the
+/// single-scattering albedo and asymmetry of each class.
+pub fn mie_optics_summary(model: &PeModel, o: &crate::phys::dust::MieRadiation) -> String {
+    let area = &model.grid.area;
+    let at: f64 = area.iter().sum();
+    let stat = |v: &[f64]| {
+        let mut idx: Vec<usize> = (0..v.len()).collect();
+        idx.sort_by(|&a, &b| v[a].partial_cmp(&v[b]).unwrap());
+        let pct = |p: f64| {
+            let mut acc = 0.0;
+            for &i in &idx {
+                acc += area[i];
+                if acc >= p * at {
+                    return v[i];
+                }
+            }
+            v[idx[idx.len() - 1]]
+        };
+        let mean = (0..v.len()).map(|i| v[i] * area[i]).sum::<f64>() / at;
+        format!("{{\"moyenne\": {:.6e}, \"p10\": {:.6e}, \"p50\": {:.6e}, \"p90\": {:.6e}}}", mean, pct(0.1), pct(0.5), pct(0.9))
+    };
+    let mut j = String::from("{
+");
+    let _ = writeln!(j, "  \"qext\": [{:.4}, {:.4}], \"kext_m2_kg\": [{:.2}, {:.2}],", o.qext[0], o.qext[1], o.kext[0], o.kext[1]);
+    let _ = writeln!(j, "  \"indice_k\": {},", stat(&o.k));
+    let _ = writeln!(j, "  \"omega_fine\": {}, \"omega_grosse\": {},", stat(&o.omega[0]), stat(&o.omega[1]));
+    let _ = writeln!(j, "  \"g_fine\": {}, \"g_grosse\": {},", stat(&o.g[0]), stat(&o.g[1]));
+    let _ = writeln!(j, "  \"albedo_sol\": {}
+}}", stat(&o.ground_albedo));
+    j
+}
+
 /// One record of the compact climate file `climat.bin` (little-endian f32):
 /// time in model days, then zonal means (96 latitude rows) of u, v, T for every layer,
 /// then 192 x 96 maps of sea-level pressure (hPa), u, v and T of the lowest layer.

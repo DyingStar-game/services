@@ -12,14 +12,15 @@ use crate::io;
 use crate::levels;
 use crate::pe::*;
 use crate::phys::convection::DryConvection;
-use crate::phys::dust::{DustClasses, DustLifting, DustRadiation, DustSettling};
+use crate::phys::dust::{DustClasses, DustLifting, DustRadiation, DustSettling, MieRadiation};
+use crate::phys::optics::{k_from_reflectance, OpticsTable};
 use crate::phys::events::Events;
 use crate::phys::ground::Ground;
 use crate::phys::lid::Lid;
 use crate::phys::sea::DustSea;
 use crate::phys::{ColumnProcess, PhysicsSuite, Sun, SurfaceLayer};
 use crate::relax::{HeldSuarez, Relaxation};
-use crate::settings::Settings;
+use crate::settings::{DustOptics, Settings};
 use std::path::Path;
 
 /// A body and the settings of a run on it.
@@ -40,6 +41,17 @@ pub enum Init {
     Equilibrium,
     /// Resting atmosphere with the given profile (no noise): balance tests.
     Rest(RefProfile),
+}
+
+/// The dust's Mie optics as built from the settings.
+#[derive(Clone, Debug)]
+pub struct MieSetup {
+    /// Per-cell optics (its `kext` is filled by the suite).
+    pub rad: MieRadiation,
+    /// Extinction efficiencies of the two classes.
+    pub qext: [f64; 2],
+    /// Cells whose colour is darker than the slab model reaches (read as opaque grains).
+    pub floored: usize,
 }
 
 pub struct PeSetup {
@@ -331,24 +343,27 @@ impl Scenario {
         let dust_on = s.dust.enabled;
         let sea_on = s.sea.enabled && dust_on;
         let mut comps: Vec<Box<dyn ColumnProcess>> = Vec::new();
-        let classes = self.dust_classes();
+        let mut classes = self.dust_classes();
+        let ground_cells = self.ground_albedo_cells(&model.grid)?;
+        // Mie optics: the extinction efficiencies come from Mie theory instead of the settings.
+        let mut mie = if dust_on && s.dust.optics == DustOptics::Mie { Some(self.mie_optics(&model.grid, &classes, ground_cells.as_deref())?) } else { None };
+        if let Some(m) = &mie {
+            classes.qext = m.qext;
+        }
         let kext = if dust_on { [classes.kext(0), classes.kext(1)] } else { [0.0, 0.0] };
+        if let Some(m) = &mut mie {
+            m.rad.kext = kext;
+        }
         // Fixed order (see phys::mod): radiation before the ground (it sets the sunlight reaching
         // the ground), events after the ground (heat) and after the lifting (dust), the lid before
         // the convection, the settling before the sea.
         if dust_on && s.dust.radiative {
-            comps.push(Box::new(DustRadiation { absorb: self.absorption(&model.grid)? }));
+            comps.push(Box::new(DustRadiation { absorb: self.absorption(&model.grid)?, mie: mie.map(|m| m.rad) }));
         }
         if s.ground.enabled {
             comps.push(Box::new(Ground {
                 albedo: self.ground_albedo(),
-                albedo_cells: match &s.ground.albedo_map {
-                    Some(p) => {
-                        let r = io::read_f32_raster(p, s.relief.width, s.relief.height).map_err(|e| format!("ground albedo map {}: {e}", p.display()))?;
-                        Some(io::raster_to_cells(&model.grid, &r, s.relief.width, s.relief.height).iter().map(|a| a.clamp(0.0, 1.0)).collect())
-                    }
-                    None => None,
-                },
+                albedo_cells: ground_cells,
                 eps_air: self.eps_air(),
                 tiu: s.ground.thermal_inertia_tiu.unwrap_or(b.thermal_inertia_tiu),
                 day_s: self.forcing_day(),
@@ -399,6 +414,65 @@ impl Scenario {
             lid_probe_z,
             components: comps,
         }))
+    }
+
+    /// Ground albedo per cell from the ground's colour map (None without a map).
+    pub fn ground_albedo_cells(&self, grid: &Grid) -> Result<Option<Vec<f64>>, String> {
+        let s = &self.s;
+        match &s.ground.albedo_map {
+            Some(p) => {
+                let r = io::read_f32_raster(p, s.relief.width, s.relief.height).map_err(|e| format!("ground albedo map {}: {e}", p.display()))?;
+                Ok(Some(io::raster_to_cells(grid, &r, s.relief.width, s.relief.height).iter().map(|a| a.clamp(0.0, 1.0)).collect()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Albedo of the colour of the dust material per cell: the dust's colour map, else the
+    /// ground's, else the uniform ground albedo.
+    pub fn colour_albedo_cells(&self, grid: &Grid) -> Result<Vec<f64>, String> {
+        let s = &self.s;
+        if let Some(p) = &s.dust.absorption_albedo_map {
+            let r = io::read_f32_raster(p, s.relief.width, s.relief.height).map_err(|e| format!("dust albedo map {}: {e}", p.display()))?;
+            return Ok(io::raster_to_cells(grid, &r, s.relief.width, s.relief.height).iter().map(|a| a.clamp(0.0, 1.0)).collect());
+        }
+        Ok(self.ground_albedo_cells(grid)?.unwrap_or_else(|| vec![self.ground_albedo(); grid.n_cells()]))
+    }
+
+    /// Mie optics of the dust (option `dust.optics = "mie"`): the imaginary index of the material
+    /// per cell from the colour (Hapke's equivalent slab with the ground grain size), the Mie
+    /// optics of each class tabulated over that index, and the extinction efficiencies of the
+    /// classes (area-weighted means over the cells, since the suite has one extinction per class).
+    pub fn mie_optics(&self, grid: &Grid, classes: &DustClasses, ground_cells: Option<&[f64]>) -> Result<MieSetup, String> {
+        let d = &self.s.dust;
+        if !(d.refractive_index_real > 1.0 && d.mie_wavelength_m > 0.0 && d.ground_grain_m > 0.0 && d.mie_sigma_g >= 1.0) {
+            return Err(format!(
+                "dust Mie optics: need refractive_index_real > 1, mie_wavelength_m > 0, ground_grain_m > 0, mie_sigma_g >= 1 (got {}, {}, {}, {})",
+                d.refractive_index_real, d.mie_wavelength_m, d.ground_grain_m, d.mie_sigma_g
+            ));
+        }
+        let colour = self.colour_albedo_cells(grid)?;
+        let n = grid.n_cells();
+        let table = OpticsTable::new(classes.d, d.refractive_index_real, d.mie_sigma_g, d.mie_wavelength_m, 20);
+        let mut k = Vec::with_capacity(n);
+        let mut floored = 0;
+        let (mut omega, mut g) = ([Vec::with_capacity(n), Vec::with_capacity(n)], [Vec::with_capacity(n), Vec::with_capacity(n)]);
+        let mut qsum = [0.0; 2];
+        let at: f64 = grid.area.iter().sum();
+        for i in 0..n {
+            let (ki, fl) = k_from_reflectance(colour[i], d.refractive_index_real, d.ground_grain_m, d.mie_wavelength_m);
+            floored += fl as usize;
+            k.push(ki);
+            for c in 0..2 {
+                let (q, w, a) = table.at(c, ki);
+                qsum[c] += grid.area[i] * q;
+                omega[c].push(w);
+                g[c].push(a);
+            }
+        }
+        let ground_albedo = ground_cells.map(|v| v.to_vec()).unwrap_or_else(|| vec![self.ground_albedo(); n]);
+        let qext = [qsum[0] / at, qsum[1] / at];
+        Ok(MieSetup { rad: MieRadiation { kext: [0.0; 2], qext, omega, g, k, ground_albedo }, qext, floored })
     }
 
     /// Absorption of the intercepted sunlight per cell.

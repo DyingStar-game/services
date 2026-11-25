@@ -126,6 +126,20 @@ qext = [2.5, 2.2]
 deposition_turbulent = 0.002
 # Absorption = absorption_scale x (1 - albedo of the dust colour).
 absorption_scale = 1.0
+# Optics of the airborne dust:
+#   "colour": absorbed fraction = absorption above, half of the rest down to the ground, half to space;
+#   "mie":    Mie optics of the grains (sphere, lognormal width mie_sigma_g around each class
+#             diameter, real index refractive_index_real, one band at mie_wavelength_m), the
+#             imaginary index of the material read from the colour map by Hapke's equivalent-slab
+#             model for ground grains of ground_grain_m, and a delta-Eddington two-stream for the
+#             dust layer over the ground (multiple reflections). Replaces qext above.
+optics = "colour"
+# Corundum (Al2O3), visible.
+refractive_index_real = 1.77
+mie_wavelength_m = 0.55e-6
+mie_sigma_g = 1.5
+# Weathered rock / sand: 100 um (measured sensitivity 50 / 100 / 300 um in the PR).
+ground_grain_m = 100.0e-6
 # Default: derived from the data
 #   threshold_pa = rho0 x u*_threshold^2 (Shao and Lu threshold of the data)
 #   grain_density_kg_m3 = extras ; viscosity_pa_s = 1.8e-5 (T/293)^0.7 ; mean_free_path_m = mu/p sqrt(pi R T / 2)

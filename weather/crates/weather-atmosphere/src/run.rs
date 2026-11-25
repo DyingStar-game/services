@@ -99,6 +99,20 @@ pub fn run_pe(sc: &Scenario) -> Result<PeRunResult, String> {
         if let Some(rad) = model.phys.as_ref().and_then(|p| p.find::<crate::phys::dust::DustRadiation>()) {
             let meta_a = TableMeta { field: "absorption_poussiere", units: "1", description: "fraction of the intercepted sunlight absorbed by the dust, per model cell", ..meta };
             io::write_table(&dir.join("absorption_poussiere.png"), smp.w, smp.h, &smp.scalar(&rad.absorb), &meta_a).map_err(ioe)?;
+            if let Some(o) = &rad.mie {
+                let tables: [(&str, &str, &[f64]); 5] = [
+                    ("indice_k_poussiere", "imaginary refractive index of the dust material, from the colour (Hapke's equivalent slab)", &o.k),
+                    ("omega_poussiere_fine", "single-scattering albedo of the fine dust class (Mie)", &o.omega[0]),
+                    ("omega_poussiere_grosse", "single-scattering albedo of the coarse dust class (Mie)", &o.omega[1]),
+                    ("g_poussiere_fine", "asymmetry parameter of the fine dust class (Mie)", &o.g[0]),
+                    ("g_poussiere_grosse", "asymmetry parameter of the coarse dust class (Mie)", &o.g[1]),
+                ];
+                for (field, description, v) in tables {
+                    let m = TableMeta { field, units: "1", description, ..meta };
+                    io::write_table(&dir.join(format!("{field}.png")), smp.w, smp.h, &smp.scalar(v), &m).map_err(ioe)?;
+                }
+                std::fs::write(dir.join("optique_poussiere.json"), outputs::mie_optics_summary(&model, o)).map_err(ioe)?;
+            }
         }
         outputs::write_climate_header(&model, sc, dir, &relief, smp_c.as_ref().unwrap()).map_err(ioe)?;
         let f = std::fs::OpenOptions::new().create(true).append(restarted).write(true).truncate(!restarted).open(dir.join("climat.bin")).map_err(ioe)?;

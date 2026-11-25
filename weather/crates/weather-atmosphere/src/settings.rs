@@ -204,6 +204,47 @@ pub struct DustSettings {
     pub absorption_table: Option<PathBuf>,
     pub absorption_scale: f64,
     pub absorption_uniform: Option<f64>,
+    /// Optics of the airborne dust: "colour" (absorption from the colour map, half of the scattered
+    /// light down, half up) or "mie" (Mie optics of the grains, imaginary index from the colour by
+    /// Hapke's model, delta-Eddington two-stream over the ground).
+    #[serde(default)]
+    pub optics: DustOptics,
+    /// Mie optics: real refractive index of the grains (visible).
+    #[serde(default = "default_refractive_index")]
+    pub refractive_index_real: f64,
+    /// Mie optics: wavelength of the single visible band (m).
+    #[serde(default = "default_mie_wavelength")]
+    pub mie_wavelength_m: f64,
+    /// Mie optics: geometric standard deviation of the lognormal size distribution of each class
+    /// (the class diameter is its effective diameter); 1 = one size.
+    #[serde(default = "default_mie_sigma_g")]
+    pub mie_sigma_g: f64,
+    /// Mie optics: grain diameter of the ground (m), used to read the colour map as the absorption
+    /// of the material (Hapke's equivalent slab).
+    #[serde(default = "default_ground_grain")]
+    pub ground_grain_m: f64,
+}
+
+/// Optics of the airborne dust (see `DustSettings::optics`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DustOptics {
+    #[default]
+    Colour,
+    Mie,
+}
+
+fn default_refractive_index() -> f64 {
+    1.77
+}
+fn default_mie_wavelength() -> f64 {
+    0.55e-6
+}
+fn default_mie_sigma_g() -> f64 {
+    1.5
+}
+fn default_ground_grain() -> f64 {
+    100e-6
 }
 
 /// Every field defaults to zero / off: a body without this feature only writes `enabled = false`.

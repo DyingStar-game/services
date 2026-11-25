@@ -5,9 +5,13 @@
 //!    Kawamura / White, dust flux = alpha x saltation flux (Marticorena-Bergametti).
 //!  * Stokes settling with the Cunningham slip correction and the body's gravity, dry deposition
 //!    at the ground.
-//!  * Radiative effect: sunlight intercepted by the dust is absorbed in proportion to a per-cell
-//!    absorption, the rest is scattered (half still reaches the ground): dark dust heats the air,
-//!    white dust mostly shades the ground.
+//!  * Radiative effect, two optics (setting `dust.optics`):
+//!    - "colour": sunlight intercepted by the dust is absorbed in proportion to a per-cell
+//!      absorption (1 - colour albedo), the rest is scattered (half still reaches the ground): dark
+//!      dust heats the air, white dust mostly shades the ground;
+//!    - "mie": per-cell single-scattering albedo and asymmetry of each class from Mie theory (see
+//!      [`super::optics`]), and a delta-Eddington two-stream for the dust layer over the ground,
+//!      multiple reflections included; it also gives the ground its net absorbed sunlight.
 
 use super::{ColumnCtx, ColumnProcess};
 use std::any::Any;
@@ -38,11 +42,56 @@ impl DustClasses {
 }
 
 /// Sunlight intercepted by the dust: absorbed (heats the air, layer by layer in proportion to the
-/// dust) or scattered (half goes on down to the ground, half back to space).
+/// dust) or scattered (colour optics: half goes on down to the ground, half back to space; Mie
+/// optics: by the two-stream).
 #[derive(Clone, Debug)]
 pub struct DustRadiation {
-    /// Fraction of the intercepted sunlight that the dust of each cell absorbs.
+    /// Fraction of the intercepted sunlight that the dust of each cell absorbs (colour optics).
     pub absorb: Vec<f64>,
+    /// Mie optics: when given, replaces the colour rule.
+    pub mie: Option<MieRadiation>,
+}
+
+/// Per-cell Mie optics of the two classes and the ground albedo seen by the two-stream.
+#[derive(Clone, Debug)]
+pub struct MieRadiation {
+    /// Mass extinction coefficients (m^2/kg) of the classes (the suite's, to split the depth).
+    pub kext: [f64; 2],
+    /// Extinction efficiencies of the classes (Mie, area-weighted over the cells).
+    pub qext: [f64; 2],
+    /// Single-scattering albedo and asymmetry parameter per class and cell.
+    pub omega: [Vec<f64>; 2],
+    pub g: [Vec<f64>; 2],
+    /// Imaginary index of the dust material per cell (from the colour; for the outputs).
+    pub k: Vec<f64>,
+    /// Albedo of the ground under the layer, per cell.
+    pub ground_albedo: Vec<f64>,
+}
+
+impl MieRadiation {
+    /// Column optics: depth-weighted single-scattering albedo and scattering-weighted asymmetry of
+    /// the mix of the two classes, from their columns (kg/m^2).
+    pub fn mix(&self, i: usize, col_fine: f64, col_coarse: f64) -> (f64, f64) {
+        let (t0, t1) = (self.kext[0] * col_fine, self.kext[1] * col_coarse);
+        let (s0, s1) = (self.omega[0][i] * t0, self.omega[1][i] * t1);
+        let t = t0 + t1;
+        if t <= 0.0 || s0 + s1 <= 0.0 {
+            return (self.omega[0][i], self.g[0][i]);
+        }
+        ((s0 + s1) / t, (self.g[0][i] * s0 + self.g[1][i] * s1) / (s0 + s1))
+    }
+}
+
+impl DustRadiation {
+    /// The sunlight absorbed by the dust heats each layer in proportion to its optical depth.
+    fn heat_layers(&self, c: &mut ColumnCtx) {
+        if c.sw_air > 0.0 {
+            let (g, cp) = (c.c.g, c.c.cp);
+            for k in 0..c.l {
+                c.dtk[k] += g * c.sw_air * (c.tau_k[k] / c.tau_c) * c.dt / (cp * c.col.dp[k]);
+            }
+        }
+    }
 }
 
 impl ColumnProcess for DustRadiation {
@@ -55,17 +104,22 @@ impl ColumnProcess for DustRadiation {
             return;
         }
         let mu = c.cosz.max(0.05);
+        if let Some(o) = &self.mie {
+            let g = c.c.g;
+            let (omega, asym) = o.mix(c.i, c.m.iter().sum::<f64>() / g, c.m2.iter().sum::<f64>() / g);
+            let ts = super::optics::delta_eddington(c.tau_c, omega, asym, mu, o.ground_albedo[c.i]);
+            c.sw_down = c.toa * ts.down;
+            c.sw_ground = Some(c.toa * ts.ground);
+            c.sw_air = (c.toa * ts.layer).max(0.0);
+            self.heat_layers(c);
+            return;
+        }
         let tr = (-c.tau_c / mu).exp();
         let inter = c.toa * (1.0 - tr);
         let a = self.absorb[c.i];
         c.sw_down = c.toa * tr + 0.5 * inter * (1.0 - a);
         c.sw_air = inter * a;
-        if c.sw_air > 0.0 {
-            let (g, cp) = (c.c.g, c.c.cp);
-            for k in 0..c.l {
-                c.dtk[k] += g * c.sw_air * (c.tau_k[k] / c.tau_c) * c.dt / (cp * c.col.dp[k]);
-            }
-        }
+        self.heat_layers(c);
     }
 
     fn as_any(&self) -> &dyn Any {

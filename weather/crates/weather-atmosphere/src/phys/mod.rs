@@ -18,7 +18,7 @@
 //! planet-wide dust budget. Components (see their files): [`ground::Ground`] (energy balance of
 //! the ground and the day-night cycle), [`dust::DustRadiation`], [`dust::DustLifting`],
 //! [`dust::DustSettling`], [`sea::DustSea`], [`lid::Lid`], [`convection::DryConvection`],
-//! [`events::Events`].
+//! [`events::Events`]. The dust optics of the Mie option live in [`mie`] and [`optics`].
 //!
 //! Formulas from the textbooks and papers cited in the research notes (Stull, Practical
 //! Meteorology; Kok et al. 2012; Noilhan & Planton 1989 for force-restore; Davies 1945 for the
@@ -29,6 +29,8 @@ pub mod dust;
 pub mod events;
 pub mod ground;
 pub mod lid;
+pub mod mie;
+pub mod optics;
 pub mod sea;
 
 pub use events::Event;
@@ -103,6 +105,10 @@ pub struct ColumnCtx<'a> {
     pub toa: f64,
     pub sw_down: f64,
     pub sw_air: f64,
+    /// Net sunlight absorbed by the ground when the dust radiation computed it (Mie optics, with
+    /// the reflections between the ground and the dust layer); None: the ground takes
+    /// (1 - albedo) x sw_down.
+    pub sw_ground: Option<f64>,
     pub tau_k: [f64; 16],
     pub tau_c: f64,
     /// Heating accumulators: K per layer, W/m^2 into the lowest layer.
@@ -409,6 +415,7 @@ impl PhysicsSuite {
                     toa,
                     sw_down: toa,
                     sw_air: 0.0,
+                    sw_ground: None,
                     tau_k,
                     tau_c,
                     dtk: [0.0; 16],

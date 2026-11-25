@@ -14,8 +14,9 @@ plugin as `weather_system` objects, plus an HTTP API for maps. The model is a **
   `/api/v1/bodies`, `/api/v1/{body}/climate|systems|point|fields|forecast`.
 - `crates/weather-atmosphere` — an atmosphere model, **stateful** (see below): dry hybrid
   sigma-pressure primitive equations on an icosahedral hexagonal grid (~240 km), Held-Suarez
-  relaxation with seasons, column physics as components (ground and day-night, two dust classes,
-  dust sea, lid, dry convection, game events), bit-exact restart files, a guard with automatic
+  relaxation with seasons, column physics as components (ground and day-night, two dust classes
+  with colour or Mie optics and a delta-Eddington two-stream, dust sea, lid, dry convection, game
+  events), bit-exact restart files, a guard with automatic
   roll-back, outputs as 16-bit PNG tables. Bodies come from the same data through `weather-core`.
   Example for offline runs: `cargo run --release -p weather-atmosphere --example offline_run --
   --body Sandbox --out out/sandbox --spinup-days 5 --record-days 10` (options in

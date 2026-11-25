@@ -37,7 +37,11 @@ impl ColumnProcess for Ground {
         let c_t = (2.0 * omega_d).sqrt() / self.tiu;
         let (tg0, ta, hcoef) = (c.tg0, c.ta, c.hcoef);
         let albedo = self.albedo_cells.as_ref().map_or(self.albedo, |a| a[c.i]);
-        let swg = (1.0 - albedo) * c.sw_down;
+        // Net sunlight absorbed: from the dust radiation when it solved the layer over the ground.
+        let swg = match c.sw_ground {
+            Some(net) => net,
+            None => (1.0 - albedo) * c.sw_down,
+        };
         let lw_dn = self.eps_air * SIGMA_SB * ta.powi(4);
         let gflux = swg + lw_dn - SIGMA_SB * tg0.powi(4) - hcoef * (tg0 - ta);
         let dgdt = 4.0 * SIGMA_SB * tg0.powi(3) + hcoef;
