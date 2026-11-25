@@ -91,10 +91,10 @@ mod tests {
 
     #[test]
     fn sandbox_air_matches_the_games_atmosphere_profile() {
-        // build_atmosphere_profiles.gd derives 10 371 m for the scale height from this composition at
-        // 283 K and 7.775 m/s²: M must be 29.18 g/mol.
-        let air = mixture(&[("Ar".into(), 1.1), ("CH4".into(), 0.2), ("CO2".into(), 2.0), ("N2".into(), 78.1), ("O2".into(), 18.6)]);
-        assert!((air.molar_mass_kg_mol * 1e3 - 29.18).abs() < 0.03, "{}", air.molar_mass_kg_mol);
+        // build_atmosphere_profiles.gd derives 10 444 m for the scale height from this composition at
+        // 283 K and 7.775 m/s²: M must be 28.98 g/mol.
+        let air = mixture(&[("Ar".into(), 1.1), ("CH4".into(), 0.2), ("CO2".into(), 0.5), ("N2".into(), 78.7), ("O2".into(), 19.5)]);
+        assert!((air.molar_mass_kg_mol * 1e3 - 28.98).abs() < 0.03, "{}", air.molar_mass_kg_mol);
     }
 
     #[test]

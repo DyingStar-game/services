@@ -62,9 +62,9 @@ fn sandbox() -> BodyInputs {
         star_distance_m: 0.55 * AU_M,
         star: StarInputs { luminosity_w: 1.2675956075398006e26, mass_kg: 0.758581416228569 * SUN_KG, temperature_k: 4831.3 },
         pressure_pa: 102_000.0,
-        gases_pct: vec![("Ar".into(), 1.1), ("CH4".into(), 0.2), ("CO2".into(), 2.0), ("N2".into(), 78.1), ("O2".into(), 18.6)],
-        bond_albedo: 0.32,
-        temperatures: Some(Temperatures { day_k: 290.0, night_k: 275.0, surface_k: 283.0, eq_k: 258.5 }),
+        gases_pct: vec![("Ar".into(), 1.1), ("CH4".into(), 0.2), ("CO2".into(), 0.5), ("N2".into(), 78.7), ("O2".into(), 19.5)],
+        bond_albedo: 0.66,
+        temperatures: Some(Temperatures { day_k: 290.0, night_k: 275.0, surface_k: 283.0, eq_k: 217.4 }),
         extras: ClimateExtras { weather_seed: Some(20261006), dust_grain_density_kg_m3: 4000.0, dust_lift_bias: 0.9, thermal_inertia_tiu: 120.0, wind_scale_max_ms: 45.0, dust_tau_max: 8.0, ..Default::default() },
     }
 }
@@ -122,13 +122,13 @@ fn mars_reference() {
 fn tarsis_iii_reference() {
     let c = derive(&sandbox());
     within(c.surface_gravity, 7.775, 0.01, "g");
-    within(c.molar_mass_kg_mol * 1e3, 29.18, 0.03, "M");
-    within(c.scale_height_m, 10_371.0, 12.0, "H as the game's atmosphere profile");
-    within(c.rho0_kg_m3, 1.265, 0.003, "rho0 as the game's air_density(0)");
-    within(c.t_eq_k, 258.5, 0.6, "T_eq as tarsis.json");
-    within(c.tau_ir, 0.58, 0.03, "tau");
+    within(c.molar_mass_kg_mol * 1e3, 28.98, 0.03, "M");
+    within(c.scale_height_m, 10_444.0, 12.0, "H as the game's atmosphere profile");
+    within(c.rho0_kg_m3, 1.256, 0.003, "rho0 as the game's air_density(0)");
+    within(c.t_eq_k, 217.4, 0.6, "T_eq as tarsis.json");
+    within(c.tau_ir, 2.49, 0.03, "tau");
     within(c.coriolis_45_s, 9.9e-5, 0.1e-5, "f(45)");
-    within(c.hadley_edge_deg, 31.0, 3.5, "Hadley edge");
+    within(c.hadley_edge_deg, 35.0, 3.5, "Hadley edge");
     assert_eq!(c.cells, 3, "three cells like Earth");
     within(c.u_star_threshold_m_s, 0.207, 0.006, "u*_t corundum (0.215 with Earth's cohesion)");
     within(c.v10_threshold_m_s, 6.0, 0.4, "sand threshold at 10 m");

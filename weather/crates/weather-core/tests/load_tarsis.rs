@@ -37,7 +37,7 @@ fn the_tarsis_system_derives_for_every_body() {
     let c = derive(sandbox);
     assert_eq!(c.seed, 20261006, "seed from data/climate/tarsis.json");
     assert_eq!(c.kind, BodyKind::Planet);
-    assert!((c.scale_height_m - 10_371.0).abs() < 12.0, "{}", c.scale_height_m);
+    assert!((c.scale_height_m - 10_444.0).abs() < 12.0, "{}", c.scale_height_m);
     assert!((c.extras.dust_grain_density_kg_m3 - 4000.0).abs() < 1.0, "corundum from the extras file");
     let korax = bodies.iter().find(|b| b.name == "P3_M1").expect("Korax");
     assert!(!derive(korax).has_atmosphere);

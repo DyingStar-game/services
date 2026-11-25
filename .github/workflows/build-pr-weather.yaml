@@ -19,3 +19,21 @@ jobs:
       image_name: local/weather
       image_tag: pr-check
       push: false
+
+  # The weather's tests, the check that the committed derived climate and golden samples are still what
+  # resourcesDynamic/data/system/tarsis.json gives included: a change of that file fails here until they are
+  # exported again (the game copies them).
+  test:
+    name: Test weather
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: weather
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: weather
+      - name: cargo test
+        run: cargo test --workspace --locked
