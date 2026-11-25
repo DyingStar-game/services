@@ -42,12 +42,15 @@ absorption_albedo_map = "sandbox_ground_albedo_512x256.f32"
 optics = "mie"
 
 [sea]
-# The permanent dust sea: fine dust relaxed between 500 and 3 500 m of absolute altitude, target
-# optical depth 0.4, filled in 1 day, emptied in 30 days if it overflows (model days).
+# The permanent dust sea: fine dust relaxed between 500 and 3 500 m of absolute altitude, filled in
+# 1 day, emptied in 30 days if it overflows (model days).
 enabled = true
 z_base_m = 500.0
 z_top_m = 3500.0
-optical_depth = 0.4
+# Worldbuilding decision 2026-11-25: white (opaque) dust sea. Seen from the sky the sea is an opaque
+# white layer and the high plateaus stand out of it like islands; its optical depth (was 0.4) is
+# chosen so that the planet reflects about 0.66 of its sunlight with the Mie optics of the dust.
+optical_depth = 14.0
 fill_days = 1.0
 excess_days = 30.0
 # Worldbuilding decision 2026-11-25: strict top, the air above 3 500 m loses its fine dust in 6 hours.
