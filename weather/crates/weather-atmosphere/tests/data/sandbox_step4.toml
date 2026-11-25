@@ -1,0 +1,92 @@
+# =====================================================================================================
+# SANDBOX, EXACT settings of the prototype's step 4: used by the regression and acceptance tests only.
+#
+# This is the Sandbox of before the worldbuilding decision of 2026-11-25 (ground albedo 0.61 and air
+# emissivity 0.93 tuned so that the planet reflects 0.66 and the ground averages ~283 K; dust sea top
+# cleared in 10 days), plus the numbers the step-4 code had copied by hand and rounded differently
+# from the data (pinned in [body_overrides]). Never use it for a real run: the service's
+# `data/atmosphere/sandbox.toml` follows the data and the 2026-11-25 decision.
+# =====================================================================================================
+
+inherit = "../../../../data/atmosphere/defaut.toml"
+body = "Sandbox"
+
+[body_overrides]
+# Air and gravity copied by hand at step 3 (data: 7.774706 m/s2, 28.978187 g/mol, cp 1 005.679,
+# gas constant 8.314462618).
+gravity_m_s2 = 7.7747
+molar_mass_kg_mol = 0.028978
+gas_constant_j_mol_k = 8.3145
+cp_j_kg_k = 1005.68
+# Step 4 mixed up the solar and the sidereal day (25 h). Data: solar day 90 551.5 s.
+solar_day_s = 90000.0
+# Year rounded to the second (data: 14 777 126.48 s).
+year_s = 14777126.0
+# Overhead sun rounded (data: 1 490.70 W/m2, annual mean with the eccentricity).
+irradiance_w_m2 = 1490.0
+# Radiative time rounded to the second (data: 2 566 519.26 s).
+radiative_time_s = 2566519.0
+# Grains: 3 975 kg/m3 at step 4 (data: 4 000). Roughness 1 mm (data: 0.1 mm).
+dust_grain_density_kg_m3 = 3975.0
+roughness_length_m = 1.0e-3
+
+[grid]
+layers = 11
+eta_half = [0.0, 0.06, 0.13, 0.21, 0.31, 0.46, 0.60, 0.705, 0.80, 0.90, 0.953, 1.0]
+
+[relief]
+file = "../../../../data/atmosphere/sandbox_relief_512x256.f32"
+
+[relaxation]
+# Contrast and Tmax of step 3 (rule: 29.0 K and 292.7 K), floor 200 K (rule: skin temperature 182.8 K).
+equator_pole_contrast_k = 30.0
+t_max_k = 293.0
+t_min_k = 200.0
+
+[reference]
+# Reference profile of step 3: 6.5 K/km (rule: 5.1 K/km), stratosphere at 205 K (rule: 182.8 K).
+lapse_k_m = 0.0065
+t_strat_k = 205.0
+
+[ground]
+albedo = 0.61
+eps_air = 0.93
+
+[dust]
+alpha_per_m = 5.0e-8
+absorption_albedo_map = "../../../../data/atmosphere/sandbox_ground_albedo_512x256.f32"
+# Lifting threshold 0.07 Pa (rule: 0.054 Pa), air viscosity and mean free path of step 4.
+threshold_pa = 0.07
+viscosity_pa_s = 1.8e-5
+mean_free_path_m = 0.065e-6
+
+[sea]
+enabled = true
+z_base_m = 500.0
+z_top_m = 3500.0
+optical_depth = 0.4
+fill_days = 1.0
+excess_days = 30.0
+clear_days = 10.0
+above_band_top_m = 6000.0
+profile_bottom_m = -2000.0
+profile_step_m = 250.0
+profile_bins = 48
+
+[lid]
+enabled = true
+z_m = 3500.0
+depth_m = 1000.0
+step_k = 10.0
+fast_days = 1.0
+
+[outputs]
+tracked_points = [
+    { name = "zone_depart", lon = -39.0, lat = 22.0 },
+    { name = "equateur_lon0", lon = 0.0, lat = 0.0 },
+    { name = "lat45N_lon0", lon = 0.0, lat = 45.0 },
+]
+dust_release = [-52.0, -26.0, 12.0, 32.0]
+
+[shallow_water]
+mean_depth_m = 8000.0

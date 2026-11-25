@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 weather-core = { path = "../weather-core" }
+weather-atmosphere = { path = "../weather-atmosphere" }
 ds-weather-proto = { path = "../ds-weather-proto" }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws", "macros"] }
@@ -25,3 +26,5 @@ dotenvy = "0.15"
 ureq = { version = "2", default-features = false, features = ["json"] }
 futures = "0.3"
 uuid = { version = "1", features = ["v5"] }
+# Checkpoints of the atmosphere model in PostgreSQL (CNPG), embedded migrations (as services/npc).
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros"] }

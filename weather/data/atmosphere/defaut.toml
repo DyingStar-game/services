@@ -1,0 +1,179 @@
+# =====================================================================================================
+# DEFAULT settings of the atmosphere model (crate `weather-atmosphere`), valid for any body.
+#
+# This file holds NO number specific to a body: radius, gravity, rotation, year, tilt, composition
+# of the air (molar mass, cp), pressure, temperature, albedo, thermal inertia, dust grains... all come
+# from the SHARED data (the system file of resourcesDynamic + the weather service's climate extras,
+# read by `weather-core`). Here, only the MODEL's choices (numerics, shape of the recipes).
+#
+# A body file (`<name in lower case>.toml`) inherits this one with `inherit = "defaut.toml"` and only
+# rewrites what changes. A key marked "default: derived" is computed from the body's data when left
+# out (rules in `crates/weather-atmosphere/src/setup.rs`). Unknown keys are refused.
+# Relative paths are relative to the folder of the file they are written in.
+# (The file name stays `defaut.toml`, as in the prototype, so that R&D notes still match.)
+# =====================================================================================================
+
+[grid]
+# Grid refinement: 5 = 10 242 cells (~240 km between centres on a body the size of Sandbox).
+level = 5
+# Number of air layers.
+layers = 8
+# Level rule (when `eta_half` is not given): the highest interior half level is placed at 1.5 times
+# the body's tropopause height, the others at (j / (N-1))^1.5 of that height (thin layers near the
+# ground, thick ones aloft), in "log-pressure" height z = -H ln(p / p_surface).
+rule_top_factor = 1.5
+rule_stretch = 1.5
+# Top of the terrain-following part (hybrid coordinate): the half level nearest 0.6 times the
+# tropopause height (above it, layers are flat pressure surfaces).
+hybrid_top_factor = 0.6
+
+[numerics]
+# Courant number: the time step is 0.8 times the stability limit.
+courant = 0.8
+# Time advances in chunks of 1/24 model day (bit-exact restarts at chunk boundaries).
+chunks_per_day = 24
+# del^8 numerical smoothing (order 4); e-folding time of the smallest grid pattern: 4 h.
+hyper_order = 4
+tau_wind_hours = 4.0
+tau_temperature_hours = 4.0
+tau_ps_hours = 4.0
+# Small noise (K) added to the initial temperature to start the eddies.
+noise_k = 0.1
+# Guard: surface pressure accepted between 0.196 and 1.96 times the body's mean pressure (plus the
+# limit where a layer would vanish above the relief), wind at most 400 m/s.
+guard_ps_min_frac = 0.196
+guard_ps_max_frac = 1.96
+guard_max_wind_m_s = 400.0
+
+[run]
+# Durations in MODEL DAYS (the body's solar day). The service uses `spinup_days` for a cold start
+# (the time the model needs to forget its artificial initial state, ~200 days for Held-Suarez);
+# the other keys only serve offline runs (example `offline_run`).
+spinup_days = 250.0
+record_days = 165.0
+# PNG tables every 5 days, climate record every half day, restart file every 25 days (offline runs).
+tables_every_days = 5.0
+diag_every_days = 0.5
+restart_every_days = 25.0
+# Size of the PNG tables (equirectangular), offline and in the service.
+img_w = 512
+img_h = 256
+quiet = false
+
+[relief]
+# No relief file by default: a body without one is a smooth sphere.
+width = 512
+height = 256
+scale = 1.0
+smooth_passes = 0
+
+[relaxation]
+# Temperature relaxation (Held-Suarez recipe with seasons).
+enabled = true
+seasons = true
+# Equator-to-pole contrast of the EQUILIBRIUM temperature = 1.5 x the data's real contrast
+# (Held-Suarez 1994 use 60 K for an Earth whose observed mean contrast is ~40 K).
+contrast_factor = 1.5
+# Static stability parameter of the recipe (K), Held-Suarez's.
+static_stability_k = 10.0
+# Fast relaxation near the ground at the equator (4 Earth days) and surface friction (1 Earth day),
+# Held-Suarez values, in seconds.
+fast_time_s = 345600.0
+friction_time_s = 86400.0
+# Top of the frictional layer (sigma = p / p_surface).
+sigma_b = 0.7
+# Default: derived from the data
+#   equator_pole_contrast_k = contrast_factor x delta_t_equator_pole_k
+#   t_max_k = t_surface_k + contrast / 3      (the recipe's mean = the body's mean temperature)
+#   t_min_k = t_skin_k                        (the "skin" temperature of the data's grey model)
+#   slow_time_s = radiative_time_s            (the data's radiative time)
+
+[reference]
+# Reference profile (pressure-gradient force, smoothing). Default: derived from the data
+#   t0_k = t_max - contrast / 3 ; lapse_k_m = lapse_env_k_m ; t_strat_k = t_skin_k
+
+[ground]
+# Energy balance of the ground and day-night cycle.
+enabled = true
+# Minimum wind of the exchange formulas (sub-grid gusts), floor of the stability factor.
+v_floor_m_s = 0.5
+stable_floor = 0.05
+# Longitude of the subsolar point at t = 0.
+sun_lon0_deg = 0.0
+# Default: derived from the data
+#   albedo = bond_albedo ; eps_air = 1 - exp(-tau_ir) ; thermal_inertia_tiu and roughness_m = extras
+
+[convection]
+# Dry convective adjustment (afternoon mixing).
+enabled = true
+
+[dust]
+# Two transported dust classes (fine, coarse), lifting, effect on sunlight.
+enabled = true
+lifting = true
+radiative = true
+# Constant of the saltation flux (Kawamura / White).
+saltation_constant = 2.61
+# Lifting efficiency = 5.5556e-8 per m x the extras' `dust_lift_bias` (0 = bare rock, 1 = dust
+# plain). Tuned on Sandbox (5e-8 for a bias of 0.9); to be re-tuned per body.
+alpha_per_bias = 5.5556e-8
+# Share of the lifted dust in the fine class.
+fine_fraction = 0.1
+# Diameters of the two classes (m) and extinction efficiencies (visible).
+diameters_m = [1.5e-6, 10.0e-6]
+qext = [2.5, 2.2]
+# Turbulent part of the dry deposition, as a multiple of u*.
+deposition_turbulent = 0.002
+# Absorption = absorption_scale x (1 - albedo of the dust colour).
+absorption_scale = 1.0
+# Optics of the airborne dust:
+#   "colour": absorbed fraction = absorption above, half of the rest down to the ground, half to space;
+#   "mie":    Mie optics of the grains (sphere, lognormal width mie_sigma_g around each class
+#             diameter, real index refractive_index_real, one band at mie_wavelength_m), the
+#             imaginary index of the material read from the colour map by Hapke's equivalent-slab
+#             model for ground grains of ground_grain_m, and a delta-Eddington two-stream for the
+#             dust layer over the ground (multiple reflections). Replaces qext above.
+optics = "colour"
+# Corundum (Al2O3), visible.
+refractive_index_real = 1.77
+mie_wavelength_m = 0.55e-6
+mie_sigma_g = 1.5
+# Weathered rock / sand: 100 um (measured sensitivity 50 / 100 / 300 um in the PR).
+ground_grain_m = 100.0e-6
+# Default: derived from the data
+#   threshold_pa = rho0 x u*_threshold^2 (Shao and Lu threshold of the data)
+#   grain_density_kg_m3 = extras ; viscosity_pa_s = 1.8e-5 (T/293)^0.7 ; mean_free_path_m = mu/p sqrt(pi R T / 2)
+#   uniform absorption = 1 - ground albedo (no colour map)
+
+[sea]
+# No dust sea by default (Sandbox only).
+enabled = false
+
+[lid]
+# No lid by default (Sandbox only).
+enabled = false
+
+[events]
+# Game events (heat, dust): always ready to be injected.
+enabled = true
+
+[outputs]
+# Points recorded hourly in offline runs (besides the lowest and highest tropical cells).
+tracked_points = [
+    { name = "equateur_lon0", lon = 0.0, lat = 0.0 },
+    { name = "lat45N_lon0", lon = 0.0, lat = 45.0 },
+]
+# Altitude classes of the offline summary: basins below [0], [0] to [1], above [2] (m).
+altitude_classes_m = [0.0, 2000.0, 3500.0]
+# Region of the passive dust release of runs without physics: lon min, lon max, lat min, lat max.
+dust_release = [-13.0, 13.0, 12.0, 32.0]
+# Latitudes of the vertical cross-sections (offline runs).
+section_lats = [20.0, 0.0]
+
+[shallow_water]
+# Single-layer model (test cases only). Mean depth by default: the body's scale height.
+u0_m_s = 20.0
+relief_frac = 0.5
+tau_hours = 6.0
+days = 60.0
+every_days = 5.0
