@@ -4,7 +4,8 @@
 
 use crate::config::Config;
 use ds_weather_proto::WeatherSystemData;
-use prometheus::{IntCounter, IntGauge, Registry};
+use crate::atmosphere::AtmosphereRun;
+use prometheus::{GaugeVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::broadcast;
@@ -27,6 +28,11 @@ pub struct Metrics {
     pub systems_alive: IntGauge,
     pub envelopes_sent: IntCounter,
     pub bridges_connected: IntGauge,
+    /// Atmosphere model, per body (empty while the model is off).
+    pub atmo_model_day: GaugeVec,
+    pub atmo_max_wind: GaugeVec,
+    pub atmo_lag_s: GaugeVec,
+    pub atmo_rollbacks: IntCounterVec,
 }
 
 impl Metrics {
@@ -42,7 +48,17 @@ impl Metrics {
         for g in [&systems_alive, &bridges_connected] {
             registry.register(Box::new(g.clone())).unwrap();
         }
-        Self { registry, ticks, systems_alive, envelopes_sent, bridges_connected }
+        let gauge = |name: &str, help: &str| {
+            let g = GaugeVec::new(Opts::new(name, help), &["body"]).unwrap();
+            registry.register(Box::new(g.clone())).unwrap();
+            g
+        };
+        let atmo_model_day = gauge("weather_atmosphere_model_day", "Atmosphere model time, in model days (the body's solar day)");
+        let atmo_max_wind = gauge("weather_atmosphere_max_wind_m_s", "Largest wind of the atmosphere model, any cell and layer (m/s)");
+        let atmo_lag_s = gauge("weather_atmosphere_lag_s", "How far the atmosphere model is behind the wall clock (model seconds; 0 when in pace)");
+        let atmo_rollbacks = IntCounterVec::new(Opts::new("weather_atmosphere_rollbacks_total", "Roll-backs of the atmosphere model's guard"), &["body"]).unwrap();
+        registry.register(Box::new(atmo_rollbacks.clone())).unwrap();
+        Self { registry, ticks, systems_alive, envelopes_sent, bridges_connected, atmo_model_day, atmo_max_wind, atmo_lag_s, atmo_rollbacks }
     }
 }
 
@@ -56,6 +72,8 @@ pub struct AppState {
     /// Serialised envelopes to every connected bridge.
     pub tx: broadcast::Sender<String>,
     pub metrics: Metrics,
+    /// The atmosphere model's runs, by body name in lower case (empty when the model is off).
+    pub atmosphere: HashMap<String, Arc<AtmosphereRun>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -79,7 +97,8 @@ impl AppState {
             bodies.push(Body { inputs: b, climate, star_orbit_of: last_planet });
         }
         let (tx, _) = broadcast::channel(4096);
-        Ok(Arc::new(AppState { config, bodies, planet_uuids: RwLock::new(HashMap::new()), published: Mutex::new(HashMap::new()), tx, metrics: Metrics::new() }))
+        let atmosphere = crate::atmosphere::plan(&config.atmosphere, &bodies);
+        Ok(Arc::new(AppState { config, bodies, planet_uuids: RwLock::new(HashMap::new()), published: Mutex::new(HashMap::new()), tx, metrics: Metrics::new(), atmosphere }))
     }
 
     pub fn body(&self, name: &str) -> Option<&Body> {

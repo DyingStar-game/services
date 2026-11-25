@@ -4,7 +4,11 @@
 //! create, update and delete `weather_system` objects), `/api/v1/...` for maps, `/health` and
 //! `/metrics`. The weather itself is a pure function of (data, seed, time) in `weather-core`; this
 //! binary only schedules it and talks to the outside.
+//!
+//! Optionally (`ATMOSPHERE_BODIES`, off by default), it also runs the stateful atmosphere model of
+//! `weather-atmosphere` beside it (`atmosphere.rs`), served at `/api/v1/{body}/atmosphere`.
 
+mod atmosphere;
 mod config;
 mod http;
 mod sim;
@@ -33,6 +37,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(sim::run(state.clone()));
+    if config.atmosphere.enabled() {
+        info!(bodies = ?state.atmosphere.keys().collect::<Vec<_>>(), "atmosphere model on");
+        atmosphere::spawn_all(&state);
+    }
 
     let app = Router::new()
         .route("/ws", get(ws::ws_handler))
@@ -44,6 +52,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/{body}/point", get(http::point))
         .route("/api/v1/{body}/fields", get(http::fields))
         .route("/api/v1/{body}/forecast", get(http::forecast))
+        .route("/api/v1/{body}/atmosphere", get(atmosphere::status))
+        .route("/api/v1/{body}/atmosphere/tables/{file}", get(atmosphere::table))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
