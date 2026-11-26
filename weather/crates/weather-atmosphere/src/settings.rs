@@ -258,6 +258,11 @@ pub struct SeaSettings {
     pub fill_days: f64,
     pub excess_days: f64,
     pub clear_days: f64,
+    /// Under the base: the fine dust is brought back, in `below_days`, to at most `below_share` of
+    /// the sea's mixing ratio (what settles out of the sea and the mixing would carry to the ground).
+    /// `below_days` = 0: nothing is done under the base.
+    pub below_share: f64,
+    pub below_days: f64,
     /// Outputs: top of the "above the sea" wind band, and the altitude bins of the profiles.
     pub above_band_top_m: f64,
     pub profile_bottom_m: f64,

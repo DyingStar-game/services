@@ -55,6 +55,11 @@ fill_days = 1.0
 excess_days = 30.0
 # Worldbuilding decision 2026-11-25: strict top, the air above 3 500 m loses its fine dust in 6 hours.
 clear_days = 0.25
+# The base held: under 500 m the fine dust settling out of the sea is brought back in half a day to
+# at most a tenth of the sea's (a basin floor sees ~8 km, dimly lit by the sea over it, instead of the
+# sea's 1 km down to the ground). The sand the wind lifts there is not touched.
+below_share = 0.1
+below_days = 0.5
 # Outputs: "above the sea" wind measured up to 6 000 m; profiles from -2 000 to 10 000 m by 250 m.
 above_band_top_m = 6000.0
 profile_bottom_m = -2000.0
