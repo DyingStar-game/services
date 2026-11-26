@@ -18,6 +18,11 @@ pub struct DustSea {
     pub tau_fill: f64,
     pub tau_excess: f64,
     pub tau_clear: f64,
+    /// Under the base: the fine dust above `below_share` x `q_target` is removed in `tau_below`
+    /// (s); 0 leaves the air under the base alone. Only the fine class: the sand the wind lifts
+    /// (walls, devils) is the coarse one.
+    pub below_share: f64,
+    pub tau_below: f64,
 }
 
 impl ColumnProcess for DustSea {
@@ -46,6 +51,10 @@ impl ColumnProcess for DustSea {
                 if above > 0.0 {
                     dq -= (q + dq) * (1.0 - (-dt * above / self.tau_clear).exp());
                 }
+                let below = overlap(lo, hi, f64::NEG_INFINITY, self.z_base);
+                if below > 0.0 && self.tau_below > 0.0 {
+                    dq -= below_excess(q + dq, self.below_share * self.q_target, dt * below / self.tau_below);
+                }
                 let dm = dq * c.col.dp[k];
                 c.m[k] += dm;
                 sea_add += dm / g;
@@ -56,5 +65,27 @@ impl ColumnProcess for DustSea {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+/// The mixing ratio to take from `q` under the sea's base: its excess over `cap`, relaxed by
+/// `steps` relaxation times (dt over tau, already weighted by the layer's share under the base).
+fn below_excess(q: f64, cap: f64, steps: f64) -> f64 {
+    if q <= cap {
+        return 0.0;
+    }
+    (q - cap) * (1.0 - (-steps).exp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::below_excess;
+
+    #[test]
+    fn under_the_base_only_the_excess_goes() {
+        assert_eq!(below_excess(0.05, 0.1, 1.0), 0.0, "under the cap: kept");
+        let taken = below_excess(1.0, 0.1, 1.0);
+        assert!((taken - 0.9 * (1.0 - (-1.0f64).exp())).abs() < 1e-12);
+        assert!(below_excess(1.0, 0.1, 50.0) <= 0.9 + 1e-12, "never below the cap");
     }
 }

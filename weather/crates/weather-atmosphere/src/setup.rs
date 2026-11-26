@@ -395,6 +395,8 @@ impl Scenario {
                 tau_fill: s.sea.fill_days * b.day_s,
                 tau_excess: s.sea.excess_days * b.day_s,
                 tau_clear: s.sea.clear_days * b.day_s,
+                below_share: s.sea.below_share,
+                tau_below: s.sea.below_days * b.day_s,
             }));
         }
         if comps.is_empty() && !dust_on {
