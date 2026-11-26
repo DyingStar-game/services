@@ -2,6 +2,7 @@ use anyhow::Context;
 use futures::StreamExt;
 use scylla::client::session::Session;
 use scylla::statement::prepared::PreparedStatement;
+use scylla::statement::unprepared::Statement;
 use tracing::{debug, warn};
 
 use crate::websocket::messages::{Item, Vec3};
@@ -41,49 +42,58 @@ impl Queries {
     }
 }
 
-/// Stream all items from the database, collecting them into a `Vec<Item>`.
-///
-/// ScyllaDB's `query_iter` handles internal paging automatically, so this
-/// works for tables with millions of rows without loading them all into
-/// memory in a single response.
-pub async fn get_all_items(session: &Session, keyspace: &str) -> anyhow::Result<Vec<Item>> {
-    let mut rows_stream = session
-        .query_iter(
-            format!("SELECT uuid, object_def, data, parent_id, scenename, position, rotation FROM {keyspace}.items"),
-            (),
-        )
+/// Rows ScyllaDB returns per page when every item is read.
+pub const ITEMS_PAGE_SIZE: i32 = 5000;
+
+type ItemRow = (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>);
+
+/// Every item of the database as a stream, read [`ITEMS_PAGE_SIZE`] rows at a time: only the
+/// current page is held in memory. Rows that cannot be read are skipped with a warning.
+pub async fn stream_all_items(
+    session: &Session,
+    keyspace: &str,
+) -> anyhow::Result<impl futures::Stream<Item = Item> + Send + Unpin> {
+    let statement = Statement::new(format!(
+        "SELECT uuid, object_def, data, parent_id, scenename, position, rotation FROM {keyspace}.items"
+    ))
+    .with_page_size(ITEMS_PAGE_SIZE);
+    let rows_stream = session
+        .query_iter(statement, ())
         .await
         .context("Failed to start query_iter")?
-        .rows_stream::<(String, String, String, Option<String>, Option<String>, Option<String>, Option<String>)>()
+        .rows_stream::<ItemRow>()
         .context("Failed to create typed rows stream")?;
-
-    let mut items = Vec::new();
-    while let Some(row) = rows_stream.next().await {
+    Ok(rows_stream.filter_map(|row| async move {
         match row {
-            Ok((uuid, object_def, data_json, parent_id, scenename, position_json, rotation_json)) => {
-                match serde_json::from_str(&data_json) {
-                    Ok(object_data) => {
-                        let position: Option<Vec3> =
-                            position_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
-                        let rotation: Option<Vec3> =
-                            rotation_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
-                        items.push(Item {
-                            uuid,
-                            object_type: object_def,
-                            object_data,
-                            parent_id,
-                            scenename,
-                            position,
-                            rotation,
-                        });
-                    }
-                    Err(e) => warn!("Failed to deserialise data for item {uuid}: {e}"),
-                }
+            Ok(row) => row_to_item(row),
+            Err(e) => {
+                warn!("Row deserialisation error: {e}");
+                None
             }
-            Err(e) => warn!("Row deserialisation error: {e}"),
+        }
+    }).boxed())
+}
+
+/// One database row as an item, None (with a warning) when its data is not valid JSON.
+fn row_to_item(row: ItemRow) -> Option<Item> {
+    let (uuid, object_def, data_json, parent_id, scenename, position_json, rotation_json) = row;
+    match serde_json::from_str(&data_json) {
+        Ok(object_data) => {
+            let position: Option<Vec3> = position_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
+            let rotation: Option<Vec3> = rotation_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
+            Some(Item { uuid, object_type: object_def, object_data, parent_id, scenename, position, rotation })
+        }
+        Err(e) => {
+            warn!("Failed to deserialise data for item {uuid}: {e}");
+            None
         }
     }
+}
 
+/// Every item collected into a `Vec<Item>` (the REST search). The WebSocket `get_all_items`
+/// streams instead ([`stream_all_items`]): collecting ~20 000 items killed the service at 128Mi.
+pub async fn get_all_items(session: &Session, keyspace: &str) -> anyhow::Result<Vec<Item>> {
+    let items: Vec<Item> = stream_all_items(session, keyspace).await?.collect().await;
     debug!("Fetched {} items from database", items.len());
     Ok(items)
 }
@@ -208,4 +218,28 @@ pub async fn batch_upsert_items(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::row_to_item;
+
+    fn row(data: &str, position: Option<&str>) -> super::ItemRow {
+        ("u1".into(), "miningrock".into(), data.into(), Some("p1".into()), None, position.map(String::from), None)
+    }
+
+    #[test]
+    fn a_row_becomes_an_item() {
+        let item = row_to_item(row(r#"[{"hp": 3}]"#, Some(r#"{"x":1.0,"y":2.0,"z":3.0}"#))).expect("valid row");
+        assert_eq!(item.uuid, "u1");
+        assert_eq!(item.object_type, "miningrock");
+        assert_eq!(item.parent_id.as_deref(), Some("p1"));
+        assert_eq!(item.position.map(|p| p.y), Some(2.0));
+        assert_eq!(item.object_data[0]["hp"], 3);
+    }
+
+    #[test]
+    fn a_row_with_broken_data_is_skipped() {
+        assert!(row_to_item(row("not json", None)).is_none());
+    }
 }
