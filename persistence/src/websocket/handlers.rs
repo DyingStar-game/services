@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::{
     cache::DualCache,
     config::Config,
-    db::queries::{delete_item_by_uuid, get_all_items, get_item_by_uuid, Queries},
+    db::queries::{delete_item_by_uuid, get_item_by_uuid, stream_all_items, Queries},
     websocket::messages::{BridgeEventEnvelope, GenericPropsRequest, Item, UpdateObjectRequest},
 };
 
@@ -309,7 +309,9 @@ pub async fn handle_socket(
     info!("WebSocket connection closed");
 }
 
-/// Stream all items from the database back to the client in chunks.
+/// Stream all items from the database back to the client in chunks of `config.chunk_size`, each
+/// sent as soon as it is full: only one database page and one chunk are held in memory, whatever
+/// the number of items (collecting ~20 000 of them first killed the service at 128Mi).
 async fn handle_get_all_items(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
     session: &Session,
@@ -317,51 +319,30 @@ async fn handle_get_all_items(
 ) -> Result<(), crate::error::AppError> {
     info!("Handling get_all_items request");
 
-    let items = get_all_items(session, &config.scylla_keyspace).await?;
-    let total_items = items.len();
-    let chunks: Vec<Vec<serde_json::Value>> = items
-        .chunks(config.chunk_size)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .map(|item| {
-                    let mut data_map = item
-                        .object_data
-                        .first()
-                        .and_then(|v| v.as_object())
-                        .cloned()
-                        .unwrap_or_default();
-                    if let Some(ref v) = item.parent_id {
-                        data_map.insert("parent_id".to_string(), serde_json::json!(v));
-                    }
-                    if let Some(ref v) = item.scenename {
-                        data_map.insert("scenename".to_string(), serde_json::json!(v));
-                    }
-                    if let Some(ref v) = item.position {
-                        data_map.insert("position".to_string(), serde_json::json!(v));
-                    }
-                    if let Some(ref v) = item.rotation {
-                        data_map.insert("rotation".to_string(), serde_json::json!(v));
-                    }
-                    serde_json::json!({
-                        "object_type": item.object_type,
-                        "object_uuid": item.uuid,
-                        "object_data": Value::Object(data_map),
-                    })
-                })
-                .collect()
-        })
-        .collect();
-    let total_chunks = chunks.len();
-
-    for (index, chunk) in chunks.iter().enumerate() {
-        let resp = BridgeEventEnvelope {
-            event_type: "plugin".to_string(),
-            namespace: Some("genericprops".to_string()),
-            name: "items_chunk".to_string(),
-            payload: serde_json::json!({ "items": chunk, "chunk_index": index }),
-        };
-        send_json(sender, &resp).await?;
+    let chunk_size = config.chunk_size.max(1);
+    let mut items = stream_all_items(session, &config.scylla_keyspace).await?;
+    let mut chunk: Vec<Value> = Vec::with_capacity(chunk_size);
+    let mut total_items = 0;
+    let mut total_chunks = 0;
+    loop {
+        let next = items.next().await;
+        if let Some(ref item) = next {
+            chunk.push(item_to_bridge_json(item));
+            total_items += 1;
+        }
+        if chunk.len() >= chunk_size || (next.is_none() && !chunk.is_empty()) {
+            let resp = BridgeEventEnvelope {
+                event_type: "plugin".to_string(),
+                namespace: Some("genericprops".to_string()),
+                name: "items_chunk".to_string(),
+                payload: serde_json::json!({ "items": std::mem::take(&mut chunk), "chunk_index": total_chunks }),
+            };
+            send_json(sender, &resp).await?;
+            total_chunks += 1;
+        }
+        if next.is_none() {
+            break;
+        }
     }
 
     let end = BridgeEventEnvelope {
@@ -374,6 +355,29 @@ async fn handle_get_all_items(
 
     info!("Sent {total_chunks} chunk(s) to client");
     Ok(())
+}
+
+/// An item as the bridge expects it in an `items_chunk`: its data with the parent, scene,
+/// position and rotation merged in.
+fn item_to_bridge_json(item: &Item) -> Value {
+    let mut data_map = item.object_data.first().and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    if let Some(ref v) = item.parent_id {
+        data_map.insert("parent_id".to_string(), serde_json::json!(v));
+    }
+    if let Some(ref v) = item.scenename {
+        data_map.insert("scenename".to_string(), serde_json::json!(v));
+    }
+    if let Some(ref v) = item.position {
+        data_map.insert("position".to_string(), serde_json::json!(v));
+    }
+    if let Some(ref v) = item.rotation {
+        data_map.insert("rotation".to_string(), serde_json::json!(v));
+    }
+    serde_json::json!({
+        "object_type": item.object_type,
+        "object_uuid": item.uuid,
+        "object_data": Value::Object(data_map),
+    })
 }
 
 /// Serialise a response to JSON and send it as a WebSocket text message.
