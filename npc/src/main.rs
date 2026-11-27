@@ -51,6 +51,10 @@ use crate::{
     usim::Usim,
 };
 
+// musl's allocator is slow under multi-threaded contention (see Cargo.toml).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();

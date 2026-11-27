@@ -1,10 +1,10 @@
 # ─── Stage 1: build ────────────────────────────────────────────────────────
-FROM rust:1.95-slim AS builder
+# Alpine = musl target: the binary comes out fully static, so the runtime image
+# needs no libc at all. TLS is rustls everywhere (no openssl-sys in Cargo.lock);
+# musl-dev is for the C parts of ring and mimalloc.
+FROM rust:1.95-alpine AS builder
 
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache musl-dev
 
 WORKDIR /app
 
@@ -20,21 +20,13 @@ COPY src ./src
 RUN touch src/main.rs && cargo build --release
 
 # ─── Stage 2: minimal runtime ──────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
-
-RUN apt-get update && apt-get install -y \
-    libssl3 \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN groupadd -g 1001 appgroup && useradd -u 1001 -g appgroup -s /bin/sh -m appuser
+# Distroless static: CA certificates, tzdata and a nonroot user (65532), no
+# libc, no shell, no package manager — nearly no OS-package CVE surface.
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
 WORKDIR /app
 COPY --from=builder /app/target/release/npc ./npc
 COPY config ./config
-
-RUN chown -R appuser:appgroup /app
-USER appuser
 
 EXPOSE 9400
 
