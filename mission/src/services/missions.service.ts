@@ -33,7 +33,7 @@ import { page, type Page } from '../lib/pagination.js';
 import { creditHolder, debitHolder } from './economy.client.js';
 import { createHold, releaseHold } from './inventory.client.js';
 import { notifyMissionEvent } from './notifications.service.js';
-import { settledTotal } from './rewards.service.js';
+import { RATIO_FULL, settledTotal } from './rewards.service.js';
 import { authorizeAction, getGroup, isCorporationMember } from './social.client.js';
 import { validateMissionSpec, type SpecObjectiveInput } from './spec.service.js';
 import { assertPoiZonesExist, resolveListingPoiGeometry, zoneFilterSql } from './zones.service.js';
@@ -71,7 +71,7 @@ export interface CreateMissionInput {
   expiresAt?: Date | null;
   /** Relative deadline in hours; ignored when `expiresAt` is set. */
   expiresInHours?: number | null;
-  /** Accepts a partial hand-in, paid proportionally to the weighted progress. */
+  /** Kept for older callers, no longer read: every mission accepts a partial turn-in. */
   allowPartial?: boolean;
   /** Complete and settle on its own once every required objective is done. */
   autoComplete?: boolean;
@@ -113,7 +113,7 @@ export interface CreatePlayerMissionInput {
   expiresAt?: Date | null;
   /** Relative deadline in hours; ignored when `expiresAt` is set. */
   expiresInHours?: number | null;
-  /** Accepts a partial hand-in, paid proportionally to the weighted progress. */
+  /** Kept for older callers, no longer read: every mission accepts a partial turn-in. */
   allowPartial?: boolean;
   /** Complete and settle on its own once every required objective is done. */
   autoComplete?: boolean;
@@ -294,6 +294,26 @@ export async function requireObjective(missionId: string, objectiveId: string): 
  * @param limit - Max rows.
  * @returns Missions.
  */
+/**
+ * How much of each completed mission of [missionIds] was done, in basis points: RATIO_FULL when an
+ * assignment completed it, the share frozen by a partial turn-in otherwise (the largest, for a mission
+ * several players turned in). Missing from the map: no assignment ended it. Read by the issuer of a
+ * supply order, whose goods moved only in that share.
+ */
+export async function completionOf(missionIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (missionIds.length === 0) return out;
+  const rows = await db
+    .select({ missionId: missionAssignments.missionId, status: missionAssignments.status, ratio: missionAssignments.completionRatio })
+    .from(missionAssignments)
+    .where(and(inArray(missionAssignments.missionId, missionIds), inArray(missionAssignments.status, ['completed', 'partially_completed'])));
+  for (const row of rows) {
+    const done = row.status === 'completed' ? RATIO_FULL : Math.min(RATIO_FULL, Math.max(0, row.ratio));
+    out.set(row.missionId, Math.max(out.get(row.missionId) ?? 0, done));
+  }
+  return out;
+}
+
 export async function listMissions(filters: MissionFilters, limit: number, offset: number): Promise<Page<Mission>> {
   const conditions = [];
   if (filters.status) conditions.push(eq(missions.status, filters.status));
@@ -684,8 +704,8 @@ export async function createPlayerMission(
 }
 
 /**
- * Refunds the unspent escrow of a cancelled/expired mission to its funding account, and
- * releases any held item escrow. Idempotent through the `mission-refund:<missionId>` Economy
+ * Refunds the unspent escrow of a cancelled/expired mission, or of one turned in partially (what
+ * the partial payout left), to its funding account, and releases any held item escrow. Idempotent through the `mission-refund:<missionId>` Economy
  * key and the hold status.
  * @param mission - Mission whose escrow may be refunded.
  */
@@ -1056,9 +1076,27 @@ export function allRequiredObjectivesCompleted(objectives: MissionObjective[]): 
 }
 
 /**
+ * How much of one objective is done, in [0, 1]. A kind that counts a quantity (a delivery, a
+ * transport, goods owned) is done by its share: what was delivered over its target, capped at 1.
+ * A kind that counts nothing (a visit, an inspection, a repair confirmed by its issuer, a
+ * passenger) is all or nothing: half a visit is no visit, so it counts once completed only.
+ * @param objective - The objective as last measured.
+ * @returns Its share done.
+ */
+export function objectiveShare(objective: MissionObjective): number {
+  if (objective.status === 'completed') return 1;
+  if (getObjectiveKind(objective.type)?.quantity === false) return 0;
+  if (objective.targetQuantity <= 0) return 0;
+  return Math.min(Math.max(objective.currentProgress, 0), objective.targetQuantity) / objective.targetQuantity;
+}
+
+/**
  * Weighted progress of the required objectives, in basis points (10000 = every required
- * objective reached its target). Objectives weigh `weight` each and are only credited
- * up to `targetQuantity`, so the value is deterministic across retries.
+ * objective reached its target): the mean of their shares ({@link objectiveShare}), each
+ * weighing `weight` (1 by default). A plain mean, not one weighted by target quantity: a
+ * mission's steps are its objectives, each one step whatever it counts (as the DataPad's
+ * "step 2 of 3" says, `summarizeProgress`), and their units differ (kg, visits, passengers)
+ * so their targets cannot be added. Deterministic across retries.
  * @param objectives - All objectives of the mission.
  * @returns Integer in [0, 10000].
  */
@@ -1066,10 +1104,7 @@ export function requiredProgressBp(objectives: MissionObjective[]): number {
   const required = requiredObjectives(objectives);
   const totalWeight = required.reduce((sum, objective) => sum + Math.max(objective.weight, 0), 0);
   if (totalWeight === 0) return 0;
-  const done = required.reduce((sum, objective) => {
-    const progress = Math.min(Math.max(objective.currentProgress, 0), objective.targetQuantity);
-    return sum + (Math.max(objective.weight, 0) * progress) / objective.targetQuantity;
-  }, 0);
+  const done = required.reduce((sum, objective) => sum + Math.max(objective.weight, 0) * objectiveShare(objective), 0);
   return Math.min(10000, Math.max(0, Math.round((done / totalWeight) * 10000)));
 }
 

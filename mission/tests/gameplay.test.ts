@@ -227,7 +227,7 @@ describe('bonus objectives', () => {
 });
 
 describe('partial hand-in', () => {
-  it('pays a proportional credits share and never pays items', async () => {
+  it('pays the share done less the penalty, and never pays items', async () => {
     const missionId = await createMission({
       title: 'Livraison partielle',
       allowPartial: true,
@@ -253,10 +253,11 @@ describe('partial hand-in', () => {
       partial: true,
     });
     expect(status).toBe(200);
+    // 1000 × 50 % done × (1 − 0.25 penalty).
     expect(body.assignment).toMatchObject({
       status: 'partially_completed',
       completionRatio: 5000,
-      rewardAmount: 500,
+      rewardAmount: 375,
     });
     expect((await loadMission(missionId)).status).toBe('completed');
     // Credits scaled to the weighted progress; the item component is left out entirely.
@@ -264,9 +265,16 @@ describe('partial hand-in', () => {
     expect(economy.creditHolder).toHaveBeenCalledWith(
       'npc',
       PLAYER,
-      expect.objectContaining({ amount: 500 }),
+      expect.objectContaining({ amount: 375 }),
     );
-    expect(body.assignment.rewardShares).toEqual([{ type: 'credits', amount: 500, currency: 'credits' }]);
+    expect(body.assignment.rewardShares).toEqual([{ type: 'credits', amount: 375, currency: 'credits' }]);
+    expect(social.notifyPlayer).toHaveBeenCalledWith(
+      PLAYER,
+      expect.objectContaining({
+        type: 'mission.partially_completed',
+        data: expect.objectContaining({ ratioBp: 5000, payoutBp: 3750, amount: 375 }),
+      }),
+    );
   });
 
   it('refunds the unpaid remainder of a treasury escrow', async () => {
@@ -293,10 +301,10 @@ describe('partial hand-in', () => {
       partial: true,
     });
     expect(status).toBe(200);
-    // 500 to the assignee, 500 back to the treasury, escrow closed.
-    expect(economy.creditHolder).toHaveBeenNthCalledWith(1, 'npc', PLAYER, expect.objectContaining({ amount: 500 }));
+    // 375 to the assignee (half done, less a quarter), 625 back to the treasury, escrow closed.
+    expect(economy.creditHolder).toHaveBeenNthCalledWith(1, 'npc', PLAYER, expect.objectContaining({ amount: 375 }));
     expect(economy.creditHolder).toHaveBeenNthCalledWith(2, 'politics', ARES, {
-      amount: 500,
+      amount: 625,
       currency: 'credits',
       reference: 'mission_refund',
       externalId: `mission-refund:${missionId}`,
@@ -304,7 +312,42 @@ describe('partial hand-in', () => {
     expect((await loadMission(missionId)).escrowStatus).toBe('refunded');
   });
 
-  it('is refused on a mission that does not allow partials', async () => {
+  it('with auto-settle off, keeps the escrow until the settle route has paid the share', async () => {
+    const { env } = await import('../src/config/env.js');
+    const missionId = await createMission({
+      title: 'Règlement différé',
+      category: 'exploration',
+      autoComplete: false,
+      issuerType: 'politics',
+      issuerId: ARES,
+      escrow: { payerType: 'politics', payerId: ARES },
+      objectives: [
+        { type: 'manual', title: 'Premier lot', targetQuantity: 1 },
+        { type: 'manual', title: 'Second lot', targetQuantity: 1 },
+      ],
+      rewards: [{ type: 'credits', amount: 1000 }],
+    });
+    const { body: detail } = await call(`/missions/${missionId}`);
+    await assign(missionId);
+    await confirm(missionId, detail.objectives[0].id as string);
+    env.mission.rewardAutoSettle = false;
+    try {
+      await call(`/missions/${missionId}/complete`, 'POST', { playerId: PLAYER, partial: true });
+    } finally {
+      env.mission.rewardAutoSettle = true;
+    }
+    // Nothing paid yet: refunding now would hand the treasury the player's unpaid share too.
+    expect(economy.creditHolder).not.toHaveBeenCalled();
+    expect((await loadMission(missionId)).escrowStatus).toBe('held');
+
+    const settled = await call(`/missions/${missionId}/settle`, 'POST', { playerId: PLAYER });
+    expect(settled.status).toBe(200);
+    expect(economy.creditHolder).toHaveBeenNthCalledWith(1, 'npc', PLAYER, expect.objectContaining({ amount: 375 }));
+    expect(economy.creditHolder).toHaveBeenNthCalledWith(2, 'politics', ARES, expect.objectContaining({ amount: 625 }));
+    expect((await loadMission(missionId)).escrowStatus).toBe('refunded');
+  });
+
+  it('is open to every mission, not only those created with allowPartial', async () => {
     const missionId = await createMission({
       title: 'Sans partiel',
       category: 'exploration',
@@ -312,6 +355,7 @@ describe('partial hand-in', () => {
         { type: 'manual', title: 'A', targetQuantity: 1 },
         { type: 'manual', title: 'B', targetQuantity: 1 },
       ],
+      rewards: [{ type: 'credits', amount: 1000 }],
     });
     const { body: detail } = await call(`/missions/${missionId}`);
     await assign(missionId);
@@ -321,11 +365,27 @@ describe('partial hand-in', () => {
       playerId: PLAYER,
       partial: true,
     });
-    expect(status).toBe(409);
-    expect(body.error).toBe('PARTIAL_NOT_ALLOWED');
+    expect(status).toBe(200);
+    expect(body.assignment).toMatchObject({ status: 'partially_completed', rewardAmount: 375 });
   });
 
-  it('is refused while another assignee is still working on the mission', async () => {
+  it('a partial request on a mission that is done is a full completion, paid in full', async () => {
+    const missionId = await createMission({
+      title: 'Déjà fini',
+      category: 'exploration',
+      autoComplete: false,
+      objectives: [{ type: 'manual', title: 'A', targetQuantity: 1 }],
+      rewards: [{ type: 'credits', amount: 1000 }],
+    });
+    const { body: detail } = await call(`/missions/${missionId}`);
+    await assign(missionId);
+    await confirm(missionId, detail.objectives[0].id as string);
+
+    const { body } = await call(`/missions/${missionId}/complete`, 'POST', { playerId: PLAYER, partial: true });
+    expect(body.assignment).toMatchObject({ status: 'completed', rewardAmount: 1000, completionRatio: 10000 });
+  });
+
+  it('closes a shared mission for every assignee, each paid their split', async () => {
     const missionId = await createMission({
       title: 'À deux',
       category: 'exploration',
@@ -347,8 +407,16 @@ describe('partial hand-in', () => {
       playerId: PLAYER,
       partial: true,
     });
-    expect(status).toBe(409);
-    expect(body.error).toBe('PARTIAL_MULTIPLAYER');
+    expect(status).toBe(200);
+    expect(body.assignments).toHaveLength(2);
+    // 1000 split in two, × 50 % done × 0.75: 187 each (rounded down, the rest goes back).
+    for (const playerId of [PLAYER, OTHER]) {
+      expect(await loadAssignment(missionId, playerId)).toMatchObject({ status: 'partially_completed', rewardAmount: 187 });
+      expect(social.notifyPlayer).toHaveBeenCalledWith(
+        playerId,
+        expect.objectContaining({ type: 'mission.partially_completed' }),
+      );
+    }
   });
 
   it('is refused when nothing has any progress yet', async () => {
@@ -367,6 +435,69 @@ describe('partial hand-in', () => {
     });
     expect(status).toBe(409);
     expect(body.error).toBe('PARTIAL_NO_PROGRESS');
+  });
+});
+
+describe('turn-in share and preview', () => {
+  /** An objective row with only what the share reads. */
+  function row(patch: Record<string, unknown>) {
+    return { type: 'deliver_material', status: 'in_progress', currentProgress: 0, targetQuantity: 100, weight: 1, isBonus: false, ...patch } as never;
+  }
+
+  it('counts a quantity by its share, an all-or-nothing objective only once done', async () => {
+    const { objectiveShare, requiredProgressBp } = await import('../src/services/missions.service.js');
+    expect(objectiveShare(row({ currentProgress: 40 }))).toBeCloseTo(0.4);
+    expect(objectiveShare(row({ currentProgress: 140 }))).toBe(1);
+    expect(objectiveShare(row({ type: 'visit', currentProgress: 1, targetQuantity: 1, status: 'in_progress' }))).toBe(0);
+    expect(objectiveShare(row({ type: 'manual', status: 'completed', targetQuantity: 1 }))).toBe(1);
+    // The mean of the required objectives, each one step; a bonus objective counts for nothing.
+    expect(
+      requiredProgressBp([
+        row({ currentProgress: 50 }),
+        row({ type: 'manual', status: 'pending', targetQuantity: 1 }),
+        row({ currentProgress: 100, isBonus: true }),
+      ]),
+    ).toBe(2500);
+  });
+
+  it('takes the penalty off a partial payout only', async () => {
+    const { payoutBp } = await import('../src/services/rewards.service.js');
+    expect(payoutBp(6000)).toBe(4500);
+    expect(payoutBp(10000)).toBe(10000);
+    expect(payoutBp(6000, 0)).toBe(6000);
+    expect(payoutBp(0)).toBe(0);
+  });
+
+  it('serves the player what a turn-in would pay them: the number of the service', async () => {
+    const missionId = await createMission({
+      title: 'Aperçu',
+      category: 'exploration',
+      autoComplete: false,
+      objectives: [
+        { type: 'manual', title: 'A', targetQuantity: 1 },
+        { type: 'manual', title: 'B', targetQuantity: 1 },
+      ],
+      rewards: [{ type: 'credits', amount: 1000 }],
+    });
+    const { body: detail } = await call(`/missions/${missionId}`);
+    await assign(missionId);
+    const read = async () => {
+      const res = await fetch(`${baseUrl}/api/missions/${missionId}`, { headers: { 'x-test-player-id': PLAYER } });
+      return (await res.json()) as Record<string, any>;
+    };
+    expect((await read()).turnIn).toMatchObject({ shareBp: 0, full: false, partial: false, amount: 0 });
+    await confirm(missionId, detail.objectives[0].id as string);
+    expect((await read()).turnIn).toEqual({
+      shareBp: 5000,
+      full: false,
+      partial: true,
+      penaltyBp: 2500,
+      payoutBp: 3750,
+      amount: 375,
+      currency: 'credits',
+    });
+    await confirm(missionId, detail.objectives[1].id as string);
+    expect((await read()).turnIn).toMatchObject({ shareBp: 10000, full: true, partial: false, amount: 1000 });
   });
 });
 

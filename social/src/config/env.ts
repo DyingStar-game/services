@@ -85,6 +85,13 @@ export const env = {
     /** Reports one player may send in 24 hours. */
     dailyMax: int('BUG_REPORT_DAILY_MAX', 20),
   },
+  /** Temporary groups (squads): one nobody came back to is disbanded by itself. */
+  groups: {
+    /** Hours with no member online after which a group is disbanded; 0 keeps groups for ever. */
+    idleExpiryHours: int('GROUP_IDLE_EXPIRY_HOURS', 24),
+    /** In-process expiry pass interval in minutes; 0 disables the pass. */
+    expiryIntervalMinutes: int('GROUP_EXPIRY_INTERVAL_MINUTES', 15),
+  },
   /** Reputation deltas and automatic sanction thresholds (all thresholds are negative scores). */
   reputation: {
     blockPenalty: int('REPUTATION_BLOCK_PENALTY', 1),

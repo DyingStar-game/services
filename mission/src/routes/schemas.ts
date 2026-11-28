@@ -236,8 +236,8 @@ export const createMissionBody = z.object({
   /** Relative deadline in hours, ignored when `expiresAt` is set. */
   expiresInHours: z.number().int().min(1).max(8760).nullish(),
   /**
-   * Accepts a partial hand-in: paid proportionally to the weighted progress of the
-   * required objectives (items are never paid on a partial).
+   * Kept for older callers, no longer read: every mission accepts a partial turn-in
+   * (`MISSION_PARTIAL_PENALTY`).
    */
   allowPartial: z.boolean().default(false),
   /** Complete and settle on its own once every required objective is done. */
@@ -283,7 +283,7 @@ export const createPlayerMissionBody = z
     expiresAt: z.coerce.date().nullish(),
     /** Relative deadline, ignored when `expiresAt` is set. */
     expiresInHours: z.number().int().min(1).max(8760).nullish(),
-    /** Accepts a partial hand-in, paid proportionally to the weighted progress. */
+    /** Kept for older callers, no longer read: every mission accepts a partial turn-in. */
     allowPartial: z.boolean().default(false),
     /** Complete and settle on its own once every required objective is done. */
     autoComplete: z.boolean().default(true),
@@ -346,8 +346,8 @@ export const eventBody = z.object({
 });
 
 /**
- * Player completion request: `partial` hands in the mission proportionally to the
- * weighted progress of the required objectives (missions with `allowPartial` only).
+ * Player completion request: `partial` hands the mission in now, paid for the share of its
+ * required objectives done less the partial penalty (any mission).
  */
 export const completeBody = z.object({ partial: z.boolean().optional() }).default({});
 
@@ -355,7 +355,7 @@ export const internalCompleteBody = z.object({
   playerId: uuidSchema,
   force: z.boolean().optional(),
   settle: z.boolean().optional(),
-  /** Hand in proportionally to the weighted progress (missions with `allowPartial` only). */
+  /** Hand in now, paid for the share done less the partial penalty (any mission). */
   partial: z.boolean().default(false),
 });
 

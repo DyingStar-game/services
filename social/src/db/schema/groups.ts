@@ -2,9 +2,9 @@
  * Temporary groups: small player collectives used to claim and share missions.
  *
  * A player belongs to at most one group at a time (enforced by a unique index on
- * `group_members.playerId`). Groups have no expiry: they are disbanded manually by their
- * owner, and when the owner leaves, ownership passes to the oldest remaining member (an
- * empty group is deleted).
+ * `group_members.playerId`). A group is disbanded by its owner, or by itself once no member
+ * has been online for `GROUP_IDLE_EXPIRY_HOURS` (groups.service, expireIdleGroups); when the
+ * owner leaves, ownership passes to the oldest remaining member (an empty group is deleted).
  */
 import { index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 

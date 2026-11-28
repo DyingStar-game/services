@@ -60,6 +60,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `INVENTORY_INTERNAL_API_KEY` | Repli dev : `X-Internal-Key` envoyé à inventory |
 | `INVENTORY_SYSTEM_HOLDER_ID` | Détenteur `system` servant de source aux récompenses item non séquestrées |
 | `MISSION_REWARD_AUTO_SETTLE` | Payer automatiquement les récompenses à la complétion (défaut `true`) |
+| `MISSION_PARTIAL_PENALTY` | Pénalité d'une **remise partielle**, fraction de 0 à 1 (défaut `0.25`) : elle paie `récompense × part faite × (1 − pénalité)` ; une complétion entière paie 100 % |
 | `MISSION_DEFAULT_TTL_HOURS` | Durée de vie par défaut d'une mission **interne** en heures (0 = jamais) |
 | `MISSION_PLAYER_DEFAULT_TTL_HOURS` | Durée de vie par défaut d'une mission **joueur** en heures (défaut `72`) — bornée par `expiresAt`/`expiresInHours` |
 | `MISSION_MAX_ACTIVE_ASSIGNMENTS` | Assignations actives simultanées max par joueur (défaut `5`, 0 = illimité ; PNJ exclus) |
@@ -85,7 +86,7 @@ curl localhost:3000/api/internal/missions -H "Authorization: Bearer $TOKEN" \
 | `owns_items` (prérequis) | mining, delivery, transport |
 
 **Kinds d'objectifs** (registre `src/kinds/objectives/`) — 2 modes d'évaluation :
-- **`service`** — le service mesure contre l'état du joueur (présence + biens portés), **automatiquement à chaque push d'état** (voir « Mesure automatique » ci-dessous) ou sur demande via `POST /:missionId/verify` : `visit` (présence dans le POI, latché), `deliver_material` (biens `carried` dans la zone de livraison, high-water mark ; `scope: 'all'` **cumule tous les assignés actifs actuellement dans la cible**, un porteur hors cible ne compte pas — idempotent, la somme globale est recalculée à chaque mesure), `transport` (latch `pickedUpAt` + livraison, high-water mark), `transport_passenger` (passager dans le POI, high-water mark), `owns_items` (instantané inventaire, peut régresser) ;
+- **`service`** — le service mesure contre l'état du joueur (présence + biens portés), **automatiquement à chaque push d'état** (voir « Mesure automatique » ci-dessous) ou sur demande via `POST /:missionId/verify` : `visit` (présence dans le POI, latché), `deliver_material` (biens `carried` dans la zone de livraison, high-water mark ; `scope: 'all'` **cumule tous les assignés actifs actuellement dans la cible**, un porteur hors cible ne compte pas — idempotent, la somme globale est recalculée à chaque mesure), `transport` (latch `pickedUpAt` + livraison, high-water mark ; avec `via: 'warehouse'`, compté sur les mouvements de biens `POST /api/internal/missions/goods-moves` : `state.loadedAt` = date du premier chargement à l'entrepôt source, `state.loaded` = quantité chargée cumulée, dans l'unité de l'objectif, plafonnée à `targetQuantity` — l'étape « chargement » est faite quand `loaded` atteint `targetQuantity`, pas à la première caisse —, `state.delivered` = quantité rangée à l'entrepôt de destination), `transport_passenger` (passager dans le POI, high-water mark), `owns_items` (instantané inventaire, peut régresser) ;
 - **`issuer`** — le créateur confirme : `manual` (`POST /:missionId/objectives/:objectiveId/confirm`, réservé au créateur ; le jeu confirme via l'API interne). **Jamais mesuré automatiquement** : c'est le seul objectif qui exige une action humaine.
 
 **Mesure automatique** (`MISSION_AUTO_MEASURE`, défaut `true`) : le push `PUT /api/internal/missions/player-states` est le **seul** signal qu'un lieu ou des biens portés ont changé — il déclenche donc lui-même la mesure des objectifs `service`, puis l'auto-complétion si tous les requis sont faits. Sans lui, un `visit` n'avançait jamais : il fallait un `/verify` explicite. Le push répond d'abord (c'est un battement de cœur, sa latence n'est pas critique), la passe tourne ensuite en **best-effort** : une erreur de mesure est loguée et avalée, le push échoue jamais à cause d'elle.
@@ -100,7 +101,7 @@ Conçue pour rester nulle quand rien ne se passe, ce qui est le cas courant :
 
 `POST /:missionId/verify` reste **inchangé** : c'est la re-mesure explicite (immédiateté, filet si `MISSION_AUTO_MEASURE=false`, point d'entrée historique). Une mesure de plus est neutre grâce au high-water mark.
 
-**Sémantique high-water mark** : `visit`, `deliver_material`, `transport` et `transport_passenger` ne régressent jamais — `progress = max(stored, measured)`. Une livraison partielle reste créditée (`allowPartial: true` paie le ratio en crédits) et l'auto-complétion se déclenche à 100 %.
+**Sémantique high-water mark** : `visit`, `deliver_material`, `transport` et `transport_passenger` ne régressent jamais — `progress = max(stored, measured)`. Une livraison partielle reste créditée (une remise partielle la paie, voir plus bas) et l'auto-complétion se déclenche à 100 %.
 
 Un push `reportProgress` sur un kind non-`game` → `409 OBJECTIVE_NOT_PUSHABLE`. Pour une mission `scenario`, un objectif reste verrouillé (`409 OBJECTIVE_LOCKED`) tant que les précédents ne sont pas faits.
 
@@ -191,11 +192,14 @@ Erreurs typées : `403 NOT_CORPORATION_MEMBER` (visibilité corporation hors cor
 
 **Objectifs bonus** (`isBonus: true`) : hors du gate de complétion, de l'ordre scénarisé **et** du ratio partiel. Un objectif bonus peut porter un **`bonusReward`** (1 composant) accordé **en plus** de la récompense de base, **uniquement sur une complétion totale** (jamais sur un partiel) ; les crédits bonus s'additionnent au composant crédits unique, les items bonus sont ajoutés à la liste. Une mission doit garder **au moins un objectif non-bonus** (`400 MISSING_REQUIRED_OBJECTIVE`) ; un `bonusReward` sur un objectif non-bonus est refusé (`400 BONUS_REWARD_WITHOUT_BONUS`).
 
-**Remise partielle** (`allowPartial`) : `POST /:missionId/complete {partial: true}` (joueur) ou `partial: true` (interne) rend la mission **proportionnellement** à l'avancement pondéré des objectifs requis (`weight`, en points de base : `ratioBp = Σ weight×progress/target / Σ weight × 10000`) :
-- l'assignation passe en statut terminal **`partially_completed`** (jamais ré-acceptable : le `rewardExternalId` est déjà consommé) avec `completionRatio` figé ;
-- seuls les **crédits** sont payés, **au prorata** (`floor(part × ratioBp / 10000)`) ; **aucun item** n'est versé ;
-- la mission est **close** (statut `completed`) et le **solde non utilisé du séquestre est remboursé** au payeur (`mission-refund:<id>`) ;
-- refus : mission sans `allowPartial` (`409 PARTIAL_NOT_ALLOWED`), aucun progrès (`409 PARTIAL_NO_PROGRESS`), un autre assigné encore actif (`409 PARTIAL_MULTIPLAYER` — le partiel est un cas solo : le part du joueur est calculée sur la totalité de la mission).
+**Remise partielle** (**toute mission** ; `allowPartial` n'est plus lu) : `POST /:missionId/complete {partial: true}` (joueur, missions `autoComplete`) ou `partial: true` (interne : le serveur de jeu, au kiosque de l'hôtel de ville) rend la mission **avant la fin**, payée pour la **part faite** des objectifs requis :
+- part d'un objectif : à **quantité** (`deliver_material`, `transport`, `owns_items`) = `livré / cible` (plafonné à 1) ; **tout ou rien** (`visit`, `manual` — réparation, inspection —, `transport_passenger`) = 1 une fois complété, 0 sinon ;
+- part de la mission : **moyenne** des parts des objectifs requis, pondérée par `weight` (1 par défaut) — chaque objectif est une étape, comme le « étape 2 sur 3 » du DataPad, et leurs unités diffèrent (kg, visites…) : on ne pondère pas par la cible (`ratioBp = Σ weight×part / Σ weight × 10000`) ;
+- paiement : `floor(part du joueur × ratioBp × (1 − MISSION_PARTIAL_PENALTY) / 10000)` (pénalité `0.25` par défaut) ; seuls les **crédits** sont payés, **aucun item, standing ni bonus** ; une complétion entière paie 100 % sans pénalité (un `partial: true` sur une mission finie est une complétion entière) ;
+- **tous les assignés actifs** passent en statut terminal **`partially_completed`** (jamais ré-acceptable : le `rewardExternalId` est consommé), `completionRatio` = `ratioBp` figé, chacun payé de sa part égale — la progression est partagée, la mission ne peut pas continuer pour l'un quand un autre a été payé pour elle ;
+- la mission est **close** (statut `completed`) et le **solde non payé du séquestre est remboursé** au payeur (`mission-refund:<id>`, le même chemin que l'annulation) — une fois toutes les parts payées : avec `MISSION_REWARD_AUTO_SETTLE=false`, c'est `POST /api/internal/missions/:id/settle` qui paie puis rembourse ;
+- refus : rien de fait (`409 PARTIAL_NO_PROGRESS` — une mission d'objectifs tout-ou-rien dont aucun n'est fait n'a rien à remettre) ;
+- **aperçu** : `GET /api/missions/:missionId` renvoie `turnIn` (`{shareBp, full, partial, penaltyBp, payoutBp, amount, currency}`) pour un assigné actif — ce que la remise lui paierait maintenant, que les écrans de remise affichent tel quel.
 
 **Expiration & deadlines** : `expiresAt` (absolu) ou `expiresInHours` (relatif) bornent la mission ; sans les deux, le TTL par défaut s'applique (`MISSION_DEFAULT_TTL_HOURS` interne, `MISSION_PLAYER_DEFAULT_TTL_HOURS` joueur). `assignmentDeadlineHours` pose une **deadline par assignation** (`deadlineAt`, calculée à l'acceptation). L'expiration est pilotée **de l'extérieur** : une commande (CronJob Kubernetes) appelle `POST /api/internal/missions/expire`, qui ferme les missions (`expired` + remboursement) et les assignations dépassées (`expired`), en **notifiant** les joueurs une fois (`deadlineNotifiedAt`) — opération **idempotente**, rejouable à la main. Un balayage in-process optionnel (`scheduler.ts`) existe pour le dev monoposte, **désactivé par défaut** (`MISSION_EXPIRE_INTERVAL_SECONDS=0`). Agir sur une assignation dépassée → `409 DEADLINE_PASSED`. Anti-accumulation : un joueur ne dépasse pas `MISSION_MAX_ACTIVE_ASSIGNMENTS` assignations actives (`409 ASSIGNMENT_LIMIT_REACHED`).
 
@@ -207,7 +211,7 @@ Erreurs typées : `403 NOT_CORPORATION_MEMBER` (visibilité corporation hors cor
 
 **Récompenses de standing** (`{type:'standing', domain, amount}`) : le **standing de personnage** (score par domaine, catégorie de mission) est **détenu par Social** (`player_profiles.standing`, colonne `jsonb`) — distinct de `reputation` (modération sociale). À la complétion **totale** (jamais sur un partiel), le delta `amount` est appliqué via `PATCH /api/internal/players/:id/standing` (rol `social:standing:write`), **sans partage** entre les assignés (chaque participant reçoit le montant complet, figé dans `rewardShares`) ; ignoré pour les assignations PNJ. Idempotent : chaque composant standing réclame sa clé `standing:<domain>` dans `settledComponents` avant l'appel Social ; échec Social → `502 SOCIAL_STANDING_FAILED` (assignation rejouable). Le prereq correspondant `min_standing {domain, min}` vérifie le score à l'acceptation (domaine absent = 0).
 
-**Notifications** (`type` + `data`, jamais bloquantes, Social en best-effort) : `mission.expired`, `mission.deadline`, `mission.completed`, `mission.partially_completed`, `mission.failed`, `mission.cancelled`.
+**Notifications** (`type` + `data`, jamais bloquantes, Social en best-effort) : `mission.expired`, `mission.deadline`, `mission.completed`, `mission.partially_completed` (`data.ratioBp`, `payoutBp`, `amount`), `mission.failed`, `mission.cancelled`. Les mouvements de biens (`goods-moves`) ne notifient **qu'aux étapes** : `mission.progress` (`data.step` = `loaded`, tout est chargé à la source ; `delivered`, un objectif entièrement livré), `mission.ready` (tout est fait, à remettre à l'hôtel de ville) ; un mouvement qui ne termine aucune étape envoie `mission.updated`, que le jeu prend pour un rafraîchissement **silencieux** (pas de toast). Le raffinage n'est pas une étape : la raffinerie ne parle pas au service de mission.
 
 ## Pagination (rupture de contrat)
 
@@ -260,7 +264,7 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/missions/:missionId/event` `{enabled, maxAssignees?}` | Déclarer/retirer le flag **event** (mission corporation, action `mission:event:manage` : CEO ou `manage_corporation`) |
 | POST | `/api/missions/:missionId/abandon` | Abandonner l'assignation |
 | POST | `/api/missions/:missionId/objectives/:objectiveId/progress` `{quantity}` | Reporter la progression d'un objectif **`game`** uniquement (`409 OBJECTIVE_NOT_PUSHABLE` sinon) |
-| POST | `/api/missions/:missionId/complete` `{partial?}` | Compléter : **revérifie** les objectifs `service`, puis répartit chaque composant de récompense (`partial: true` = remise proportionnelle, missions `allowPartial`) |
+| POST | `/api/missions/:missionId/complete` `{partial?}` | Compléter : **revérifie** les objectifs `service`, puis répartit chaque composant de récompense (`partial: true` = remise partielle, toute mission, pénalité `MISSION_PARTIAL_PENALTY`) |
 | GET | `/api/me/missions?status=&limit=&offset=` | Mes missions (assignations + mission) |
 | GET | `/api/me/missions-created?status=&limit=&offset=` | **Mes missions créées** (`createdBy` = moi), tous statuts, **sans filtre zone/groupe/place libre** — vue de gestion du créateur (le browse `/api/missions` reste filtré par zone) |
 
@@ -280,8 +284,8 @@ Langue : envoyez **`Accept-Language: fr`** (ou `en`, **défaut `en`**) — les m
 | POST | `/api/internal/missions/:missionId/objectives/:objectiveId/progress` `{playerId, quantity}` | `mission:progress` | Progression **vérifiée** côté serveur de jeu (kinds `game`) |
 | POST | `/api/internal/missions/:missionId/objectives/:objectiveId/confirm` `{}` | `mission:progress` | Confirmer un objectif `manual` (mission créée par le jeu/corp) |
 | POST | `/api/internal/missions/:missionId/verify` `{playerId}` | `mission:progress` | Re-mesurer les objectifs `service` d'un détenteur |
-| POST | `/api/internal/missions/:missionId/complete` `{playerId, force?, settle?, partial?}` | `mission:complete` | Compléter tous les participants (revérifie ; `force` pour outrepasser, `partial` pour une remise proportionnelle) |
-| POST | `/api/internal/missions/:missionId/settle` `{playerId}` | `mission:complete` | Rejouer le règlement des composants non réglés (idempotent) |
+| POST | `/api/internal/missions/:missionId/complete` `{playerId, force?, settle?, partial?}` | `mission:complete` | Compléter tous les participants (revérifie ; `force` pour outrepasser, `partial` pour une remise partielle) |
+| POST | `/api/internal/missions/:missionId/settle` `{playerId}` | `mission:complete` | Rejouer le règlement des composants non réglés (idempotent) ; après une remise partielle, rembourse ensuite le solde du séquestre |
 | GET | `/api/internal/players/:playerId/missions` | `mission:read` | Assignations d'un joueur (+ mission) |
 | POST | `/api/internal/poi-usage` `{poiIds[]}` | `mission:read` | **Verrou POI** : quels POI sont référencés par une mission à assignation **active** (zone `params.zone`, + `params.source` pour `transport`) → `{poiId: missionIds[]}` ; utilisé par Inventory avant de laisser déplacer un POI (`POI_IN_USE`) |
 
@@ -340,7 +344,7 @@ Ce service est dédié à la partie missions du jeu ; les features ci-dessous so
 - [x] Missions event déclarées par le jeu ou une corporation (action `mission:event:manage`)
 - [x] **Complétion automatique** (`autoComplete`) — la mission se règle seule quand les objectifs requis sont faits
 - [x] **Objectifs bonus** (`isBonus` + `bonusReward`) hors gate/ratio, récompensés en plus sur complétion totale
-- [x] **Remise partielle proportionnelle** (`allowPartial` + `partial`) : crédits au prorata pondéré, items jamais payés, séquestre remboursé, assignation `partially_completed`
+- [x] **Remise partielle** (`partial`, toute mission) : crédits au prorata de la part faite moins `MISSION_PARTIAL_PENALTY`, items jamais payés, séquestre remboursé, assignations `partially_completed`, aperçu `turnIn`
 - [x] **Expiration** : TTL par défaut joueur/interne, `expiresInHours`, **deadline par assignation** (`assignmentDeadlineHours`), balayage intégré + notifications
 - [x] **Chaînage de scénarios** (`requiresMissionIds` : gate d'acceptation, anti-cycle à la création)
 - [x] **Annulation par le créateur** (`DELETE /api/missions/:missionId`)

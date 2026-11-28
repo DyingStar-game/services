@@ -1957,6 +1957,9 @@ components:
           pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
         attempts:
           type: integer
+        reprices:
+          type: integer
+          description: Of its attempts, those whose untaken mission was cancelled to be offered at the current price (not failures)
         lastError:
           type:
           - string

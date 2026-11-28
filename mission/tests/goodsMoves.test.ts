@@ -44,7 +44,7 @@ vi.mock('../src/services/social.client.js', async (importOriginal) => ({
 
 const { db } = await import('../src/db/connection.js');
 const { missionAssignments } = await import('../src/db/schema/index.js');
-const { applyMove, usedBefore } = await import('../src/services/goodsMoves.service.js');
+const { applyMove, mainStep, pickUpDone, usedBefore } = await import('../src/services/goodsMoves.service.js');
 
 const PLAYER = '9a8b7c6d-5e4f-4a3b-b2c1-0d9e8f7a6b5c';
 const ROLES = 'mission:read,mission:write,mission:complete,mission:progress';
@@ -161,6 +161,100 @@ describe('warehouse deliveries', () => {
     expect((await objectiveOf(id)).currentProgress).toBe(20);
   });
 
+  describe('what a transport loaded', () => {
+    const transport = (state: Record<string, unknown>) => ({
+      type: 'transport' as const,
+      params: {
+        goodType: 'ore.gold',
+        deliverGoodType: 'ingot.gold',
+        source: { kind: 'poi', poiId: MINE_POI },
+        zone: { kind: 'poi', poiId: FACTORY_POI },
+        via: 'warehouse',
+      },
+      state,
+      targetQuantity: 240,
+    });
+    const load = (key: string, quantity: number) => ({
+      playerId: PLAYER,
+      goodType: 'ore.gold',
+      quantity,
+      direction: 'load' as const,
+      warehouseId: MINE_DEPOT,
+      key,
+    });
+    const drop = (key: string, quantity: number) => ({
+      playerId: PLAYER,
+      goodType: 'ingot.gold',
+      quantity,
+      direction: 'drop' as const,
+      warehouseId: FACTORY_DEPOT,
+      key,
+    });
+
+    it('adds up crate after crate, and sells nothing', () => {
+      const first = applyMove(transport({}), load('l1', 15), WAREHOUSES);
+      expect(first?.state.loaded).toBe(15); // one crate is not the pick-up
+      expect(first?.state.loadedAt).toBeDefined();
+      expect(first?.used).toBe(0);
+      const second = applyMove(transport(first!.state), load('l2', 30), WAREHOUSES);
+      expect(second?.state.loaded).toBe(45);
+      expect(second?.state.loadedAt).toBe(first?.state.loadedAt); // latched by the first load
+      expect(second?.used).toBe(0);
+      expect(second?.state.moveKeys).toEqual(['l1', 'l2']);
+      expect(second?.state.moveUsed).toEqual({ l1: 0, l2: 0 });
+    });
+
+    it('stops at the target, and forgets the loads past it', () => {
+      const nearly = applyMove(transport({}), load('l1', 230), WAREHOUSES);
+      const full = applyMove(transport(nearly!.state), load('l2', 15), WAREHOUSES);
+      expect(full?.state.loaded).toBe(240);
+      expect(applyMove(transport(full!.state), load('l3', 15), WAREHOUSES)).toBeNull();
+      expect(full?.state.moveKeys).toEqual(['l1', 'l2']);
+    });
+
+    it('counts a replayed load once', () => {
+      const once = applyMove(transport({}), load('l1', 15), WAREHOUSES);
+      expect(applyMove(transport(once!.state), load('l1', 15), WAREHOUSES)).toBeNull();
+      expect(usedBefore({ state: once!.state }, load('l1', 15))).toBe(0); // the replay counts nothing as delivered
+    });
+
+    it('lets a partial load be delivered', () => {
+      const loaded = applyMove(transport({}), load('l1', 15), WAREHOUSES);
+      const dropped = applyMove(transport(loaded!.state), drop('d1', 15), WAREHOUSES);
+      expect(dropped?.used).toBe(15);
+      expect(dropped?.state.delivered).toBe(15);
+      expect(dropped?.state.loaded).toBe(15);
+    });
+
+    it('goes on from a state loaded before the total was kept', () => {
+      const old = { loadedAt: '2026-11-27T10:00:00.000Z', delivered: 30, moveKeys: ['l0', 'd0'], moveUsed: { l0: 0, d0: 30 } };
+      const dropped = applyMove(transport(old), drop('d1', 15), WAREHOUSES);
+      expect(dropped?.state.delivered).toBe(45);
+      expect(dropped?.state.loaded).toBeUndefined();
+      const loaded = applyMove(transport(old), load('l1', 15), WAREHOUSES);
+      expect(loaded?.state.loaded).toBe(15); // counted from this load on
+      expect(loaded?.state.loadedAt).toBe(old.loadedAt);
+      expect(loaded?.state.delivered).toBe(30);
+    });
+
+    it('is read by the client in the objective state', async () => {
+      const id = await createMission({
+        type: 'transport',
+        params: { goodType: 'ore.gold', source: { kind: 'poi', poiId: MINE_POI }, zone: { kind: 'poi', poiId: FACTORY_POI }, via: 'warehouse' },
+      });
+      const body = { playerId: PLAYER, goodType: 'ore.gold', quantity: 5, direction: 'load', warehouseId: MINE_DEPOT, key: 'load-replayed' };
+      expect((await call('/missions/goods-moves', 'POST', body)).body.counted).toBe(0);
+      expect((await call('/missions/goods-moves', 'POST', body)).body.counted).toBe(0);
+      expect((await objectiveOf(id)).state.loaded).toBe(5); // the replay added nothing
+      await move('load', 'ore.gold', MINE_DEPOT, 10);
+      expect((await objectiveOf(id)).state.loaded).toBe(15);
+      await move('drop', 'ore.gold', FACTORY_DEPOT, 15);
+      expect((await objectiveOf(id)).currentProgress).toBe(15);
+      await move('load', 'ore.gold', MINE_DEPOT, 20);
+      expect((await objectiveOf(id)).state.loaded).toBe(20); // the target of this mission
+    });
+  });
+
   it('a retried move counts once', () => {
     const objective = {
       type: 'deliver_material' as const,
@@ -227,15 +321,19 @@ describe('warehouse deliveries', () => {
   });
 });
 
+/** The notification types the player was sent, in order. */
+function notified(): string[] {
+  return social.notifyPlayer.mock.calls.map((args) => (args[1] as { type: string }).type);
+}
+
 describe('turn-in', () => {
-  it('a move that does not finish the mission tells its assignees of the progress', async () => {
+  it('a move that completes no step refreshes its assignees silently', async () => {
     await createMission({
       type: 'deliver_material',
       params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' },
     });
     await move('drop', 'ore.gold', MINE_DEPOT, 5);
-    expect(social.notifyPlayer).toHaveBeenCalledWith(PLAYER, expect.objectContaining({ type: 'mission.progress' }));
-    expect(social.notifyPlayer).not.toHaveBeenCalledWith(PLAYER, expect.objectContaining({ type: 'mission.ready' }));
+    expect(notified()).toEqual(['mission.updated']);
   });
 
   it('a finished mission that does not auto-complete waits, pays nothing, and refuses the player', async () => {
@@ -259,5 +357,74 @@ describe('turn-in', () => {
     const turnedIn = await call(`/missions/${id}/complete`, 'POST', { playerId: PLAYER });
     expect(turnedIn.status).toBe(200);
     expect(economy.creditHolder).toHaveBeenCalled();
+  });
+});
+
+describe('notifications at steps', () => {
+  const transportParams = {
+    goodType: 'ore.gold',
+    source: { kind: 'poi', poiId: MINE_POI },
+    zone: { kind: 'poi', poiId: FACTORY_POI },
+    via: 'warehouse',
+  };
+
+  it('a transport tells of its pick-up once everything is loaded, then of nothing until it is done', async () => {
+    await createMission({ type: 'transport', params: transportParams });
+    await move('load', 'ore.gold', MINE_DEPOT, 5);
+    await move('load', 'ore.gold', MINE_DEPOT, 10);
+    expect(notified()).toEqual(['mission.updated', 'mission.updated']);
+    await move('load', 'ore.gold', MINE_DEPOT, 5);
+    expect(social.notifyPlayer).toHaveBeenLastCalledWith(
+      PLAYER,
+      expect.objectContaining({ type: 'mission.progress', data: expect.objectContaining({ step: 'loaded' }) }),
+    );
+    social.notifyPlayer.mockClear();
+    await move('drop', 'ore.gold', FACTORY_DEPOT, 10);
+    expect(notified()).toEqual(['mission.updated']);
+    await move('drop', 'ore.gold', FACTORY_DEPOT, 10);
+    expect(notified()).toEqual(['mission.updated', 'mission.ready']); // the last step: ready, not progress
+  });
+
+  it('a delivery completing one objective of several tells of that step', async () => {
+    const { body } = await call('/missions', 'POST', {
+      title: 'Two runs',
+      category: 'transport',
+      autoComplete: false,
+      objectives: [
+        { title: 'Gold', type: 'deliver_material', targetQuantity: 20, params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' } },
+        { title: 'Iron', type: 'deliver_material', targetQuantity: 20, params: { goodType: 'ore.iron', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' } },
+      ],
+      rewards: [{ type: 'credits', amount: 500 }],
+    });
+    await call(`/missions/${body.mission.id}/assign`, 'POST', { playerId: PLAYER, holderType: 'npc' });
+    await move('drop', 'ore.gold', MINE_DEPOT, 20);
+    expect(social.notifyPlayer).toHaveBeenCalledTimes(1);
+    expect(social.notifyPlayer).toHaveBeenCalledWith(
+      PLAYER,
+      expect.objectContaining({ type: 'mission.progress', data: expect.objectContaining({ step: 'delivered' }) }),
+    );
+  });
+
+  it('an auto-completed mission tells of its completion only', async () => {
+    await createMission(
+      { type: 'deliver_material', params: { goodType: 'ore.gold', zone: { kind: 'poi', poiId: MINE_POI }, via: 'warehouse' } },
+      true,
+    );
+    await move('drop', 'ore.gold', MINE_DEPOT, 20);
+    expect(notified()).toEqual(['mission.completed']);
+  });
+
+  it('a pick-up is done when everything is loaded, or at the first load counted before the total was kept', () => {
+    expect(pickUpDone({ state: {}, targetQuantity: 20 })).toBe(false);
+    expect(pickUpDone({ state: { loadedAt: 'x', loaded: 15 }, targetQuantity: 20 })).toBe(false);
+    expect(pickUpDone({ state: { loadedAt: 'x', loaded: 20 }, targetQuantity: 20 })).toBe(true);
+    expect(pickUpDone({ state: { loadedAt: 'x' }, targetQuantity: 20 })).toBe(true);
+  });
+
+  it('a delivery says more than a pick-up', () => {
+    expect(mainStep(new Set(['loaded', 'delivered']))).toBe('delivered');
+    expect(mainStep(new Set(['loaded']))).toBe('loaded');
+    expect(mainStep(new Set())).toBeNull();
+    expect(mainStep(undefined)).toBeNull();
   });
 });

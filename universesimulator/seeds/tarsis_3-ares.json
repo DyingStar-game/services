@@ -10,17 +10,17 @@
       "ore"
     ],
     "initialTreasury": 5000000,
-    "treasuryFloor": 200000,
-    "mintBatch": 1000000,
+    "treasuryFloor": 2000000,
+    "mintBatch": 10000000,
     "mintCeiling": 1000000000,
     "elasticity": 0.8,
     "priceMinFactor": 0.25,
     "priceMaxFactor": 2.0,
     "spread": 0.1,
-    "freightRatePerTkm": 25.0,
+    "freightRatePerTkm": 250.0,
     "urgencyMax": 1.0,
     "minerShare": 0.6,
-    "legBaseReward": 200
+    "legBaseReward": 2000
   },
   "resources": [
     {

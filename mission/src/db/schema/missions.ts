@@ -200,8 +200,8 @@ export const missions = pgTable(
      */
     autoComplete: boolean('auto_complete').notNull().default(true),
     /**
-     * Whether an assignee may hand in a partial mission: paid proportionally to the
-     * weighted progress of the required objectives (items are never paid on a partial).
+     * Kept for the missions created with it, no longer read: every mission accepts a partial
+     * turn-in, paid for the share done less `MISSION_PARTIAL_PENALTY` (items never).
      */
     allowPartial: boolean('allow_partial').notNull().default(false),
     /**

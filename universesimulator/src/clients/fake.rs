@@ -298,7 +298,7 @@ impl MissionClient for FakeWorld {
             }
             let id = Uuid::new_v4();
             s.missions.insert(id, FakeMission { mission: mission.clone(), status: "available".into() });
-            Ok(MissionSummary { id, status: "available".into(), script_id: Some(mission.script_id.clone()), created_at: None })
+            Ok(MissionSummary { id, status: "available".into(), script_id: Some(mission.script_id.clone()), created_at: None, rewards: mission.rewards.clone().into(), completion_bp: None })
         })
     }
 
@@ -307,7 +307,14 @@ impl MissionClient for FakeWorld {
             s.missions
                 .iter()
                 .filter(|(_, m)| m.mission.issuer_type == issuer_type && m.mission.issuer_id == issuer_id && m.status == status)
-                .map(|(id, m)| MissionSummary { id: *id, status: m.status.clone(), script_id: Some(m.mission.script_id.clone()), created_at: None })
+                .map(|(id, m)| MissionSummary {
+                    id: *id,
+                    status: m.status.clone(),
+                    script_id: Some(m.mission.script_id.clone()),
+                    created_at: None,
+                    rewards: m.mission.rewards.clone().into(),
+                    completion_bp: None,
+                })
                 .collect()
         }))
     }

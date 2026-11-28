@@ -11,6 +11,12 @@ function int(name: string, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }
 
+/** A fraction in [0, 1] (a malformed or out-of-range value falls back, rather than paying a negative). */
+function fraction(name: string, fallback: number): number {
+  const value = int(name, fallback);
+  return value >= 0 && value <= 1 ? value : fallback;
+}
+
 function bool(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -79,6 +85,13 @@ export const env = {
   mission: {
     /** Pay economic rewards automatically on completion. */
     rewardAutoSettle: bool('MISSION_REWARD_AUTO_SETTLE', true),
+    /**
+     * What a partial turn-in loses of what it would pay, as a fraction (0.25 = a quarter): a mission
+     * turned in at 60 % pays 60 % × 0.75 of its reward. Without it, stopping early would cost
+     * nothing, and every mission would be turned in at its first crate. A full completion is never
+     * penalised.
+     */
+    partialPenalty: fraction('MISSION_PARTIAL_PENALTY', 0.25),
     /** Default lifetime of an internal mission, in hours (0 = never expires). */
     defaultTtlHours: int('MISSION_DEFAULT_TTL_HOURS', 0),
     /**

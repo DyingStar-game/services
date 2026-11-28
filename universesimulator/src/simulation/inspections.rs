@@ -17,9 +17,10 @@ use uuid::Uuid;
 
 use super::publisher::{find_by_script, giver_of, village_poi, zones_of};
 use super::TickReport;
-use crate::clients::{NewMission, NewPoi, INSUFFICIENT_FUNDS_CODES};
+use crate::clients::{MissionSummary, NewMission, NewPoi, INSUFFICIENT_FUNDS_CODES};
 use crate::db::{catalog::Federation, inspections::{self, Site}, world::{self, Village}};
 use crate::error::Result;
+use crate::pricing;
 use crate::state::AppState;
 
 /// Sites around a village.
@@ -95,9 +96,10 @@ pub fn reward(distance_m: f64) -> i64 {
     REWARD_FLOOR + (REWARD_PER_KM * distance_m / 1000.0).round().max(0.0) as i64
 }
 
-/// Closes the inspections that ended, makes the sites of new villages, and opens missions for every
-/// village that has fewer than OPEN_PER_VILLAGE. Returns `true` when the treasury could not pay an escrow.
-pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Result<bool> {
+/// Closes the inspections that ended or are offered at an outdated reward ([offered]: the federation's
+/// `available` missions), makes the sites of new villages, and opens missions for every village that has
+/// fewer than OPEN_PER_VILLAGE. Returns `true` when the treasury could not pay an escrow.
+pub async fn run(st: &AppState, fed: &Federation, offered: &[MissionSummary], report: &mut TickReport) -> Result<bool> {
     let villages: Vec<(Village, [f64; 3])> = world::active_villages(&st.pool, fed.id)
         .await?
         .into_iter()
@@ -120,6 +122,7 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
         sites = inspections::list(&st.pool, fed.id).await?;
     }
     cancel_unlaid(st, &sites).await?;
+    report.missions_repriced += cancel_outdated(st, &sites, offered).await?;
     // A site just inspected goes to the back of its village's: read them again, in their new order.
     if close_ended(st, fed, &sites).await? {
         sites = inspections::list(&st.pool, fed.id).await?;
@@ -163,6 +166,34 @@ async fn cancel_unlaid(st: &AppState, sites: &[Site]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Cancels the missions nobody has taken yet ([offered]) that pay another amount than reward() gives
+/// now: a reward is frozen at publication, and an untaken inspection stayed open at its old price beside
+/// new ones (2 804 credits for 30 km, 15 743 for 36 km). The reward moves only with its formula, so any
+/// difference counts. The site is freed when the cancelled mission is read (close_ended) and published
+/// again at the current price in the same tick. Returns how many were cancelled.
+async fn cancel_outdated(st: &AppState, sites: &[Site], offered: &[MissionSummary]) -> Result<usize> {
+    let mut cancelled = 0;
+    for m in offered {
+        let Some(site) = sites.iter().find(|s| s.mission_id == Some(m.id)) else { continue };
+        let Some(published) = m.credits() else { continue };
+        let current = reward(site.distance_m);
+        if !pricing::needs_repricing(published, current, 0.0) {
+            continue;
+        }
+        match st.clients.mission.cancel(m.id).await {
+            // 409: already over on the mission's side.
+            Err(e) if e.upstream_status() == Some(409) => {}
+            Err(e) => return Err(e),
+            // The mission service refunds its escrow to the treasury, as for any cancellation.
+            Ok(()) => {
+                cancelled += 1;
+                info!(site = %site.name, published, current, "inspection repriced");
+            }
+        }
+    }
+    Ok(cancelled)
 }
 
 /// Frees the sites whose mission is completed, cancelled or expired. Returns whether any was.

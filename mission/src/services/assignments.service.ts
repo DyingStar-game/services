@@ -36,7 +36,7 @@ import {
   RATIO_FULL,
   bonusComponents,
   freezeShares,
-  settleAssignment,
+  payoutBp,
   settleMissionRewards,
   type SettlementResult,
 } from './rewards.service.js';
@@ -561,9 +561,10 @@ export interface CompleteMissionResult {
  *
  * Objective verification is re-checked here, so a reward is only ever paid once every
  * objective reports its target quantity. When `force` is false and objectives are
- * incomplete, the call is rejected — unless the caller asks for a `partial` hand-in, which
- * is allowed on missions with `allowPartial` and pays a proportional credits share (see
- * {@link completeMissionPartial}).
+ * incomplete, the call is rejected — unless the caller asks for a `partial` hand-in, open
+ * to every mission, which pays the share done less the partial penalty (see
+ * {@link completeMissionPartial}). A `partial` request on a mission that is in fact done
+ * is a full completion, paid in full.
  *
  * Multiplayer: every active assignee is completed at once and receives an equal share of
  * each reward component (frozen in `rewardShares`, so a retry settles the exact same
@@ -573,7 +574,7 @@ export interface CompleteMissionResult {
  * @param playerId - Player triggering the completion (must have an active assignment).
  * @param opts.force - Skip the objective check (game-server override).
  * @param opts.settle - Settle the rewards now (default true).
- * @param opts.partial - Hand in proportionally to the weighted progress of the required objectives.
+ * @param opts.partial - Hand in now, paid for the share of the required objectives done.
  * @returns The caller's assignment, all completed assignments, the mission and settlements.
  */
 export async function completeMission(
@@ -668,21 +669,21 @@ export async function completeMission(
 }
 
 /**
- * Hands a mission in proportionally to the weighted progress of its required objectives:
- * the caller's assignment becomes `partially_completed` (terminal), receives the
- * corresponding credits share and never receives any item. The mission is closed on the
- * spot (the payout is final) and the unpaid remainder of the escrow goes back to the
- * payer.
- *
- * Only one active assignee is allowed: their share is frozen against the whole mission
- * reward, so a second active assignee would be paid out of a pool already reduced by the
- * partial payout.
+ * Hands a mission in before it is done, for the share of its required objectives done
+ * ({@link requiredProgressBp}): open to every mission. Every active assignee's assignment
+ * becomes `partially_completed` (terminal) with that share frozen in `completionRatio`, and
+ * receives their equal split of the credits reward × share × (1 − penalty) ({@link payoutBp});
+ * no item, standing or bonus is ever paid against a partial. The mission is closed on the
+ * spot for all of them, as a full completion closes it: the progress is shared, so the
+ * mission cannot go on for one assignee once another has been paid for it. The unpaid
+ * remainder of the escrow goes back to the payer, as a cancelled mission's does.
  * @param mission - The mission.
  * @param assignment - The caller's active assignment.
  * @param objectives - Objectives as measured for this completion attempt.
  * @param opts.settle - Settle the rewards now (default true).
- * @returns The result, with the partially completed assignment and its settlement.
- * @throws 409 `PARTIAL_NOT_ALLOWED` / `PARTIAL_NO_PROGRESS` / `PARTIAL_MULTIPLAYER`.
+ * @returns The result, with the partially completed assignments and their settlements.
+ * @throws 409 `PARTIAL_NO_PROGRESS` when nothing is done yet (an all-or-nothing objective
+ *   counts only once completed, so a mission of those has nothing to hand in partially).
  */
 async function completeMissionPartial(
   mission: Mission,
@@ -690,9 +691,6 @@ async function completeMissionPartial(
   objectives: MissionObjective[],
   opts: { settle?: boolean } = {},
 ): Promise<CompleteMissionResult> {
-  if (!mission.allowPartial) {
-    throw new HttpError(409, 'PARTIAL_NOT_ALLOWED', 'This mission does not accept a partial hand-in');
-  }
   const ratioBp = requiredProgressBp(objectives);
   if (ratioBp <= 0) {
     throw new HttpError(409, 'PARTIAL_NO_PROGRESS', 'None of the required objectives has any progress yet');
@@ -701,59 +699,132 @@ async function completeMissionPartial(
     .select()
     .from(missionAssignments)
     .where(and(eq(missionAssignments.missionId, mission.id), eq(missionAssignments.status, 'active')));
-  if (participants.length > 1) {
-    throw new HttpError(
-      409,
-      'PARTIAL_MULTIPLAYER',
-      'A partial hand-in requires you to be the only assignee still working on this mission',
-    );
-  }
-
-  const shares = freezeShares(mission, assignment, participants, { ratioBp });
-  const creditsShare = shares.find((component) => component.type === 'credits');
+  const sharesByAssignment = new Map(
+    participants.map((participant) => [participant.id, freezeShares(mission, participant, participants, { ratioBp })]),
+  );
   const now = new Date();
 
-  const { assignment: partial, mission: updatedMission } = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .update(missionAssignments)
-      .set({
-        status: 'partially_completed',
-        completedAt: now,
-        completionRatio: ratioBp,
-        rewardShares: shares,
-        rewardAmount: creditsShare?.type === 'credits' ? creditsShare.amount : null,
-        updatedAt: now,
-      })
-      .where(and(eq(missionAssignments.id, assignment.id), eq(missionAssignments.status, 'active')))
-      .returning();
-    if (!row) {
-      // Another completion won the race: nothing was paid.
-      throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', 'Assignment is no longer active');
+  const { assignments: partials, mission: updatedMission } = await db.transaction(async (tx) => {
+    const done: MissionAssignment[] = [];
+    for (const participant of participants) {
+      const shares = sharesByAssignment.get(participant.id) ?? [];
+      const creditsShare = shares.find((component) => component.type === 'credits');
+      const [row] = await tx
+        .update(missionAssignments)
+        .set({
+          status: 'partially_completed',
+          completedAt: now,
+          completionRatio: ratioBp,
+          rewardShares: shares,
+          rewardAmount: creditsShare?.type === 'credits' ? creditsShare.amount : null,
+          updatedAt: now,
+        })
+        .where(and(eq(missionAssignments.id, participant.id), eq(missionAssignments.status, 'active')))
+        .returning();
+      if (!row) {
+        // Another completion won the race: the transaction rolls back, nothing was paid.
+        throw new HttpError(409, 'ASSIGNMENT_NOT_ACTIVE', 'Assignment is no longer active');
+      }
+      done.push(row);
     }
     const [missionRow] = await tx
       .update(missions)
       .set({ status: 'completed', updatedAt: now })
       .where(eq(missions.id, mission.id))
       .returning();
-    return { assignment: row, mission: missionRow };
+    return { assignments: done, mission: missionRow };
   });
 
+  const caller = partials.find((a) => a.id === assignment.id) ?? assignment;
   if (opts.settle === false) {
-    return { assignment: partial, assignments: [partial], mission: updatedMission };
+    return { assignment: caller, assignments: partials, mission: updatedMission };
   }
-  const settlement = await settleAssignment(updatedMission, partial);
-  // Nothing else can be completed on this mission: give the payer what is left.
-  await refundEscrow(updatedMission);
-  await notifyMissionEvent(partial.playerId, {
-    type: 'mission.partially_completed',
-    data: { missionId: mission.id, assignmentId: partial.id, ratioBp },
-  });
+  const settlements = await settleMissionRewards(updatedMission);
+  // Nothing else can be completed on this mission: give the payer what is left — once every
+  // share is paid, or the refund would count an unpaid share as left over (the internal
+  // settle route refunds it after paying the rest).
+  if (settlements.every((s) => s.settled)) await refundEscrow(updatedMission);
+  const settlement = settlements.find((s) => s.assignment.id === caller.id);
+  const paid = payoutBp(ratioBp);
+  await Promise.all(
+    partials.map((participant) =>
+      notifyMissionEvent(participant.playerId, {
+        type: 'mission.partially_completed',
+        data: {
+          missionId: mission.id,
+          assignmentId: participant.id,
+          title: mission.title,
+          ratioBp,
+          payoutBp: paid,
+          amount: participant.rewardAmount ?? 0,
+        },
+      }),
+    ),
+  );
   return {
-    assignment: settlement.assignment,
-    assignments: [partial],
+    assignment: settlement?.assignment ?? caller,
+    assignments: partials,
     mission: updatedMission,
     settlement,
-    settlements: [settlement],
+    settlements,
+  };
+}
+
+/** What turning a mission in now would pay its caller: the preview the turn-in screens show. */
+export interface TurnInPreview {
+  /** Share of the required objectives done, in basis points (10000 = every one). */
+  shareBp: number;
+  /** Every required objective is done: the turn-in is a full completion, paid in full. */
+  full: boolean;
+  /**
+   * A partial turn-in is possible now: something is done, not everything. False on a mission
+   * of all-or-nothing objectives none of which is done (nothing to hand in).
+   */
+  partial: boolean;
+  /** What a partial turn-in takes off its pay, in basis points (2500 = a quarter). */
+  penaltyBp: number;
+  /** What the turn-in pays of the reward, in basis points (penalty included). */
+  payoutBp: number;
+  /** The credits it would pay the caller (their split of a shared mission), 0 when none. */
+  amount: number;
+  currency: string | null;
+}
+
+/**
+ * What turning [mission] in now would pay [assignment]'s holder, from the objectives as last
+ * measured — the same rules as {@link completeMission} (the split between the active
+ * assignees, the bonuses of a full completion, the partial penalty), so the screen shows the
+ * service's number. The turn-in measures again before paying: a delivery made meanwhile can
+ * only raise it.
+ * @param mission - The mission.
+ * @param assignment - The caller's active assignment.
+ * @param objectives - The mission's objectives.
+ * @param participants - Every active assignee of the mission.
+ * @returns The preview.
+ */
+export function turnInPreview(
+  mission: Mission,
+  assignment: MissionAssignment,
+  objectives: MissionObjective[],
+  participants: MissionAssignment[],
+): TurnInPreview {
+  const full = allRequiredObjectivesCompleted(objectives);
+  const shareBp = full ? RATIO_FULL : requiredProgressBp(objectives);
+  const sharers = participants.some((p) => p.id === assignment.id) ? participants : [...participants, assignment];
+  const shares = freezeShares(mission, assignment, sharers, {
+    ratioBp: shareBp,
+    bonusComponents: full ? bonusComponents(objectives) : [],
+  });
+  const credits = shares.find((component) => component.type === 'credits');
+  const reward = (mission.rewards ?? []).find((component) => component.type === 'credits');
+  return {
+    shareBp,
+    full,
+    partial: !full && shareBp > 0,
+    penaltyBp: Math.round(env.mission.partialPenalty * RATIO_FULL),
+    payoutBp: payoutBp(shareBp),
+    amount: credits?.type === 'credits' ? credits.amount : 0,
+    currency: reward?.type === 'credits' ? reward.currency : null,
   };
 }
 

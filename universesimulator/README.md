@@ -46,7 +46,9 @@ Every `SIM_TICK_SECONDS` (one replica at a time, PostgreSQL advisory lock), per 
    is ordered in the nearest village holding a source;
 6. publish pending legs: inventory hold on the origin, reward priced from distance, cargo value
    and urgency, mission created in the mission service, issued and **escrowed by the
-   federation** (`scriptId = usim:leg:<leg>:<attempt>`);
+   federation** (`scriptId = usim:leg:<leg>:<attempt>`). Before that, a mission nobody has taken
+   whose reward is more than 10 % away from its current price is cancelled and published again
+   (inspections: any difference; ADR 0021);
 7. treasury: mint `mintBatch` when an escrow was refused or the treasury is below its floor;
 8. snapshot stocks into the history.
 
@@ -142,6 +144,14 @@ kubectl -n <namespace> exec deploy/service-universesimulator -- ./universesimula
 service account) and exit.
 
 ### An environment whose seed changed
+
+The federation's own settings (`legBaseReward`, `freightRatePerTkm`, `treasuryFloor`, `mintBatch`...)
+and the resources are written over by every import. But the tick replays the world file the database
+kept at the last import, not the one of the image: a new image alone changes nothing. Import the seed
+again (`import seeds/tarsis_3-ares.json` above, or `POST /api/admin/import`), then tick. A reward is
+fixed when its mission is published: the missions already taken keep theirs; those nobody has taken
+are cancelled and published again at the new price by the next tick, when it differs by more than
+10 % (ADR 0021).
 
 An import never changes what a village already has: its policies, flows, mineral sources and
 capacities are inserted only when missing (ADR 0015). An environment imported before a change of the

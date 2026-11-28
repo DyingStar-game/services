@@ -13,8 +13,9 @@ pub struct Params {
     pub leg_base_reward: i64,
 }
 
-/// Share of the cargo value added to a transport reward.
-const CARGO_VALUE_SHARE: f64 = 0.05;
+/// Share of the cargo value added to a transport reward. A tenth of this until 2026-11-28: on a short
+/// haul the cargo is most of the reward, so the trip's own rates alone could not make hauling pay.
+const CARGO_VALUE_SHARE: f64 = 0.5;
 /// Demand horizon, in game hours of consumption.
 pub const DEMAND_HORIZON_H: f64 = 24.0;
 
@@ -59,6 +60,21 @@ pub fn transport_reward(p: &Params, quantity: i64, mass_per_unit_kg: f64, distan
 /// Reward of a mining mission, in currency minor units.
 pub fn mining_reward(p: &Params, quantity: i64, unit_price: f64, urgency: f64) -> i64 {
     (quantity as f64 * unit_price * p.miner_share * urgency).round().max(1.0) as i64
+}
+
+/// Share by which a hauling or mining reward may drift from its published amount before the mission is
+/// offered again. The price index and the urgency are read again every tick: below its threshold a
+/// destination draining 4 units an hour against a threshold of 40 (seed) moves its urgency, and the
+/// reward, by about 10 % an hour -- nearly 1 % a tick. A tolerance of 1 % would cancel such a mission
+/// almost every tick; 10 % at most about once an hour, and still catches a change of formula (rewards
+/// several times higher on 2026-11-28).
+pub const REPRICE_TOLERANCE: f64 = 0.10;
+
+/// Whether a mission offered at [offered] should be cancelled and offered again at [current]: they
+/// differ by more than [tolerance] (a share of [current]; 0 for a price that only a change of formula
+/// moves).
+pub fn needs_repricing(offered: i64, current: i64, tolerance: f64) -> bool {
+    (offered - current).abs() as f64 > tolerance * current.abs().max(1) as f64
 }
 
 #[cfg(test)]
@@ -115,15 +131,29 @@ mod tests {
 
     #[test]
     fn transport_reward_grows_with_distance() {
-        // 1000 units × 1 kg = 1 t over 10 km at 2/tkm = 20; cargo 1000×10×0.05 = 500; base 50.
-        assert_eq!(transport_reward(&P, 1000, 1.0, 10_000.0, 10.0, 1.0), 570);
-        assert!(transport_reward(&P, 1000, 1.0, 50_000.0, 10.0, 1.0) > 570);
-        assert_eq!(transport_reward(&P, 1000, 1.0, 10_000.0, 10.0, 2.0), 1140);
+        // 1000 units × 1 kg = 1 t over 10 km at 2/tkm = 20; cargo 1000×10×0.5 = 5000; base 50.
+        assert_eq!(transport_reward(&P, 1000, 1.0, 10_000.0, 10.0, 1.0), 5070);
+        assert!(transport_reward(&P, 1000, 1.0, 50_000.0, 10.0, 1.0) > 5070);
+        assert_eq!(transport_reward(&P, 1000, 1.0, 10_000.0, 10.0, 2.0), 10140);
     }
 
     #[test]
     fn mining_reward_uses_miner_share() {
         assert_eq!(mining_reward(&P, 100, 10.0, 1.0), 500);
         assert_eq!(mining_reward(&P, 0, 10.0, 1.0), 1);
+    }
+
+    #[test]
+    fn a_mission_is_repriced_only_past_the_tolerance() {
+        // The inspection of the playtest database: published at 2 804, worth 15 743 now.
+        assert!(needs_repricing(2_804, 15_743, 0.0));
+        assert!(!needs_repricing(15_743, 15_743, 0.0));
+        assert!(needs_repricing(15_742, 15_743, 0.0), "no tolerance: any difference");
+        // A tick's drift of the market stays offered; a change of formula does not, either way.
+        assert!(!needs_repricing(10_000, 10_090, REPRICE_TOLERANCE));
+        assert!(!needs_repricing(10_000, 9_100, REPRICE_TOLERANCE));
+        assert!(needs_repricing(10_000, 11_200, REPRICE_TOLERANCE));
+        assert!(needs_repricing(10_000, 8_800, REPRICE_TOLERANCE));
+        assert!(needs_repricing(0, 1, 0.0));
     }
 }

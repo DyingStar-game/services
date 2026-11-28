@@ -15,7 +15,9 @@ import {
   completeMission,
   getAssignment,
   listAssignmentsForMission,
+  turnInPreview,
   verifyPlayerObjectives,
+  type TurnInPreview,
 } from '../services/assignments.service.js';
 import {
   cancelPlayerMission,
@@ -149,13 +151,17 @@ missionsRoutes.get(
     const assignment = await getAssignment(req.params.missionId, player.id);
     // A participant sees who else takes part (a shared mission): their names, best-effort.
     let participants: { playerId: string; name: string | null }[] = [];
+    // What turning it in now would pay them (full or partial): the service's number, which the
+    // turn-in screens show rather than compute.
+    let turnIn: TurnInPreview | null = null;
     if (assignment?.status === 'active') {
       const active = (await listAssignmentsForMission(req.params.missionId)).filter((a) => a.status === 'active');
       const names = await resolvePlayerNames(active.map((a) => a.playerId));
       participants = active.map((a) => ({ playerId: a.playerId, name: names[a.playerId] ?? null }));
+      turnIn = turnInPreview(result.mission, assignment, result.objectives, active);
     }
     const [mission] = await withPoiNames([result.mission]);
-    res.json({ ...result, mission, assignment, participants });
+    res.json({ ...result, mission, assignment, participants, turnIn });
   }),
 );
 

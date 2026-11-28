@@ -29,7 +29,7 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
         for m in st.clients.mission.list("politics", fed.political_entity_id, status, oldest).await? {
             let Some(leg) = published.get(&m.id) else { continue };
             let result = match status {
-                "completed" => complete(st, leg).await.map(|_| report.legs_completed += 1),
+                "completed" => complete(st, leg, m.completion()).await.map(|_| report.legs_completed += 1),
                 _ => retry_or_fail(st, leg, status, report).await,
             };
             if let Err(e) = result {
@@ -41,7 +41,9 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
     Ok(())
 }
 
-async fn complete(st: &AppState, leg: &Leg) -> Result<()> {
+/// Closes [leg], whose mission was done in the share [done] (0..1: a partial turn-in completes a
+/// mission too). The source is drawn down by what was carried, not by the whole leg.
+async fn complete(st: &AppState, leg: &Leg, done: f64) -> Result<()> {
     let order = orders::get_order(&st.pool, leg.order_id).await?.ok_or_else(|| AppError::NotFound("order".into()))?;
     if let (Some(hold), Some(to)) = (leg.hold_id, leg.to_warehouse_id) {
         match st.clients.inventory.consume_hold(hold, Holder::warehouse(to)).await {
@@ -67,7 +69,7 @@ async fn complete(st: &AppState, leg: &Leg) -> Result<()> {
     };
     let mut tx = st.pool.begin().await?;
     if let Some((village, resource)) = mined {
-        world::consume_mineral_source(&mut tx, village, resource, leg.quantity).await?;
+        world::consume_mineral_source(&mut tx, village, resource, carried(leg.quantity, done)).await?;
     }
     orders::complete_leg(&mut tx, leg).await?;
     tx.commit().await?;
@@ -76,7 +78,9 @@ async fn complete(st: &AppState, leg: &Leg) -> Result<()> {
 }
 
 async fn retry_or_fail(st: &AppState, leg: &Leg, status: &str, report: &mut TickReport) -> Result<()> {
-    if leg.attempts + 1 < st.cfg.sim_leg_max_attempts {
+    // A mission cancelled only to follow the prices is no failure of the leg's.
+    let failures = leg.attempts - leg.reprices + 1;
+    if failures < st.cfg.sim_leg_max_attempts {
         orders::retry_leg(&st.pool, leg.id, &format!("mission {status}")).await?;
         report.legs_retried += 1;
         return Ok(());
@@ -84,7 +88,7 @@ async fn retry_or_fail(st: &AppState, leg: &Leg, status: &str, report: &mut Tick
     if let Some(hold) = leg.hold_id {
         st.clients.inventory.release_hold(hold).await?;
     }
-    orders::close_order(&st.pool, leg.order_id, "failed", Some(&format!("mission {status} {} times", leg.attempts + 1))).await?;
+    orders::close_order(&st.pool, leg.order_id, "failed", Some(&format!("mission {status} {failures} times"))).await?;
     report.orders_failed += 1;
     Ok(())
 }
@@ -113,4 +117,21 @@ pub async fn cancel_order(st: &AppState, order_id: Uuid) -> Result<()> {
         }
     }
     orders::close_order(&st.pool, order_id, "cancelled", None).await
+}
+
+/// What a leg of [quantity] carried when its mission was done in the share [done]: rounded down, a
+/// partial turn-in never draws more than was delivered. Pure.
+pub fn carried(quantity: i64, done: f64) -> i64 {
+    ((quantity as f64) * done.clamp(0.0, 1.0)).floor() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_partial_turn_in_carries_its_share() {
+        assert_eq!(super::carried(240, 1.0), 240);
+        assert_eq!(super::carried(240, 0.75), 180);
+        assert_eq!(super::carried(240, 0.333), 79, "rounded down");
+        assert_eq!(super::carried(240, 1.5), 240);
+    }
 }

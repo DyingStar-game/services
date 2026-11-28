@@ -5,6 +5,8 @@
 //! taken off a shelf of the source warehouse, shelved in the destination's — and the mission counts
 //! those moves (`via: warehouse`). It is turned in at the town hall of the destination village.
 
+use std::collections::HashMap;
+
 use serde_json::{json, Value};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -23,9 +25,11 @@ pub fn script_id(leg: Uuid, attempt: i32) -> String {
     format!("usim:leg:{leg}:{attempt}")
 }
 
-/// Publishes the federation's pending and held legs. Returns `true` when the treasury could not
+/// Reprices the legs offered at an outdated reward ([offered]: the federation's `available` missions),
+/// then publishes the federation's pending and held legs. Returns `true` when the treasury could not
 /// pay an escrow (the treasury step then mints).
-pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Result<bool> {
+pub async fn run(st: &AppState, fed: &Federation, offered: &[MissionSummary], report: &mut TickReport) -> Result<bool> {
+    reprice(st, fed, offered, report).await?;
     let mut funds_short = false;
     for leg in orders::legs_by_status(&st.pool, fed.id, &["pending", "held"]).await? {
         match publish(st, fed, &leg).await {
@@ -42,6 +46,49 @@ pub async fn run(st: &AppState, fed: &Federation, report: &mut TickReport) -> Re
         }
     }
     Ok(funds_short)
+}
+
+/// Cancels the missions of published legs that nobody has taken yet (`available`: no active assignment)
+/// and whose credits are more than REPRICE_TOLERANCE away from what the leg would be published at now:
+/// a reward is frozen at publication, and an untaken mission would otherwise keep an old price for ever
+/// beside new ones. The leg goes back to `held` and the loop of `run` publishes it again, at the current
+/// price, in the same tick. A mission taken keeps its price: its players took it at that one.
+async fn reprice(st: &AppState, fed: &Federation, offered: &[MissionSummary], report: &mut TickReport) -> Result<()> {
+    let credits: HashMap<Uuid, i64> = offered.iter().filter_map(|m| Some((m.id, m.credits()?))).collect();
+    if credits.is_empty() {
+        return Ok(());
+    }
+    for leg in orders::legs_by_status(&st.pool, fed.id, &["published"]).await? {
+        let Some((mission, published)) = leg.mission_id.and_then(|m| Some((m, *credits.get(&m)?))) else { continue };
+        match reprice_leg(st, fed, &leg, mission, published).await {
+            Ok(true) => report.missions_repriced += 1,
+            Ok(false) => {}
+            Err(e) => report.error("reprice leg", e),
+        }
+    }
+    Ok(())
+}
+
+/// Cancels the mission of [leg], offered at [published] credits, when it is worth another price now;
+/// returns whether it was.
+async fn reprice_leg(st: &AppState, fed: &Federation, leg: &Leg, mission: Uuid, published: i64) -> Result<bool> {
+    let order = orders::get_order(&st.pool, leg.order_id).await?.ok_or_else(|| AppError::NotFound("order".into()))?;
+    let resource = catalog::get_resource(&st.pool, order.resource_id).await?.ok_or_else(|| AppError::NotFound("resource".into()))?;
+    let current = offered_reward(reward(st, fed, &order, leg, &resource).await?, leg, &resource);
+    if !pricing::needs_repricing(published, current, pricing::REPRICE_TOLERANCE) {
+        return Ok(false);
+    }
+    match st.clients.mission.cancel(mission).await {
+        // 409: completed meanwhile, the reconciler closes it.
+        Err(e) if e.upstream_status() == Some(409) => return Ok(false),
+        Err(e) => return Err(e),
+        // The mission service refunds its escrow to the treasury, as for any cancellation; the next
+        // publication escrows the new reward.
+        Ok(()) => {}
+    }
+    orders::reprice_leg(&st.pool, leg.id, mission).await?;
+    info!(order = %order.id, leg = leg.seq, mission = %mission, published, current, "leg repriced");
+    Ok(true)
 }
 
 /// Advances one leg; returns `true` when a mission was published.
@@ -448,7 +495,7 @@ pub fn build_mission(
     let pace = tiers::pace_of(tier, leg.id.as_u128());
     let work = if home { tiers::REFINING_HOURS } else { tiers::work_hours(order.kind.as_str(), refined) };
     let hours = tier.deadline_hours(pace, work);
-    let reward = (reward as f64 * tier.reward_share(pace)).round() as i64;
+    let reward = offered_reward(reward, leg, resource);
     let (tier_en, tier_fr) = tier.label(pace);
     let title = format!("{tier_en} · {title}");
     let title_fr = format!("{tier_fr} · {title_fr}");
@@ -471,6 +518,13 @@ pub fn build_mission(
         max_assignees: tier.max_assignees(),
         assignment_deadline_hours: Some(hours),
     }
+}
+
+/// What the mission of [leg] pays of the leg's [reward]: its tier's share at its pace (a relaxed team
+/// is paid less for its longer deadline).
+pub fn offered_reward(reward: i64, leg: &Leg, resource: &Resource) -> i64 {
+    let tier = Tier::of(leg.quantity, resource.truckload());
+    (reward as f64 * tier.reward_share(tiers::pace_of(tier, leg.id.as_u128()))).round() as i64
 }
 
 /// The giver of a federation's mission: its name as the game's faction slug ("ARES" -> `ares`) and the

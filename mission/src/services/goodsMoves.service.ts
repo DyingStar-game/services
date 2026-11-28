@@ -7,9 +7,10 @@
  * The warehouse is named by its inventory holder id (the cargo depot's uuid); an objective names
  * its warehouse by a POI whose `metadata.persistence` is that id (universesimulator creates them).
  * The running totals live in the objective's `state` (shared by every assignee, as objective
- * progress already is): `delivered` for drops, `loadedAt` latched by a load at a transport's
- * source. Each move is counted once per objective (`moveKeys`), and what it filled is kept
- * (`moveUsed`): a replayed move answers what it counted the first time.
+ * progress already is): `delivered` for drops; for the loads at a transport's source, `loadedAt`
+ * latched by the first one and `loaded`, how much they took in all. Each move is counted once per
+ * objective (`moveKeys`), and what it filled is kept (`moveUsed`): a replayed move answers what it
+ * counted the first time.
  */
 import { and, eq, inArray } from 'drizzle-orm';
 
@@ -39,7 +40,14 @@ const MAX_KEYS = 200;
 
 type ObjectiveState = {
   delivered?: number;
+  /** When the first load left the source warehouse: a transport counts its drops from then on. */
   loadedAt?: string;
+  /**
+   * What the loads took off the source warehouse in all, in the objective's unit, capped at its
+   * target: the pick-up is done when it reaches the target, not at the first crate. Absent on an
+   * objective loaded before it was kept (`loadedAt` alone): it then counts from its next load.
+   */
+  loaded?: number;
   moveKeys?: string[];
   /** What each remembered move filled of this objective (0 for a load). */
   moveUsed?: Record<string, number>;
@@ -59,9 +67,10 @@ interface WarehouseParams {
  * re-measures the missions it touched (which completes the ones that auto-complete).
  *
  * A dropped crate counts ONCE: it fills the objectives of the oldest assignment first, the rest
- * carried over to the next — never the same goods for two missions. A load latches every transport
- * it starts (it delivers nothing). The objectives are read and written in one transaction, locked,
- * so two crates shelved at the same moment cannot overwrite each other's count.
+ * carried over to the next — never the same goods for two missions. A load counts for every transport
+ * it serves (it delivers nothing, so nothing of it is shared out). The objectives are read and
+ * written in one transaction, locked, so two crates shelved at the same moment cannot overwrite each
+ * other's count.
  * @returns The objectives that took the move into account, and how much of it they counted (`counted`:
  *   what is left of a drop is the player's own sale, paid by the universe simulator). A replayed move
  *   (same key) answers the same `counted` and applies nothing again; `counted` is null when the
@@ -87,6 +96,10 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
   const touched = new Set<string>();
   /** Missions this move may have finished: one of their objectives was not completed before it. */
   const mayFinish = new Set<string>();
+  /** The steps this move completed, per mission (`loaded` is decided here, `delivered` once measured). */
+  const reached = new Map<string, Set<MissionStep>>();
+  /** The status each objective the move counted for had before it, to tell what it completed. */
+  const statusBefore = new Map<string, string>();
   await db.transaction(async (tx) => {
     const locked = await tx
       .select()
@@ -109,7 +122,11 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
       await tx.update(missionObjectives).set({ state: result.state, updatedAt: new Date() }).where(eq(missionObjectives.id, objective.id));
       applied.push(objective.id);
       touched.add(objective.missionId);
+      statusBefore.set(objective.id, objective.status);
       if (objective.status !== 'completed') mayFinish.add(objective.missionId);
+      if (objective.type === 'transport' && !pickUpDone(objective) && pickUpDone({ ...objective, state: result.state })) {
+        stepsOf(reached, objective.missionId).add('loaded');
+      }
       left -= result.used;
       counted += result.used;
       if (move.direction === 'drop' && left <= 0) break;
@@ -118,12 +135,23 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
   for (const missionId of touched) {
     try {
       const result = await verifyPlayerObjectives(missionId, move.playerId);
-      // Done but waiting for a town hall: say so once, when this move is the one that finished it.
-      // Otherwise the assignees hear of the progress: their DataPad reads the mission again.
-      if (result.allComplete && !result.completed && mayFinish.has(missionId)) {
-        await notifyAssignees(missionId, 'mission.ready');
-      } else if (!result.allComplete) {
-        await notifyAssignees(missionId, 'mission.progress');
+      for (const objective of result.objectives) {
+        const before = statusBefore.get(objective.id);
+        if (before !== undefined && before !== 'completed' && objective.status === 'completed') {
+          stepsOf(reached, missionId).add('delivered');
+        }
+      }
+      // The assignees hear of a step, not of every crate: a delivery of ten crates was ten toasts.
+      // Done but waiting for a town hall: said once, when this move is the one that finished it (an
+      // auto-completed mission says `mission.completed` itself). A step completed: said, with which.
+      // Anything else counted: their DataPad reads the mission again without a word.
+      const step = mainStep(reached.get(missionId));
+      if (result.allComplete) {
+        if (!result.completed && mayFinish.has(missionId)) await notifyAssignees(missionId, 'mission.ready');
+      } else if (step) {
+        await notifyAssignees(missionId, 'mission.progress', { step });
+      } else {
+        await notifyAssignees(missionId, 'mission.updated');
       }
     } catch {
       // A mission closed or expired meanwhile: the move is recorded, nothing to measure.
@@ -133,10 +161,15 @@ export async function recordGoodsMove(move: GoodsMove): Promise<{ applied: strin
 }
 
 /**
- * Tells every active assignee of [missionId]: `mission.ready` (to be turned in at a town hall) or
- * `mission.progress` (a goods move counted for it).
+ * Tells every active assignee of [missionId]: `mission.ready` (to be turned in at a town hall),
+ * `mission.progress` (a step of it completed, `extra.step`) or `mission.updated` (a goods move
+ * counted for it, which the game refreshes on without showing anything).
  */
-async function notifyAssignees(missionId: string, type: 'mission.ready' | 'mission.progress'): Promise<void> {
+async function notifyAssignees(
+  missionId: string,
+  type: 'mission.ready' | 'mission.progress' | 'mission.updated',
+  extra: Record<string, unknown> = {},
+): Promise<void> {
   const mission = await getMissionById(missionId);
   const assignees = await db
     .select({ playerId: missionAssignments.playerId })
@@ -144,9 +177,46 @@ async function notifyAssignees(missionId: string, type: 'mission.ready' | 'missi
     .where(and(eq(missionAssignments.missionId, missionId), eq(missionAssignments.status, ACTIVE_ASSIGNMENT_STATUS)));
   await Promise.all(
     assignees.map((a) =>
-      notifyMissionEvent(a.playerId, { type, data: { missionId, title: mission?.title ?? '' } }),
+      notifyMissionEvent(a.playerId, { type, data: { missionId, title: mission?.title ?? '', ...extra } }),
     ),
   );
+}
+
+/**
+ * A step of a warehouse mission its assignees are told of: a transport's goods all picked up at
+ * the source (`loaded`), an objective's goods all delivered (`delivered`). The refining between
+ * the two is not one: it happens at a refinery the mission service never hears from — its first
+ * sign is the refined goods' drop, which is the delivery.
+ */
+export type MissionStep = 'loaded' | 'delivered';
+
+/** The set of steps [missionId] reached, created on first use. */
+function stepsOf(reached: Map<string, Set<MissionStep>>, missionId: string): Set<MissionStep> {
+  let steps = reached.get(missionId);
+  if (!steps) {
+    steps = new Set();
+    reached.set(missionId, steps);
+  }
+  return steps;
+}
+
+/** The step to say when one move reached several (a delivery says more than a pick-up), or null. */
+export function mainStep(steps: ReadonlySet<MissionStep> | undefined): MissionStep | null {
+  if (steps?.has('delivered')) return 'delivered';
+  if (steps?.has('loaded')) return 'loaded';
+  return null;
+}
+
+/**
+ * Whether a transport's pick-up is done: everything taken off the source warehouse (`loaded`
+ * reaching the target). An objective loaded before `loaded` was kept has only `loadedAt`: its
+ * pick-up counts as done at that first load, as the game ticked it then. Pure: exported for the
+ * tests.
+ */
+export function pickUpDone(objective: Pick<MissionObjective, 'state' | 'targetQuantity'>): boolean {
+  const state = (objective.state ?? {}) as ObjectiveState;
+  if (typeof state.loaded === 'number') return state.loaded >= objective.targetQuantity;
+  return Boolean(state.loadedAt);
 }
 
 /**
@@ -187,8 +257,14 @@ export function applyMove(
   } else if (objective.type === 'transport') {
     const sourceWarehouse = warehouseOf.get(params.source?.poiId ?? '');
     if (move.direction === 'load' && move.goodType === params.goodType && sourceWarehouse === move.warehouseId) {
-      if (state.loadedAt) return null;
-      state.loadedAt = new Date().toISOString();
+      // A load delivers nothing: `used` stays 0, so what a drop leaves to be sold is untouched. It only
+      // adds to what was picked up. Past the target there is nothing to add and the move is not
+      // remembered: it answers null on a replay too, and its key would push a drop's out of `moveKeys`.
+      const loaded = state.loaded ?? 0;
+      const taken = Math.min(move.quantity, Math.max(0, objective.targetQuantity - loaded));
+      if (taken <= 0) return null;
+      state.loaded = loaded + taken;
+      state.loadedAt ??= new Date().toISOString();
     } else if (
       move.direction === 'drop' &&
       state.loadedAt &&

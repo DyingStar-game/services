@@ -7,7 +7,7 @@
 # Pinned to a specific upstream release; bump together with the chart's
 # appVersion in ../../kubernetes/keycloak/Chart.yaml.
 
-ARG KEYCLOAK_VERSION=26.8.2
+ARG KEYCLOAK_VERSION=26.6
 
 # ── Download the Discord identity provider SPI ───────────────────────────────
 FROM curlimages/curl:8.11.1 AS download
