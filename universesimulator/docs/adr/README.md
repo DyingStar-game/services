@@ -37,3 +37,4 @@ with the same conventions as the admin panel (`adminpanel/docs/adr`).
 | [0018](./0018-one-job-per-mission.md) | One job per mission: deliveries and refinings of their own | Proposed | 2026-11-11 |
 | [0019](./0019-inspections.md) | Inspections: a mission that moves no goods | Proposed | 2026-11-11 |
 | [0020](./0020-breakdowns.md) | Breakdowns: ARES Machinery has a machine repaired | Proposed | 2026-11-11 |
+| [0021](./0021-offered-missions-follow-current-prices.md) | Offered missions follow the current prices | Proposed | 2026-11-28 |

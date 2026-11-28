@@ -16,6 +16,7 @@ import { languageMiddleware } from './middleware/language.js';
 import { apiRouter } from './routes/index.js';
 import { internalRoutes } from './routes/internal.routes.js';
 import { flushPlaytimeDeltas, startPlaytimeFlushScheduler } from './services/playtime.service.js';
+import { startGroupExpiryScheduler } from './services/groups.service.js';
 import { startRehabilitationScheduler } from './services/reputation.service.js';
 
 const app = express();
@@ -84,6 +85,9 @@ async function start(): Promise<void> {
 
   if (startRehabilitationScheduler()) {
     console.log(`Reputation rehabilitation pass every ${env.reputation.rehabIntervalMinutes} min`);
+  }
+  if (startGroupExpiryScheduler()) {
+    console.log(`Groups idle for ${env.groups.idleExpiryHours} h are disbanded (pass every ${env.groups.expiryIntervalMinutes} min)`);
   }
   if (startPlaytimeFlushScheduler()) {
     console.log(`Playtime flush every ${env.valkey.playtimeFlushIntervalMinutes} min`);

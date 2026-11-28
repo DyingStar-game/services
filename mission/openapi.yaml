@@ -348,6 +348,14 @@ paths:
                     oneOf:
                       - { $ref: '#/components/schemas/Assignment' }
                       - { type: 'null' }
+                  turnIn:
+                    description: >
+                      What turning the mission in now would pay the caller (null unless their
+                      assignment is active), from the objectives as last measured: the turn-in
+                      measures again before paying.
+                    oneOf:
+                      - { $ref: '#/components/schemas/TurnInPreview' }
+                      - { type: 'null' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -521,9 +529,14 @@ paths:
       summary: Complete the mission and settle every reward component
       description: >
         Re-measures the service objectives before paying. With `partial`, hands the
-        mission in proportionally to the weighted progress of its required objectives
-        (`allowPartial` missions only): the caller receives the matching credits share,
-        never any item, and the assignment becomes terminal.
+        mission in before it is done (any mission): every active assignee receives their
+        split of the credits reward × the share of the required objectives done × (1 −
+        `MISSION_PARTIAL_PENALTY`), never any item, standing or bonus; their assignments
+        become `partially_completed` (terminal), the mission is closed and the unpaid
+        remainder of the escrow goes back to its payer. An all-or-nothing objective (visit,
+        manual confirmation, passenger) counts only once completed: nothing done answers
+        409 `PARTIAL_NO_PROGRESS`. A `partial` request on a mission that is done is a full
+        completion, paid in full.
 
         A mission created with `autoComplete: false` is turned in at a town hall kiosk:
         the game server completes it (internal route) and this route answers 403
@@ -540,7 +553,7 @@ paths:
                 partial:
                   type: boolean
                   default: false
-                  description: Hand in proportionally (missions with `allowPartial` only)
+                  description: Hand in now, paid for the share done less the partial penalty (any mission)
       responses:
         '200':
           description: Completed assignment, mission and settlement outcome
@@ -1006,7 +1019,8 @@ paths:
         `deliver_material` and `transport` objectives created with `via: warehouse`: the
         objective's warehouse is the `metadata.persistence` of its zone (or source) POI. A
         transport counts its drops only after a load at its source, of `deliverGoodType`
-        (default `goodType`). Each `key` counts once per objective. The player's missions are
+        (default `goodType`); its loads add up in the objective's `state.loaded`, capped at its
+        target. Each `key` counts once per objective. The player's missions are
         then re-measured (auto-completing ones complete).
       requestBody:
         required: true
@@ -1139,7 +1153,7 @@ paths:
                 partial:
                   type: boolean
                   default: false
-                  description: Hand in proportionally (missions with `allowPartial` only)
+                  description: Hand in now, paid for the share done less the partial penalty (any mission)
       responses:
         '200':
           description: Completed assignments, mission and settlements
@@ -1596,9 +1610,10 @@ components:
             explicit `complete` call needed)
         allowPartial:
           type: boolean
+          deprecated: true
           description: >
-            Assignees may hand in a partial mission and are paid proportionally to the
-            weighted progress of the required objectives (items are never paid on a partial)
+            Kept for older callers, no longer read: every mission accepts a partial turn-in,
+            paid for the share done less `MISSION_PARTIAL_PENALTY` (items are never paid on a partial)
         requiresMissionIds:
           type: array
           description: Missions that must be fully completed before this one can be accepted
@@ -1645,9 +1660,21 @@ components:
           additionalProperties: true
           description: Kind-specific structured params (validated by the kind's params schema)
         payload: { type: [object, 'null'], additionalProperties: true, description: 'Free-form extras owned by the game server (script step, NPC id, …)' }
-        state: { type: [object, 'null'], additionalProperties: true, description: 'Service-owned internal state (latched facts like `pickedUpAt`). Written by the service during evaluation, not by the game.' }
+        state: { type: [object, 'null'], additionalProperties: true, description: 'Service-owned internal state (latched facts like `pickedUpAt`). Written by the service during evaluation, not by the game. A `via: warehouse` objective keeps `delivered` (quantity shelved in its warehouse) and, for a transport, `loadedAt` (date-time of the first load at its source) and `loaded` (quantity loaded there so far, in the objective''s unit, capped at `targetQuantity`; absent on an objective loaded before it was kept).' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+
+    TurnInPreview:
+      type: object
+      description: What turning a mission in now would pay its caller (the turn-in screens show it).
+      properties:
+        shareBp: { type: integer, description: Share of the required objectives done, in basis points (10000 = all) }
+        full: { type: boolean, description: Every required objective is done (a full completion, paid in full) }
+        partial: { type: boolean, description: A partial turn-in is possible now (something done, not everything) }
+        penaltyBp: { type: integer, description: What a partial turn-in takes off its pay, in basis points }
+        payoutBp: { type: integer, description: What the turn-in pays of the reward, in basis points (penalty included) }
+        amount: { type: integer, description: Credits it would pay the caller (their split of a shared mission) }
+        currency: { type: string, nullable: true }
 
     Assignment:
       type: object

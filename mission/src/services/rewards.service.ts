@@ -39,6 +39,19 @@ import { addStanding } from './social.client.js';
 export const RATIO_FULL = 10000;
 
 /**
+ * What a turn-in pays of the reward, in basis points: all of it for a full completion; for a
+ * partial one, the share done less the partial penalty (`MISSION_PARTIAL_PENALTY`), so stopping
+ * early always pays less than finishing.
+ * @param ratioBp - Share of the required objectives done, in basis points.
+ * @param penalty - Fraction taken off a partial payout (defaults to the configured one).
+ * @returns Integer in [0, 10000].
+ */
+export function payoutBp(ratioBp: number, penalty: number = env.mission.partialPenalty): number {
+  if (ratioBp >= RATIO_FULL) return RATIO_FULL;
+  return Math.max(0, Math.floor(ratioBp * (1 - penalty)));
+}
+
+/**
  * Extra reward components carried by the bonus objectives of a mission that are already
  * completed. Bonus rewards are only granted on a full hand-in (never on a partial one).
  * @param objectives - All objectives of the mission.
@@ -139,9 +152,9 @@ export function splitReward(total: number, participants: MissionAssignment[]): M
  * are not split (single assignee by validation); standing components are never split
  * either (each participant gets the full delta) and never granted on a partial hand-in.
  *
- * A partial hand-in (`ratioBp` < 10000) freezes a proportional credits share and no item
- * or standing component at all: goods are never paid against a partial completion, and
- * the bonus components of the mission are left out as well.
+ * A partial hand-in (`ratioBp` < 10000) freezes a proportional credits share, less the
+ * partial penalty ({@link payoutBp}), and no item or standing component at all: goods are
+ * never paid against a partial completion, and the bonus components are left out as well.
  * @param mission - The mission (its `rewards` components).
  * @param assignment - The assignee being completed.
  * @param participants - Every active assignee sharing the mission.
@@ -164,7 +177,7 @@ export function freezeShares(
     if (component.type === 'credits') {
       const shares = splitReward(component.amount, participants);
       const share = shares.get(assignment.id) ?? 0;
-      const amount = partial ? Math.floor((share * ratioBp) / RATIO_FULL) : share;
+      const amount = partial ? Math.floor((share * payoutBp(ratioBp)) / RATIO_FULL) : share;
       return amount > 0 ? [{ ...component, amount }] : [];
     }
     if (partial) return [];

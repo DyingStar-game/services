@@ -43,6 +43,8 @@ pub struct TickReport {
     pub legs_published: usize,
     pub inspections_published: usize,
     pub repairs_published: usize,
+    /// Untaken missions cancelled to be offered again at the current price (legs and inspections).
+    pub missions_repriced: usize,
     pub minted: i64,
     pub errors: Vec<String>,
 }
@@ -162,14 +164,23 @@ async fn run_locked(st: &AppState, force: bool) -> Result<TickReport> {
         if let Err(e) = planner::run(st, fed, &levels, &mut report).await {
             report.error("planner", e);
         }
-        let funds_short = match publisher::run(st, fed, &mut report).await {
+        // The missions on offer that nobody has taken (`available`), read once for the steps that
+        // reprice theirs. Unread, nothing is repriced this tick and publication goes on.
+        let offered = match st.clients.mission.list("politics", fed.political_entity_id, "available", None).await {
+            Ok(m) => m,
+            Err(e) => {
+                report.error("offered missions", e);
+                Vec::new()
+            }
+        };
+        let funds_short = match publisher::run(st, fed, &offered, &mut report).await {
             Ok(short) => short,
             Err(e) => {
                 report.error("publish", e);
                 false
             }
         };
-        let funds_short = match inspections::run(st, fed, &mut report).await {
+        let funds_short = match inspections::run(st, fed, &offered, &mut report).await {
             Ok(short) => funds_short || short,
             Err(e) => {
                 report.error("inspections", e);

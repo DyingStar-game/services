@@ -165,6 +165,34 @@ pub struct MissionSummary {
     pub script_id: Option<String>,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub created_at: Option<time::OffsetDateTime>,
+    /// Its reward components as published (`[{type: credits, currency, amount}, ...]`); null when the
+    /// mission has none or the answer does not carry them.
+    #[serde(default)]
+    pub rewards: serde_json::Value,
+    /// For a completed mission, how much of it was done in basis points (10 000 = all): a partial
+    /// turn-in completes the mission too. Absent from an older mission service: taken as all.
+    #[serde(default)]
+    pub completion_bp: Option<i64>,
+}
+
+impl MissionSummary {
+    /// The share of a completed mission that was done, between 0 and 1 (all when not said).
+    pub fn completion(&self) -> f64 {
+        self.completion_bp.map_or(1.0, |bp| (bp as f64 / 10_000.0).clamp(0.0, 1.0))
+    }
+
+    /// The credits the mission pays, None when it pays none (or its rewards were not given): offered
+    /// missions are compared on it with what they would be published at now.
+    pub fn credits(&self) -> Option<i64> {
+        let amounts: Vec<i64> = self
+            .rewards
+            .as_array()?
+            .iter()
+            .filter(|r| r["type"] == "credits")
+            .filter_map(|r| r["amount"].as_i64())
+            .collect();
+        (!amounts.is_empty()).then(|| amounts.iter().sum())
+    }
 }
 
 #[async_trait]
@@ -179,6 +207,33 @@ pub trait MissionClient: Send + Sync {
 /// Upstream error codes meaning the escrow payer cannot pay.
 pub const INSUFFICIENT_FUNDS_CODES: &[&str] =
     &["ESCROW_INSUFFICIENT_FUNDS", "INSUFFICIENT_FUNDS", "INSUFFICIENT_BALANCE"];
+
+#[cfg(test)]
+mod mission_tests {
+    use super::MissionSummary;
+
+    #[test]
+    fn a_listed_mission_says_the_credits_it_pays() {
+        let listed = |rewards: &str| -> MissionSummary {
+            serde_json::from_str(&format!(r#"{{"id": "00000000-0000-0000-0000-000000000001", "status": "available"{rewards}}}"#)).unwrap()
+        };
+        let paid = listed(r#", "rewards": [{"type": "credits", "currency": "ARES", "amount": 2804}, {"type": "item", "itemId": "x", "quantity": 1}]"#);
+        assert_eq!(paid.credits(), Some(2804));
+        assert_eq!(listed(r#", "rewards": null"#).credits(), None);
+        assert_eq!(listed("").credits(), None, "rewards not given: nothing to compare");
+        assert_eq!(listed(r#", "rewards": [{"type": "item", "itemId": "x", "quantity": 1}]"#).credits(), None);
+    }
+
+    #[test]
+    fn a_completed_mission_says_how_much_of_it_was_done() {
+        let listed = |extra: &str| -> MissionSummary {
+            serde_json::from_str(&format!(r#"{{"id": "00000000-0000-0000-0000-000000000001", "status": "completed"{extra}}}"#)).unwrap()
+        };
+        assert_eq!(listed("").completion(), 1.0, "an older mission service: all of it");
+        assert_eq!(listed(r#", "completionBp": 7500"#).completion(), 0.75, "turned in at three quarters");
+        assert_eq!(listed(r#", "completionBp": 12000"#).completion(), 1.0);
+    }
+}
 
 // ── Economie ─────────────────────────────────────────────────────────────────
 

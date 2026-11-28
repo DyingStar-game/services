@@ -13,7 +13,7 @@ import { env } from '../config/env.js';
 import { t } from '../i18n/index.js';
 import { HttpError } from '../lib/httpError.js';
 import type { AuthenticatedPlayer } from '../middleware/auth.js';
-import { openBugs } from './bugThreads.service.js';
+import { newReportTagId, openBugs } from './bugThreads.service.js';
 
 /** Discord limits the service must stay under (thread name, embed title/description/field). */
 const THREAD_NAME_MAX = 100;
@@ -155,8 +155,15 @@ function screenshotFile(base64: string | undefined, stem = 'screenshot'): { blob
  * The webhook payload of a report. Mentions are switched off: the title and the description
  * are a player's text, and `@everyone` in a bug report must stay text. A report added to a post
  * that exists (`input.thread_id`) is a message there: it names no post of its own.
+ * [statusTagId]: the forum tag of a bug nobody took yet (newReportTagId), which a new post carries
+ * beside the configured ones.
  */
-export function reportPayload(player: AuthenticatedPlayer, input: BugReportInput, image: string | null): Record<string, unknown> {
+export function reportPayload(
+  player: AuthenticatedPlayer,
+  input: BugReportInput,
+  image: string | null,
+  statusTagId: string | null = null,
+): Record<string, unknown> {
   const title = reportTitle(input);
   const fields = Object.entries(input.context ?? {})
     .slice(0, CONTEXT_FIELDS_MAX)
@@ -178,7 +185,8 @@ export function reportPayload(player: AuthenticatedPlayer, input: BugReportInput
   if (env.bugReport.forum && !input.thread_id) {
     // A forum channel takes a post, not a message: its name is the report's title.
     payload.thread_name = title;
-    if (env.bugReport.forumTagIds.length > 0) payload.applied_tags = env.bugReport.forumTagIds;
+    const tags = [...new Set([...env.bugReport.forumTagIds, ...(statusTagId ? [statusTagId] : [])])];
+    if (tags.length > 0) payload.applied_tags = tags;
   }
   return payload;
 }
@@ -208,11 +216,12 @@ export async function submitBugReport(player: AuthenticatedPlayer, input: BugRep
   if (input.thread_id && !(await openBugs()).some((bug) => bug.id === input.thread_id)) {
     throw new HttpError(400, 'BUG_REPORT_UNKNOWN_BUG', 'This bug is not one of the open bugs');
   }
+  const statusTagId = env.bugReport.forum && !input.thread_id ? await newReportTagId() : null;
   const now = Date.now();
   takeSlot(player.id, now);
 
   const form = new FormData();
-  form.append('payload_json', JSON.stringify(reportPayload(player, input, image?.name ?? null)));
+  form.append('payload_json', JSON.stringify(reportPayload(player, input, image?.name ?? null, statusTagId)));
   let files = 0;
   if (image) form.append(`files[${files++}]`, image.blob, image.name);
   for (const extra of extras) form.append(`files[${files++}]`, extra.blob, extra.name);

@@ -18,8 +18,16 @@ export type MissionNotificationType =
   | 'mission.completed'
   /** Every required objective is done: the mission waits to be turned in at a town hall kiosk. */
   | 'mission.ready'
-  /** A goods move counted for the mission, not yet done: the assignees' DataPad reads it again. */
+  /**
+   * A step of the mission completed, not the whole of it (`data.step`: `loaded` = a transport's
+   * goods all picked up, `delivered` = an objective's goods all delivered): shown to the player.
+   */
   | 'mission.progress'
+  /**
+   * A goods move counted for the mission without completing a step: the game reads the mission
+   * again (DataPad, kiosk) without showing anything — a crate is not news.
+   */
+  | 'mission.updated'
   /** A participant shared the mission: the player (or their group) may join it. */
   | 'mission.invited'
   /** The player handed the mission in proportionally (partial completion). */

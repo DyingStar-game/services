@@ -23,16 +23,18 @@ import {
 } from '../services/assignments.service.js';
 import {
   cancelMission,
+  completionOf,
   confirmObjective,
   createMission,
   getMissionById,
   listMissions,
+  refundEscrow,
   setMissionEventInternal,
   shareMission,
   unshareMission,
   updateMission,
 } from '../services/missions.service.js';
-import { settleMissionRewards } from '../services/rewards.service.js';
+import { RATIO_FULL, settleMissionRewards } from '../services/rewards.service.js';
 import { runExpirySweep } from '../scheduler.js';
 import { getInternalMissionDetail } from '../services/detail.service.js';
 import { upsertPlayerStates } from '../services/playerStates.service.js';
@@ -101,7 +103,11 @@ internalRoutes.get(
       Number(req.query.limit),
       Number(req.query.offset),
     );
-    res.json({ missions: found.items, total: found.total, limit: found.limit, offset: found.offset });
+    // A completed mission says how much of it was done: a partial turn-in completes the mission too,
+    // and the issuer of a supply order must not count goods that never moved.
+    const done = req.query.status === 'completed' ? await completionOf(found.items.map((m) => m.id)) : null;
+    const items = done ? found.items.map((m) => ({ ...m, completionBp: done.get(m.id) ?? RATIO_FULL })) : found.items;
+    res.json({ missions: items, total: found.total, limit: found.limit, offset: found.offset });
   }),
 );
 
@@ -298,10 +304,15 @@ internalRoutes.post(
     if (!mission) throw new HttpError(404, 'NOT_FOUND', t('not_found.mission_bare'));
     const assignment = await getAssignment(req.params.missionId, req.body.playerId);
     if (!assignment) throw new HttpError(404, 'NOT_FOUND', t('not_found.assignment'));
-    if (assignment.status !== 'completed') {
+    if (assignment.status !== 'completed' && assignment.status !== 'partially_completed') {
       throw new HttpError(409, 'ASSIGNMENT_NOT_COMPLETED', `Assignment is ${assignment.status}`);
     }
-    res.json({ settlements: await settleMissionRewards(mission, { force: true }) });
+    const settlements = await settleMissionRewards(mission, { force: true });
+    // A partial turn-in waits for every share to be paid before it gives the payer the rest.
+    if (assignment.status === 'partially_completed' && settlements.every((s) => s.settled)) {
+      await refundEscrow(mission);
+    }
+    res.json({ settlements });
   }),
 );
 

@@ -28,7 +28,7 @@ vi.mock('../src/config/env.js', async (importOriginal) => {
 const { errorHandler } = await import('../src/middleware/errorHandler.js');
 const { bugReportsRoutes } = await import('../src/routes/bugReports.routes.js');
 const { resetBugReportLimits } = await import('../src/services/bugReports.service.js');
-const { resetBugList, statusOf } = await import('../src/services/bugThreads.service.js');
+const { plainTitle, resetBugList, statusOf, statusTags } = await import('../src/services/bugThreads.service.js');
 
 const PLAYER = { id: '9a8b7c6d-5e4f-4a3b-b2c1-0d9e8f7a6b5c', username: 'The_Moye', roles: [] as string[] };
 /** The smallest thing that reads as a JPEG. */
@@ -47,9 +47,18 @@ const realFetch = globalThis.fetch;
 /** What reached "Discord": the URL and the multipart form of each call. */
 let relayed: { url: string; form: FormData }[] = [];
 let discordStatus = 200;
-/** What the bot reads: the posts of the guild, and the reactions under the first message of each. */
+/** The forum's tags as the QA team set them, and one that says nothing of where a bug stands. */
+const FORUM_TAGS = [
+  { id: '71', name: 'non pris en charge', emoji_name: '🟥' },
+  { id: '72', name: 'pris en charge', emoji_name: '🟧' },
+  { id: '73', name: 'à tester', emoji_name: '🟦' },
+  { id: '74', name: 'corrigé', emoji_name: '🟩' },
+  { id: '75', name: 'doublon', emoji_name: '🔳' },
+  { id: '76', name: 'launcher', emoji_name: null },
+];
+/** What the bot reads: the tags of the forum and the posts of the guild. */
+let forumTags: unknown[] = FORUM_TAGS;
 let threads: unknown[] = [];
-let reactions: Record<string, { count: number; emoji: { name: string } }[]> = {};
 let botCalls: { url: string; authorization: string }[] = [];
 
 /** Discord as the bot and the webhook's own GET see it; null for anything else. */
@@ -58,8 +67,7 @@ function discordReads(url: string, init?: RequestInit): Response | null {
   if (url === WEBHOOK) return Response.json({ channel_id: '500', guild_id: '900' });
   botCalls.push({ url, authorization: String((init?.headers as Record<string, string> | undefined)?.authorization) });
   if (url.endsWith('/guilds/900/threads/active')) return Response.json({ threads });
-  const message = /\/channels\/(\d+)\/messages\/\1$/.exec(url);
-  if (message) return Response.json({ id: message[1], reactions: reactions[message[1]] });
+  if (url.endsWith('/channels/500')) return Response.json({ id: '500', available_tags: forumTags });
   return new Response('{}', { status: 404 });
 }
 
@@ -103,7 +111,7 @@ beforeEach(() => {
   relayed = [];
   discordStatus = 200;
   threads = [];
-  reactions = {};
+  forumTags = FORUM_TAGS;
   botCalls = [];
   resetBugList();
   Object.assign(bug, { webhookUrl: WEBHOOK, botToken: '', forum: false, forumTagIds: [], environment: 'preprod', minIntervalSeconds: 60, dailyMax: 20 });
@@ -219,43 +227,59 @@ describe('POST /api/bug-reports', () => {
     expect(payload.applied_tags).toEqual(['42']);
   });
 
-  it('reads where a bug stands from the square under its post, the furthest winning', () => {
-    const square = (name: string, count = 1) => ({ count, emoji: { name } });
-    expect(statusOf(undefined)).toBe('new');
-    expect(statusOf([square('👍')])).toBe('new');
-    expect(statusOf([square('🟥')])).toBe('open');
-    expect(statusOf([square('🟥'), square('🟧')])).toBe('in_progress');
-    expect(statusOf([square('🟧'), square('🟦')])).toBe('next_build');
-    expect(statusOf([square('🟦'), square('🟪')])).toBe('to_test');
-    expect(statusOf([square('🟪'), square('🟧')])).toBe('to_test');
-    expect(statusOf([square('🟥'), square('🟩')])).toBe('closed');
-    expect(statusOf([square('🟩', 0), square('🟥')])).toBe('open');
+  it('posts a new report under the tag of a bug nobody took yet, read from the forum by the bot', async () => {
+    Object.assign(bug, { botToken: 'bot-secret', forum: true, forumTagIds: ['42'] });
+    await send(REPORT);
+    expect(payloadOf(relayed[0]).applied_tags).toEqual(['42', '71']);
+    // A forum that has no such tag, or cannot be read: the report leaves all the same.
+    resetBugList();
+    resetBugReportLimits();
+    forumTags = [{ id: '76', name: 'launcher', emoji_name: null }];
+    expect((await send(REPORT)).status).toBe(201);
+    expect(payloadOf(relayed[1]).applied_tags).toEqual(['42']);
+  });
+
+  it('reads where a bug stands from the tags of its post, the furthest winning', () => {
+    const tags = statusTags(FORUM_TAGS);
+    expect([...tags.keys()]).toEqual(['71', '72', '73', '74', '75']); // a tag with no square says nothing
+    expect(statusOf(undefined, tags)).toBe('new');
+    expect(statusOf(['76'], tags)).toBe('new');
+    expect(statusOf(['71'], tags)).toBe('open');
+    expect(statusOf(['71', '72'], tags)).toBe('in_progress');
+    expect(statusOf(['72', '73'], tags)).toBe('to_test');
+    expect(statusOf(['71', '74'], tags)).toBe('closed');
+    expect(statusOf(['75', '72'], tags)).toBe('closed'); // a duplicate is not worked on
+  });
+
+  it('lists a bug by its own words, without the mark and the labels ahead of them', () => {
+    expect(plainTitle('🟡 [PREPROD] Stuck in the truck')).toBe('Stuck in the truck');
+    expect(plainTitle('🟠[LUNCHER] Players online')).toBe('Players online');
+    expect(plainTitle('🟡 [BUG][PREPROD][MINOR][0.0.1-dev · 20261120-0657-014572] Brake lag')).toBe('Brake lag');
+    expect(plainTitle('Routes [QGIS] missing')).toBe('Routes [QGIS] missing');
+    expect(plainTitle('[PREPROD]')).toBe('[PREPROD]');
   });
 
   it('lists the bugs of the forum that are not closed, newest first, read by the bot', async () => {
     bug.botToken = 'bot-secret';
     threads = [
-      { id: '1001', name: '🟡 [PREPROD] Old one', parent_id: '500', thread_metadata: {} },
+      { id: '1001', name: '🟡 [PREPROD] Old one', parent_id: '500', applied_tags: ['72'], thread_metadata: {} },
       { id: '1003', name: '🔴 [PREPROD] Stuck in the truck', parent_id: '500', thread_metadata: {} },
-      { id: '1002', name: 'Fixed one', parent_id: '500', thread_metadata: {} },
+      { id: '1002', name: 'Fixed one', parent_id: '500', applied_tags: ['74'], thread_metadata: {} },
+      { id: '1006', name: 'Seen twice', parent_id: '500', applied_tags: ['75'], thread_metadata: {} },
       { id: '1004', name: 'Put away', parent_id: '500', thread_metadata: { archived: true } },
       { id: '1005', name: 'A chat of another channel', parent_id: '777', thread_metadata: {} },
     ];
-    reactions = {
-      '1001': [{ count: 1, emoji: { name: '🟧' } }],
-      '1002': [{ count: 1, emoji: { name: '🟩' } }],
-    };
     expect(await openList()).toEqual({
       enabled: true,
       bugs: [
-        { id: '1003', title: '🔴 [PREPROD] Stuck in the truck', status: 'new' },
-        { id: '1001', title: '🟡 [PREPROD] Old one', status: 'in_progress' },
+        { id: '1003', title: 'Stuck in the truck', status: 'new' },
+        { id: '1001', title: 'Old one', status: 'in_progress' },
       ],
     });
     expect(botCalls.every((call) => call.authorization === 'Bot bot-secret')).toBe(true);
-    const asked = botCalls.length;
+    expect(botCalls).toHaveLength(2); // the forum's tags and its posts: no request per post
     await openList();
-    expect(botCalls).toHaveLength(asked); // kept a while: Discord is not asked at each form
+    expect(botCalls).toHaveLength(2); // kept a while: Discord is not asked at each form
   });
 
   it('has no list without a bot, and serves none when Discord cannot be read', async () => {

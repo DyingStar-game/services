@@ -2,9 +2,10 @@
  * Temporary group lifecycle and membership: creation, members, invitations, ownership
  * succession and disbanding. A player belongs to at most one group at a time.
  */
-import { and, asc, count, eq } from 'drizzle-orm';
+import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { t } from '../i18n/index.js';
 
+import { env } from '../config/env.js';
 import { db } from '../db/connection.js';
 import {
   groupInvitations,
@@ -240,6 +241,88 @@ export async function disbandGroup(groupId: string, actorId: string): Promise<vo
   const { group } = await requireGroupOwner(groupId, actorId);
   await db.delete(groups).where(eq(groups.id, groupId));
   await recordActivity(actorId, 'group_disbanded', { groupId, name: group.name });
+}
+
+/** What the expiry pass knows of a group: when it was last edited, and each member's last sign of life. */
+export interface GroupActivity {
+  id: string;
+  updatedAt: Date;
+  members: { joinedAt: Date; online: boolean; lastSeenAt: Date | null }[];
+}
+
+/**
+ * The groups of [activity] nobody came back to since [idleMs]: no member online, and nothing
+ * newer than that -- the group's last edit, a member joining, a member last seen. Pure.
+ */
+export function idleGroupIds(activity: GroupActivity[], now: number, idleMs: number): string[] {
+  return activity
+    .filter((group) => {
+      if (group.members.some((member) => member.online)) return false;
+      const last = Math.max(
+        group.updatedAt.getTime(),
+        ...group.members.map((member) => Math.max(member.joinedAt.getTime(), member.lastSeenAt?.getTime() ?? 0)),
+      );
+      return now - last >= idleMs;
+    })
+    .map((group) => group.id);
+}
+
+/**
+ * Expiry pass: disbands the groups no member has been online in for `idleExpiryHours`. A group
+ * is temporary (a squad to share missions), yet nothing ended one whose members had all gone:
+ * a player came back weeks later to "already in a group" (playtest of 2026-11-26). A member's
+ * last sign of life is their presence row, which changes when they come and go: precise to a
+ * play session, which is enough against a day.
+ * @returns Number of groups disbanded.
+ */
+export async function expireIdleGroups(): Promise<number> {
+  const hours = env.groups.idleExpiryHours;
+  if (hours <= 0) return 0;
+  const idleMs = hours * 3_600_000;
+  // Only groups old enough to have expired are looked at: the others cost no presence read.
+  const candidates = (await db.select().from(groups)).filter((group) => Date.now() - group.updatedAt.getTime() >= idleMs);
+  if (candidates.length === 0) return 0;
+  const members = await db
+    .select()
+    .from(groupMembers)
+    .where(inArray(groupMembers.groupId, candidates.map((group) => group.id)));
+  const presence = await getPresenceMap(members.map((member) => member.playerId));
+  const activity: GroupActivity[] = candidates.map((group) => ({
+    id: group.id,
+    updatedAt: group.updatedAt,
+    members: members
+      .filter((member) => member.groupId === group.id)
+      .map((member) => {
+        const seen = presence.get(member.playerId);
+        return { joinedAt: member.joinedAt, online: seen !== undefined && seen.status !== 'offline', lastSeenAt: seen?.updatedAt ?? null };
+      }),
+  }));
+  const idle = idleGroupIds(activity, Date.now(), idleMs);
+  for (const groupId of idle) {
+    const group = candidates.find((candidate) => candidate.id === groupId);
+    // Members and pending invitations go with the group (cascade), as when its owner disbands it.
+    await db.delete(groups).where(eq(groups.id, groupId));
+    if (group) await recordActivity(group.ownerId, 'group_expired', { groupId, name: group.name });
+  }
+  return idle.length;
+}
+
+/**
+ * Starts the periodic expiry pass when `expiryIntervalMinutes` and `idleExpiryHours` are > 0.
+ * @returns Timer handle or null when disabled.
+ */
+export function startGroupExpiryScheduler(): NodeJS.Timeout | null {
+  const minutes = env.groups.expiryIntervalMinutes;
+  if (minutes <= 0 || env.groups.idleExpiryHours <= 0) return null;
+  const timer = setInterval(() => {
+    expireIdleGroups()
+      .then((expired) => {
+        if (expired > 0) console.log(`${expired} idle group(s) disbanded`);
+      })
+      .catch((err) => console.error('Group expiry pass failed:', err));
+  }, minutes * 60_000);
+  timer.unref();
+  return timer;
 }
 
 /**

@@ -48,6 +48,8 @@ pub struct Leg {
     pub hold_id: Option<Uuid>,
     pub mission_id: Option<Uuid>,
     pub attempts: i32,
+    /// Of its attempts, those cancelled only to be offered at the current price: not failures.
+    pub reprices: i32,
     pub last_error: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub published_at: Option<OffsetDateTime>,
@@ -176,7 +178,7 @@ pub async fn legs_of_orders(pool: &PgPool, orders: &[Uuid]) -> Result<Vec<Leg>> 
 }
 
 const LEG_COLS: &str = "id, order_id, seq, from_village_id, to_village_id, from_warehouse_id, to_warehouse_id, quantity, distance_m, reward_amount,
-    status, hold_id, mission_id, attempts, last_error, published_at, completed_at";
+    status, hold_id, mission_id, attempts, reprices, last_error, published_at, completed_at";
 
 /// Legs in the given statuses, oldest first, with the federation of their order.
 pub async fn legs_by_status(pool: &PgPool, federation: Uuid, statuses: &[&str]) -> Result<Vec<Leg>> {
@@ -247,6 +249,21 @@ pub async fn retry_leg(pool: &PgPool, leg: Uuid, reason: &str) -> Result<()> {
     )
     .bind(leg)
     .bind(reason)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Mission [mission] cancelled to be offered again at the current price: back to `held` for another
+/// publication, as after a cancellation (retry_leg), but counted as a reprice, not a failure. Only while
+/// the leg is still published with that mission.
+pub async fn reprice_leg(pool: &PgPool, leg: Uuid, mission: Uuid) -> Result<()> {
+    sqlx::query(
+        "UPDATE supply_order_legs SET status = 'held', mission_id = NULL, attempts = attempts + 1, reprices = reprices + 1,
+            last_error = 'mission repriced', updated_at = now() WHERE id = $1 AND status = 'published' AND mission_id = $2",
+    )
+    .bind(leg)
+    .bind(mission)
     .execute(pool)
     .await?;
     Ok(())
